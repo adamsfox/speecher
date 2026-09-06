@@ -726,6 +726,18 @@ void SettingsWindow::show()
     m_native->show();
 }
 
+void SettingsWindow::showWhatsNew()
+{
+    m_native->show();
+    m_native->showWhatsNew();
+}
+
+bool SettingsWindow::isVisible() const
+{
+    const HWND handle = m_native->windowHandle();
+    return handle && IsWindowVisible(handle);
+}
+
 bool SettingsWindow::capture(const QString &path)
 {
     return m_native->capture(path);

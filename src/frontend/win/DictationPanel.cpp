@@ -17,6 +17,7 @@
 #include <winrt/Microsoft.UI.Content.h>
 #include <winrt/Microsoft.UI.Interop.h>
 #include <winrt/Microsoft.UI.Xaml.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
@@ -27,6 +28,8 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace speecher {
 namespace {
@@ -43,25 +46,6 @@ constexpr int previewChromeWidth = 190;
 constexpr int screenEdgeMargin = 80;
 constexpr int bottomMargin = 28;
 constexpr auto windowClassName = L"SpeecherDictationPanel";
-
-LRESULT CALLBACK panelWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    if (message == WM_DISPLAYCHANGE) {
-        RECT rect{};
-        POINT pointer{};
-        GetWindowRect(window, &rect);
-        GetCursorPos(&pointer);
-        MONITORINFO monitor{sizeof(monitor)};
-        GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
-        const int width = rect.right - rect.left;
-        SetWindowPos(window, HWND_TOPMOST,
-                     monitor.rcWork.left
-                         + (monitor.rcWork.right - monitor.rcWork.left - width) / 2,
-                     monitor.rcWork.bottom - (rect.bottom - rect.top) - bottomMargin,
-                     0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
-    }
-    return DefWindowProcW(window, message, wParam, lParam);
-}
 
 QString phaseGlyph(const QString &status, bool problem)
 {
@@ -87,6 +71,36 @@ QString phaseGlyph(const QString &status, bool problem)
 
 } // namespace
 
+win::UpdateChipState win::updateChipState(UpdateController::State state, const QString &version,
+                                          int percent, const QString &error, bool repeatedFailure,
+                                          DictationState sessionState)
+{
+    const bool canAct = sessionState == DictationState::Idle
+        || sessionState == DictationState::Error;
+    using State = UpdateController::State;
+    switch (state) {
+    case State::UpdateAvailable:
+        return {QStringLiteral("Speecher %1 available — install and restart").arg(version), true, true};
+    case State::Downloading:
+        return {QStringLiteral("Downloading %1%").arg(percent), true, false};
+    case State::ReadyToRestart:
+        return {error.isEmpty() ? QStringLiteral("Restart to finish updating") : error, true, true};
+    case State::RestartPending:
+        return {QStringLiteral("Restarting after this dictation…"), true, false};
+    case State::Restarting:
+        return {QStringLiteral("Restarting…"), true, false};
+    case State::Error:
+        return {error, true, canAct};
+    case State::CheckFailed:
+        if (repeatedFailure) {
+            return {QStringLiteral("Update check failed"), true, canAct};
+        }
+        return {};
+    default:
+        return {};
+    }
+}
+
 struct DictationPanel::Native : QObject {
     enum class Phase { Live, Transcribing, Refining };
 
@@ -95,7 +109,22 @@ struct DictationPanel::Native : QObject {
         , controller(owner)
         , panel(q)
     {
+        whatsNewAutoHide.setSingleShot(true);
+        whatsNewAutoHide.setInterval(6000);
+        connect(&whatsNewAutoHide, &QTimer::timeout, this, [this] {
+            whatsNewHidden = true;
+            refresh();
+        });
+        connect(controller->updates(), &UpdateController::changed, this, &Native::refresh);
+        connect(controller, &ApplicationController::whatsNewChanged, this, [this] {
+            whatsNewHidden = false;
+            if (window && IsWindowVisible(window)) {
+                whatsNewAutoHide.start();
+            }
+            refresh();
+        });
         DictationSession *session = controller->session();
+        connect(session, &DictationSession::stateChanged, this, &Native::refresh);
         connect(session, &DictationSession::previewDisplayChanged, this,
                 [this](const QString &text) { setPreview(text); });
         connect(session, &DictationSession::popupRefinementPreviewChanged, this,
@@ -152,13 +181,34 @@ struct DictationPanel::Native : QObject {
         }
     }
 
+    static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+    {
+        if (message == WM_NCCREATE) {
+            const auto *create = reinterpret_cast<CREATESTRUCTW *>(lParam);
+            SetWindowLongPtrW(window, GWLP_USERDATA,
+                              reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+        }
+        if (message == WM_DISPLAYCHANGE || message == WM_DPICHANGED) {
+            auto *native = reinterpret_cast<Native *>(GetWindowLongPtrW(window, GWLP_USERDATA));
+            if (native) {
+                QTimer::singleShot(0, native, &Native::refresh);
+            }
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    double scale() const
+    {
+        return GetDpiForWindow(window) / 96.0;
+    }
+
     void ensureWindow()
     {
         if (window) {
             return;
         }
         WNDCLASSW windowClass{};
-        windowClass.lpfnWndProc = panelWindowProc;
+        windowClass.lpfnWndProc = windowProc;
         windowClass.hInstance = GetModuleHandleW(nullptr);
         windowClass.lpszClassName = windowClassName;
         RegisterClassW(&windowClass);
@@ -166,7 +216,7 @@ struct DictationPanel::Native : QObject {
             WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             windowClassName, L"Speecher dictation", WS_POPUP,
             0, 0, minimumWidth, panelHeight, nullptr, nullptr,
-            windowClass.hInstance, nullptr);
+            windowClass.hInstance, this);
 
         const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
         DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -175,8 +225,40 @@ struct DictationPanel::Native : QObject {
         source = DesktopWindowXamlSource();
         source.Initialize(Microsoft::UI::GetWindowIdFromWindow(window));
 
-        Border chrome;
-        chrome.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
+        root = StackPanel();
+        root.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
+        root.Spacing(4);
+        whatsNewRow = StackPanel();
+        whatsNewRow.Orientation(Orientation::Horizontal);
+        whatsNewRow.HorizontalAlignment(HorizontalAlignment::Center);
+        whatsNewChip = Button();
+        whatsNewChip.Click([this](const auto &, const auto &) { emit panel->whatsNewRequested(); });
+        whatsNewRow.Children().Append(whatsNewChip);
+        Button whatsNewDismiss;
+        FontIcon closeIcon;
+        closeIcon.Glyph(L"\uE711");
+        closeIcon.FontSize(12);
+        whatsNewDismiss.Content(closeIcon);
+        Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+            whatsNewDismiss, L"Dismiss what's new");
+        whatsNewDismiss.Click([this](const auto &, const auto &) {
+            controller->clearPendingWhatsNew();
+        });
+        whatsNewRow.Children().Append(whatsNewDismiss);
+        root.Children().Append(whatsNewRow);
+        updateChip = Button();
+        updateChip.HorizontalAlignment(HorizontalAlignment::Center);
+        updateText = TextBlock();
+        updateText.TextWrapping(TextWrapping::Wrap);
+        updateChip.Content(updateText);
+        updateChip.Click([this](const auto &, const auto &) {
+            controller->updates()->installAndRestart();
+        });
+        root.Children().Append(updateChip);
+
+        chrome = Border();
+        chrome.Height(panelHeight);
+        chrome.HorizontalAlignment(HorizontalAlignment::Center);
         chrome.Padding({20, 0, 20, 0});
         row = StackPanel();
         row.Orientation(Orientation::Horizontal);
@@ -228,7 +310,8 @@ struct DictationPanel::Native : QObject {
                 controller->session()->popupPresented(generation);
             });
         });
-        source.Content(chrome);
+        root.Children().Append(chrome);
+        source.Content(root);
         source.SystemBackdrop(DesktopAcrylicBackdrop());
         resize(minimumWidth);
     }
@@ -243,9 +326,13 @@ struct DictationPanel::Native : QObject {
         phase = Phase::Live;
         pendingGeneration = generation;
         ensureWindow();
+        whatsNewHidden = false;
         refresh();
         reposition();
         ShowWindow(window, SW_SHOWNOACTIVATE);
+        if (!controller->pendingWhatsNewVersion().isEmpty()) {
+            whatsNewAutoHide.start();
+        }
         if (loaded) {
             QTimer::singleShot(0, panel, [this, generation] {
                 presentedGeneration = generation;
@@ -260,13 +347,18 @@ struct DictationPanel::Native : QObject {
         problem = message;
         pendingGeneration = 0;
         ensureWindow();
+        whatsNewHidden = false;
         refresh();
         reposition();
         ShowWindow(window, SW_SHOWNOACTIVATE);
+        if (!controller->pendingWhatsNewVersion().isEmpty()) {
+            whatsNewAutoHide.start();
+        }
     }
 
     void hide()
     {
+        whatsNewAutoHide.stop();
         setShimmer(false);
         if (window) {
             ShowWindow(window, SW_HIDE);
@@ -390,7 +482,7 @@ struct DictationPanel::Native : QObject {
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
         const int maximumWidth = std::max(
-            minimumWidth, int(monitor.rcWork.right - monitor.rcWork.left) - screenEdgeMargin);
+            minimumWidth, int((monitor.rcWork.right - monitor.rcWork.left) / scale()) - screenEdgeMargin);
         const int wantedWidth = std::clamp(
             minimumWidth + std::max(0, int(shown.size()) - 32) * 7,
             minimumWidth, maximumWidth);
@@ -414,7 +506,24 @@ struct DictationPanel::Native : QObject {
         ring.Visibility(!hasProblem && !finished && refining ? Visibility::Visible
                                                  : Visibility::Collapsed);
         dismiss.Visibility(hasProblem ? Visibility::Visible : Visibility::Collapsed);
-        resize(wantedWidth);
+        auto *updates = controller->updates();
+        const auto chip = win::updateChipState(
+            updates->state(), updates->availableVersion(), updates->downloadPercent(),
+            updates->errorMessage(), updates->repeatedAutomaticCheckFailure(),
+            controller->session()->state());
+        updateText.Text(hstring(chip.text.toStdWString()));
+        updateChip.Visibility(chip.visible ? Visibility::Visible : Visibility::Collapsed);
+        updateChip.IsEnabled(chip.enabled);
+        updateChip.MaxWidth(maximumWidth);
+        const bool showWhatsNew = !whatsNewHidden && !controller->pendingWhatsNewVersion().isEmpty();
+        whatsNewChip.Content(box_value(hstring(
+            QStringLiteral("Speecher %1 installed — see what's new")
+                .arg(updates->currentVersion().section(QLatin1Char('-'), 0, 0)).toStdWString())));
+        whatsNewRow.Visibility(showWhatsNew ? Visibility::Visible : Visibility::Collapsed);
+        chrome.Width(wantedWidth);
+        root.Measure({float(maximumWidth), std::numeric_limits<float>::infinity()});
+        height = int(std::ceil(root.DesiredSize().Height));
+        resize(std::max(wantedWidth, int(std::ceil(root.DesiredSize().Width))));
         if (IsWindowVisible(window)) {
             reposition();
         }
@@ -424,7 +533,8 @@ struct DictationPanel::Native : QObject {
     {
         width = newWidth;
         if (source) {
-            source.SiteBridge().MoveAndResize({0, 0, width, panelHeight});
+            source.SiteBridge().MoveAndResize(
+                {0, 0, int(std::ceil(width * scale())), int(std::ceil(height * scale()))});
         }
     }
 
@@ -437,10 +547,12 @@ struct DictationPanel::Native : QObject {
         GetCursorPos(&pointer);
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
+        const int pixelWidth = int(std::ceil(width * scale()));
+        const int pixelHeight = int(std::ceil(height * scale()));
         const int x = monitor.rcWork.left
-            + (monitor.rcWork.right - monitor.rcWork.left - width) / 2;
-        const int y = monitor.rcWork.bottom - panelHeight - bottomMargin;
-        SetWindowPos(window, HWND_TOPMOST, x, y, width, panelHeight,
+            + (monitor.rcWork.right - monitor.rcWork.left - pixelWidth) / 2;
+        const int y = monitor.rcWork.bottom - pixelHeight - int(bottomMargin * scale());
+        SetWindowPos(window, HWND_TOPMOST, x, y, pixelWidth, pixelHeight,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
@@ -448,6 +560,15 @@ struct DictationPanel::Native : QObject {
     DictationPanel *panel;
     HWND window = nullptr;
     DesktopWindowXamlSource source{nullptr};
+    StackPanel root{nullptr};
+    Border chrome{nullptr};
+    Button updateChip{nullptr};
+    TextBlock updateText{nullptr};
+    StackPanel whatsNewRow{nullptr};
+    Button whatsNewChip{nullptr};
+    QTimer whatsNewAutoHide;
+    bool whatsNewHidden = false;
+    int height = panelHeight;
     FontIcon glyph{nullptr};
     TextBlock text{nullptr};
     ProgressBar level{nullptr};
