@@ -19,7 +19,6 @@
 #include <QProcessEnvironment>
 #include <QPushButton>
 #include <QNetworkReply>
-#include <QToolButton>
 #include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -655,7 +654,7 @@ private slots:
         chip->click();
         QCOMPARE(whatsNewSpy.count(), 1);
 
-        auto *dismiss = popup->findChild<QToolButton *>(QStringLiteral("whatsNewDismiss"));
+        auto *dismiss = popup->findChild<QPushButton *>(QStringLiteral("whatsNewDismiss"));
         QVERIFY(dismiss);
         dismiss->click();
         QVERIFY(row->isHidden());

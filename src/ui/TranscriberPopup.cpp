@@ -16,9 +16,7 @@
 #include <QPushButton>
 #include <QPropertyAnimation>
 #include <QResizeEvent>
-#include <QStyle>
 #include <QTimer>
-#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <QPainter>
@@ -62,6 +60,64 @@ protected:
     }
 };
 
+// The popup's action chips: capsule buttons in the pill's own visual language,
+// painted like PillFrame because the popup floats on a translucent window
+// where a rectangular style-drawn button would not fit. Clickable chips fill
+// with the Highlight role so they read as buttons at a glance; a disabled chip
+// (a progress state such as "Downloading 42%") falls back to the pill's Base
+// capsule and reads as status. Palette roles only.
+class ChipButton final : public QPushButton {
+public:
+    explicit ChipButton(QWidget *parent = nullptr)
+        : QPushButton(parent)
+    {
+        setFlat(true);
+        setFocusPolicy(Qt::NoFocus);
+        setAttribute(Qt::WA_Hover);
+    }
+
+    QSize sizeHint() const override
+    {
+        const QSize label = fontMetrics().size(Qt::TextSingleLine, text());
+        return QSize(label.width() + 2 * kHorizontalPadding,
+                     label.height() + 2 * kVerticalPadding);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QPalette p = palette();
+
+        QColor fill = isEnabled() ? p.color(QPalette::Highlight)
+                                  : p.color(QPalette::Base);
+        if (isEnabled() && isDown()) {
+            fill = fill.darker(115);
+        } else if (isEnabled() && underMouse()) {
+            fill = fill.lighter(110);
+        }
+        QColor stroke = p.color(QPalette::Mid);
+        stroke.setAlpha(150);
+
+        const qreal dpr = devicePixelRatioF() > 0 ? devicePixelRatioF() : 1.0;
+        const qreal penWidth = 1.0 / dpr;
+        const qreal inset = penWidth / 2.0;
+        painter.setPen(isEnabled() ? Qt::NoPen : QPen(stroke, penWidth));
+        painter.setBrush(fill);
+        const QRectF capsule = QRectF(rect()).adjusted(inset, inset, -inset, -inset);
+        painter.drawRoundedRect(capsule, capsule.height() / 2.0, capsule.height() / 2.0);
+
+        painter.setPen(p.color(isEnabled() ? QPalette::HighlightedText
+                                           : QPalette::PlaceholderText));
+        painter.drawText(rect(), Qt::AlignCenter, text());
+    }
+
+private:
+    static constexpr int kHorizontalPadding = 14;
+    static constexpr int kVerticalPadding = 6;
+};
+
 // The thin countdown under an error. Painted here rather than by the style: a
 // 3px progress bar in any widget style still draws a frame, and the previous
 // stylesheet that hid it hardcoded the colours it replaced.
@@ -94,7 +150,7 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     , m_preview(new QLabel(this))
     , m_errorDismissProgress(new DismissBar(m_previewPill))
     , m_waveform(new WaveformWidget(this))
-    , m_updateChip(new QPushButton(this))
+    , m_updateChip(new ChipButton(this))
     , m_positioner(positioner ? positioner : new FallbackPopupPositioner(this))
 {
     m_layout = new QVBoxLayout(this);
@@ -161,23 +217,19 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     m_whatsNewRow->setObjectName(QStringLiteral("whatsNewRow"));
     auto *whatsNewLayout = new QHBoxLayout(m_whatsNewRow);
     whatsNewLayout->setContentsMargins(0, 0, 0, 0);
-    whatsNewLayout->setSpacing(0);
-    m_whatsNewChip = new QPushButton(m_whatsNewRow);
+    whatsNewLayout->setSpacing(6);
+    m_whatsNewChip = new ChipButton(m_whatsNewRow);
     m_whatsNewChip->setObjectName(QStringLiteral("whatsNewChip"));
-    m_whatsNewChip->setFlat(true);
-    m_whatsNewChip->setFocusPolicy(Qt::NoFocus);
-    m_whatsNewDismiss = new QToolButton(m_whatsNewRow);
+    m_whatsNewDismiss = new ChipButton(m_whatsNewRow);
     m_whatsNewDismiss->setObjectName(QStringLiteral("whatsNewDismiss"));
-    m_whatsNewDismiss->setAutoRaise(true);
-    m_whatsNewDismiss->setFocusPolicy(Qt::NoFocus);
-    m_whatsNewDismiss->setIcon(style()->standardIcon(QStyle::SP_TitleBarCloseButton));
+    m_whatsNewDismiss->setText(QStringLiteral("✕"));
     m_whatsNewDismiss->setToolTip(QStringLiteral("Dismiss"));
     m_whatsNewDismiss->setAccessibleName(QStringLiteral("Dismiss what's new"));
     whatsNewLayout->addWidget(m_whatsNewChip);
     whatsNewLayout->addWidget(m_whatsNewDismiss);
     m_whatsNewRow->hide();
     connect(m_whatsNewChip, &QPushButton::clicked, this, &TranscriberPopup::whatsNewRequested);
-    connect(m_whatsNewDismiss, &QToolButton::clicked, this, [this] {
+    connect(m_whatsNewDismiss, &QPushButton::clicked, this, [this] {
         setWhatsNewChip({}, false);
         emit whatsNewDismissed();
     });
@@ -193,8 +245,6 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     m_layout->addWidget(m_whatsNewRow, 0, Qt::AlignHCenter);
 
     m_updateChip->setObjectName(QStringLiteral("updateChip"));
-    m_updateChip->setFlat(true);
-    m_updateChip->setFocusPolicy(Qt::NoFocus);
     m_updateChip->hide();
     connect(m_updateChip, &QPushButton::clicked, this, &TranscriberPopup::updateRequested);
     m_layout->addWidget(m_updateChip, 0, Qt::AlignHCenter);

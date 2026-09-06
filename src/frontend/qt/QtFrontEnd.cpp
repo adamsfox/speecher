@@ -285,9 +285,11 @@ void QtFrontEnd::refreshUpdateChip()
         || sessionState == DictationState::Error;
     switch (updates->state()) {
     case UpdateController::State::UpdateAvailable:
+        // Base version only: a full nightly identifier would stretch the chip
+        // across the screen.
         m_popup->setUpdateChip(
             QStringLiteral("Speecher %1 available — install and restart")
-                .arg(updates->availableVersion()),
+                .arg(updates->availableVersion().section(QLatin1Char('-'), 0, 0)),
             true,
             true);
         break;

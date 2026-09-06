@@ -13,7 +13,6 @@ class QPropertyAnimation;
 class QPaintEvent;
 class QResizeEvent;
 class QTimer;
-class QToolButton;
 class QVBoxLayout;
 
 namespace speecher {
@@ -76,7 +75,7 @@ private:
     QPushButton *m_updateChip = nullptr;
     QWidget *m_whatsNewRow = nullptr;
     QPushButton *m_whatsNewChip = nullptr;
-    QToolButton *m_whatsNewDismiss = nullptr;
+    QPushButton *m_whatsNewDismiss = nullptr;
     QTimer *m_whatsNewAutoHide = nullptr;
     PopupPositioner *m_positioner = nullptr;
     QtPopupSurface m_surface{this};
