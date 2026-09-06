@@ -50,6 +50,16 @@ final class AppModel: ObservableObject {
     var accessibilitySupported: Bool { bridge.accessibilitySupported }
     var shortcutSupported: Bool { bridge.shortcutSupported }
     var listening: Bool { Self.listening(status) }
+    /// The states toggle() stops, which DictationSession::toggleSession
+    /// defines: starting, listening, and refining (a toggle mid-refinement
+    /// cancels the refinement).
+    var stoppable: Bool {
+        ["starting", "listening", "refining"].contains(status.lowercased())
+    }
+    /// The states toggle() ignores: a stop or delivery already under way.
+    var busy: Bool {
+        ["stopping", "delivering"].contains(status.lowercased())
+    }
 
     /// Whether a state name is one where the microphone is open.
     static func listening(_ status: String) -> Bool {
@@ -78,16 +88,21 @@ final class AppModel: ObservableObject {
         bridge.transcriptChanged = { [weak self] transcript in
             self?.transcript = transcript
         }
+        // These closures must reach the bridge through self: the bridge owns
+        // them, so capturing the local `bridge` would retain it in a cycle and
+        // its dealloc — the watcher, the signal connections — would never run.
         bridge.accessibilityChanged = { [weak self] in
             guard let self else { return }
-            accessibilityEnabled = bridge.accessibilityEnabled
-            pages = bridge.settingsSchema.pages
+            accessibilityEnabled = self.bridge.accessibilityEnabled
+            pages = self.bridge.settingsSchema.pages
         }
         bridge.anthropicCredentialsChanged = { [weak self] in
-            self?.anthropicCredentialStatus = bridge.anthropicCredentialStatus
+            guard let self else { return }
+            anthropicCredentialStatus = self.bridge.anthropicCredentialStatus
         }
         bridge.whatsNewChanged = { [weak self] in
-            self?.whatsNewPending = bridge.whatsNewPending
+            guard let self else { return }
+            whatsNewPending = self.bridge.whatsNewPending
         }
     }
 
@@ -255,6 +270,14 @@ final class AppModel: ObservableObject {
 
     func requestAccessibility() {
         accessibilityProblem = bridge.enableAccessibility() ?? ""
+    }
+
+    func beginShortcutRecording() {
+        bridge.beginShortcutRecording()
+    }
+
+    func endShortcutRecording() {
+        shortcutProblem = bridge.endShortcutRecording() ?? ""
     }
 
     func bindShortcut(characters: String, modifierFlags: NSEvent.ModifierFlags) {

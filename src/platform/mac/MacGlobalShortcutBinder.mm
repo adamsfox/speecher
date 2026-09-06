@@ -115,7 +115,8 @@ OSStatus handleHotKeyEvent(EventHandlerCallRef, EventRef event, void *userData)
 
 QKeySequence savedShortcut()
 {
-    QSettings settings(QString::fromLatin1(SettingsKeys::Organization),
+    QSettings settings(QSettings::defaultFormat(), QSettings::UserScope,
+                       QString::fromLatin1(SettingsKeys::Organization),
                        QString::fromLatin1(SettingsKeys::Application));
     const QString stored = settings.value(SettingsKeys::GlobalShortcut).toString();
     return stored.isEmpty() ? defaultShortcut() : QKeySequence(stored);
@@ -123,7 +124,8 @@ QKeySequence savedShortcut()
 
 void storeShortcut(const QKeySequence &shortcut)
 {
-    QSettings settings(QString::fromLatin1(SettingsKeys::Organization),
+    QSettings settings(QSettings::defaultFormat(), QSettings::UserScope,
+                       QString::fromLatin1(SettingsKeys::Organization),
                        QString::fromLatin1(SettingsKeys::Application));
     settings.setValue(SettingsKeys::GlobalShortcut, shortcut.toString());
 }
@@ -172,6 +174,10 @@ QString MacGlobalShortcutBinder::unsupportedReason() const
 
 void MacGlobalShortcutBinder::bind()
 {
+    if (m_suspensionCount > 0) {
+        m_resumeBinding = true;
+        return;
+    }
     QString error;
     if (!registerHotKey(m_shortcut, &error)) {
         qWarning().noquote() << "Could not register the global shortcut:" << error;
@@ -188,9 +194,34 @@ bool MacGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString 
     if (!registerHotKey(shortcut, error)) {
         return false;
     }
+    if (m_suspensionCount > 0) {
+        // Validate conflicts now, but leave keys available to other recorders.
+        m_resumeBinding = true;
+        unregisterHotKey();
+    }
     m_shortcut = shortcut;
     storeShortcut(shortcut);
     return true;
+}
+
+// A Carbon hotkey is consumed system-wide and never arrives as an app key
+// event, so recording it (or any replacement) needs the registration gone.
+void MacGlobalShortcutBinder::suspend()
+{
+    if (m_suspensionCount++ > 0) return;
+    m_resumeBinding = m_hotKey != nullptr;
+    unregisterHotKey();
+}
+
+QString MacGlobalShortcutBinder::resume()
+{
+    if (m_suspensionCount == 0 || --m_suspensionCount > 0) return {};
+    QString error;
+    if (m_resumeBinding) {
+        m_resumeBinding = false;
+        registerHotKey(m_shortcut, &error);
+    }
+    return error;
 }
 
 void MacGlobalShortcutBinder::refreshKeyboardLayout()

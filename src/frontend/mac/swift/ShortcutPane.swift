@@ -12,11 +12,18 @@ import SwiftUI
 final class ShortcutRecorder: ObservableObject {
     @Published private(set) var recording = false
     private var monitor: Any?
+    /// Restores the hotkey registration recording suspended. The bound
+    /// combination is consumed system-wide while registered, so the monitor
+    /// would never see it — pressing it would start dictation instead.
+    private var restoreShortcut: (@MainActor @Sendable () -> Void)?
     /// Escape abandons the recording rather than becoming the shortcut.
     private let escapeKeyCode: UInt16 = 53
 
-    func record(_ bind: @escaping (String, NSEvent.ModifierFlags) -> Void) {
+    func record(suspending model: AppModel,
+                _ bind: @escaping (String, NSEvent.ModifierFlags) -> Void) {
         stop()
+        model.beginShortcutRecording()
+        restoreShortcut = { model.endShortcutRecording() }
         recording = true
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
@@ -36,11 +43,18 @@ final class ShortcutRecorder: ObservableObject {
         }
         monitor = nil
         recording = false
+        restoreShortcut?()
+        restoreShortcut = nil
     }
 
     deinit {
         if let monitor {
             NSEvent.removeMonitor(monitor)
+        }
+        // Deinitialization can run outside the main actor. Capture the cleanup
+        // rather than the dying recorder, and restore on the actor it requires.
+        if let restoreShortcut {
+            Task { @MainActor in restoreShortcut() }
         }
     }
 }
@@ -54,7 +68,7 @@ struct ShortcutPane: View {
             Section {
                 LabeledContent {
                     Button(caption) {
-                        recorder.record { characters, flags in
+                        recorder.record(suspending: model) { characters, flags in
                             model.bindShortcut(characters: characters, modifierFlags: flags)
                         }
                     }

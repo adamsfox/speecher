@@ -323,10 +323,18 @@ void MacComposition::relaunch() const
         && bundle.dirName() == QStringLiteral("Contents")
         && bundle.cdUp()
         && bundle.dirName().endsWith(QStringLiteral(".app"), Qt::CaseInsensitive);
-    const QString command = inBundle
-        ? QStringLiteral("sleep 1; open -n %1").arg(shellQuote(bundle.absolutePath()))
-        : QStringLiteral("sleep 1; exec %1").arg(
-              shellQuote(QCoreApplication::applicationFilePath()));
+    // Launching before this process has exited makes the replacement find the
+    // single-instance socket still live, defer to a dying process, and exit —
+    // "Speecher will now restart" followed by no Speecher. Wait for the actual
+    // exit rather than a fixed delay.
+    const QString waitForExit =
+        QStringLiteral("while /bin/kill -0 %1 2>/dev/null; do sleep 0.2; done; ")
+            .arg(QCoreApplication::applicationPid());
+    const QString command = waitForExit
+        + (inBundle
+               ? QStringLiteral("open -n %1").arg(shellQuote(bundle.absolutePath()))
+               : QStringLiteral("exec %1").arg(
+                     shellQuote(QCoreApplication::applicationFilePath())));
     QProcess::startDetached(QStringLiteral("/bin/sh"),
                             {QStringLiteral("-c"), command});
     QCoreApplication::quit();

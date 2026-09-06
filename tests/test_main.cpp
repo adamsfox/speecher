@@ -4,6 +4,11 @@
 #include <QDebug>
 #include <QScopeGuard>
 #include <QStandardPaths>
+#ifdef Q_OS_MACOS
+#include <QSettings>
+#include <QTemporaryDir>
+#include "core/SettingsStore.h"
+#endif
 
 #ifdef SPEECHER_WITH_WINUI
 #include "frontend/win/WinUiHost.h"
@@ -12,6 +17,18 @@
 
 int main(int argc, char **argv)
 {
+#ifdef Q_OS_MACOS
+    // Test mode alone does not redirect macOS CFPreferences. Keep every test
+    // QSettings instance away from the user's native preferences.
+    QTemporaryDir preferences;
+    if (!preferences.isValid()) {
+        qCritical() << "Could not create isolated macOS test preferences";
+        return 1;
+    }
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, preferences.path());
+    QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, preferences.path());
+#endif
 #ifdef SPEECHER_WITH_WINUI
     std::unique_ptr<speecher::WinUiHost> winUiHost;
     try {
@@ -33,6 +50,14 @@ int main(int argc, char **argv)
     });
 #endif
     QStandardPaths::setTestModeEnabled(true);
+#ifdef Q_OS_MACOS
+    // Refuse to run mutating suites if the production store ignores isolation.
+    speecher::SettingsStore isolatedSettings;
+    if (isolatedSettings.raw().format() != QSettings::IniFormat) {
+        qCritical() << "Tests must not use native macOS preferences";
+        return 1;
+    }
+#endif
     QString selectedSuite;
     for (int i = 1; i < argc; ++i) {
         if (QByteArray(argv[i]) == "--suite" && i + 1 < argc) {

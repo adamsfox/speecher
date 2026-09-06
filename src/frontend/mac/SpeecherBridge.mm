@@ -22,6 +22,7 @@
 #include <QGuiApplication>
 #include <QKeySequence>
 #include <QObject>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QThread>
 
@@ -233,7 +234,7 @@ struct SchemaState {
 };
 
 struct BridgeState {
-    ApplicationController *controller = nullptr;
+    QPointer<ApplicationController> controller;
     // Owns the signal connections, so they end when the bridge does.
     QObject lifetime;
     QFileSystemWatcher credentialWatcher;
@@ -1009,6 +1010,18 @@ Qt::KeyboardModifiers qtModifiersForFlags(NSUInteger flags)
         return nil;
     }
     return error.isEmpty() ? @"That shortcut could not be bound." : error.toNSString();
+}
+
+- (void)beginShortcutRecording
+{
+    if (_state->controller) _state->controller->suspendGlobalShortcut();
+}
+
+- (NSString *)endShortcutRecording
+{
+    if (!_state->controller) return nil;
+    const QString error = _state->controller->resumeGlobalShortcut();
+    return error.isEmpty() ? nil : error.toNSString();
 }
 
 - (void)dealloc

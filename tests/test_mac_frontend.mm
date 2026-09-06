@@ -10,6 +10,7 @@
 #include "ui/TranscriberPopup.h"
 
 #import <AppKit/AppKit.h>
+#import <Carbon/Carbon.h>
 
 // The Swift class's Objective-C runtime name is mangled, so a hand-written
 // @interface cannot stand in for the generated header.
@@ -18,6 +19,7 @@
 #include <QDeadlineTimer>
 #include <QApplication>
 #include <QFile>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 
 using namespace speecher;
@@ -48,6 +50,25 @@ SettingsRowModel *settingsRow(SettingsSchemaModel *schema, NSString *rowId)
         }
     }
     return nil;
+}
+
+// Whether the given ⌃⌥⇧ function key is unregistered system-wide: Carbon's exclusive
+// option refuses the registration while anyone — including this process's own
+// shortcut binder — holds the combination.
+bool hotKeyComboIsFree(UInt32 keyCode = kVK_F9)
+{
+    const EventHotKeyID identifier{'spct', 99};
+    EventHotKeyRef probe = nullptr;
+    const OSStatus status = RegisterEventHotKey(keyCode,
+                                                controlKey | optionKey | shiftKey,
+                                                identifier,
+                                                GetApplicationEventTarget(),
+                                                kEventHotKeyExclusive,
+                                                &probe);
+    if (status == noErr && probe) {
+        UnregisterEventHotKey(probe);
+    }
+    return status == noErr;
 }
 
 } // namespace
@@ -276,6 +297,92 @@ private slots:
                  QStringLiteral("Signed in with Claude Code"));
         [bridge.settingsSchema setValue:@"cliproxy" forRowId:@"anthropicAuthMode"];
         QCOMPARE(bridge.anthropicCredentialStatus.length, NSUInteger(0));
+    }
+
+    // A Carbon hotkey is consumed system-wide and never reaches a recorder's
+    // key monitor: recording must let go of the registration and take it back
+    // when recording ends, or pressing the bound combination while recording
+    // starts dictation instead of re-recording it.
+    void overlappingShortcutRecordingsRestoreAfterTheLastEnds()
+    {
+        ApplicationController controller(false);
+        SpeecherBridge *bridge = [[SpeecherBridge alloc] initWithController:&controller];
+        // An obscure combination, so nothing else on a CI host holds it.
+        QVERIFY(controller.setGlobalShortcut(
+            QKeySequence(Qt::META | Qt::ALT | Qt::SHIFT | Qt::Key_F9)));
+        QVERIFY(!hotKeyComboIsFree());
+
+        [bridge beginShortcutRecording];
+        [bridge beginShortcutRecording];
+        QVERIFY(hotKeyComboIsFree());
+        // Deferred startup must not restore a shortcut while it is recorded.
+        controller.frontEndReady();
+        QCoreApplication::processEvents();
+        QVERIFY(hotKeyComboIsFree());
+
+        [bridge endShortcutRecording];
+        QVERIFY(hotKeyComboIsFree());
+        const unichar replacement = NSF10FunctionKey;
+        QVERIFY([bridge bindShortcutWithCharacters:[NSString stringWithCharacters:&replacement length:1]
+                                     modifierFlags:NSEventModifierFlagControl
+                                                   | NSEventModifierFlagOption
+                                                   | NSEventModifierFlagShift] == nil);
+        QVERIFY(hotKeyComboIsFree(kVK_F10));
+        [bridge endShortcutRecording];
+        QVERIFY(hotKeyComboIsFree());
+        QVERIFY(!hotKeyComboIsFree(kVK_F10));
+    }
+
+    void shortcutCleanupAfterControllerDestruction()
+    {
+        SpeecherBridge *bridge;
+        {
+            ApplicationController controller(false);
+            bridge = [[SpeecherBridge alloc] initWithController:&controller];
+            [bridge beginShortcutRecording];
+        }
+        // Recorder callbacks may arrive after controller teardown.
+        [bridge beginShortcutRecording];
+        QVERIFY([bridge endShortcutRecording] == nil);
+    }
+
+    // Ending a recording that bound a replacement keeps the replacement rather
+    // than restoring the suspended combination over it.
+    void endingARecordingKeepsAShortcutBoundDuringIt()
+    {
+        ApplicationController controller(false);
+        SpeecherBridge *bridge = [[SpeecherBridge alloc] initWithController:&controller];
+        QVERIFY(controller.setGlobalShortcut(
+            QKeySequence(Qt::META | Qt::ALT | Qt::SHIFT | Qt::Key_F9)));
+
+        [bridge beginShortcutRecording];
+        QVERIFY([bridge bindShortcutWithCharacters:@"g"
+                                     modifierFlags:NSEventModifierFlagControl
+                                                   | NSEventModifierFlagOption] == nil);
+        [bridge endShortcutRecording];
+
+        QCOMPARE(controller.globalShortcut(),
+                 QKeySequence(Qt::META | Qt::ALT | Qt::Key_G));
+        QVERIFY(hotKeyComboIsFree());
+    }
+
+    void endingShortcutRecordingReportsRegistrationConflict()
+    {
+        ApplicationController controller(false);
+        SpeecherBridge *bridge = [[SpeecherBridge alloc] initWithController:&controller];
+        QVERIFY(controller.setGlobalShortcut(
+            QKeySequence(Qt::META | Qt::ALT | Qt::SHIFT | Qt::Key_F9)));
+        [bridge beginShortcutRecording];
+        EventHotKeyRef competingHotKey = nullptr;
+        const auto cleanup = qScopeGuard([&] {
+            if (competingHotKey) UnregisterEventHotKey(competingHotKey);
+        });
+        const EventHotKeyID identifier{'spct', 100};
+        QCOMPARE(RegisterEventHotKey(kVK_F9, controlKey | optionKey | shiftKey,
+                                     identifier, GetApplicationEventTarget(),
+                                     kEventHotKeyExclusive, &competingHotKey), OSStatus(noErr));
+        NSString *error = [bridge endShortcutRecording];
+        QVERIFY(error.length > 0);
     }
 
     void whatsNewOfferFollowsPendingUpgradeState()

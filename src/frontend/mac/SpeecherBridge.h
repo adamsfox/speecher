@@ -224,6 +224,12 @@ typedef NS_ENUM(NSInteger, SpeecherPaneLayout) {
 // Registers the sequence the binder already reports, which is its built-in
 // default before anything was ever stored. nil once bound, otherwise why not.
 - (nullable NSString *)bindCurrentShortcut;
+// A registered hotkey is consumed system-wide and never reaches a recorder's
+// key monitor: pressing the bound combination while recording would start
+// dictation instead of re-recording it. Recording therefore lets go of the
+// registration first; ending it restores the bound sequence.
+- (void)beginShortcutRecording;
+- (nullable NSString *)endShortcutRecording;
 
 @property (nonatomic, readonly) BOOL accessibilitySupported;
 @property (nonatomic, readonly) BOOL accessibilityEnabled;

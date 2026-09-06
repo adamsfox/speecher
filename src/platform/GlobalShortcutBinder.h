@@ -34,6 +34,12 @@ public:
         return shortcut().toString(QKeySequence::NativeText);
     }
     virtual bool setShortcut(const QKeySequence &shortcut, QString *error = nullptr) = 0;
+    // Recording a replacement needs the current combination delivered as an
+    // ordinary key event. A platform that consumes it system-wide lets go of
+    // the registration here and takes it back on resume; the default binders
+    // deliver key events regardless and keep nothing to let go of.
+    virtual void suspend() {}
+    virtual QString resume() { return {}; }
     // Forgets the registration the desktop keeps for Speecher, where the
     // desktop keeps one. Portal shortcuts live with the session and need no
     // removal; the default says so.

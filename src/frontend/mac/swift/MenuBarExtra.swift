@@ -26,10 +26,13 @@ struct MenuBarPanel: View {
                     .gaugeStyle(.linearCapacity)
                     .accessibilityLabel("Input level")
             }
-            Button(model.listening ? "Stop Dictation" : "Start Dictation") {
+            // Labelled and enabled by what toggle() would actually do: it also
+            // stops a refinement, and does nothing during stopping/delivering.
+            Button(model.stoppable ? "Stop Dictation" : "Start Dictation") {
                 model.bridge.toggle()
             }
             .buttonStyle(.borderedProminent)
+            .disabled(model.busy)
             if model.accessibilitySupported && !model.accessibilityEnabled {
                 Divider()
                 accessibilityNotice

@@ -350,6 +350,16 @@ bool ApplicationController::setGlobalShortcut(const QKeySequence &shortcut, QStr
     return m_shortcutBinder->setShortcut(shortcut, error);
 }
 
+void ApplicationController::suspendGlobalShortcut()
+{
+    m_shortcutBinder->suspend();
+}
+
+QString ApplicationController::resumeGlobalShortcut()
+{
+    return m_shortcutBinder->resume();
+}
+
 void ApplicationController::registerGlobalShortcut()
 {
     m_shortcutBinder->registerShortcut();
