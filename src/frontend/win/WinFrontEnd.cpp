@@ -3,6 +3,7 @@
 #include "app/ApplicationController.h"
 #include "app/UpdateController.h"
 #include "core/SettingsStore.h"
+#include "dictation/DictationSession.h"
 #include "frontend/win/DictationPanel.h"
 #include "frontend/win/SettingsWindow.h"
 #include "frontend/win/SetupWindow.h"
@@ -72,6 +73,21 @@ WinFrontEnd::WinFrontEnd(ApplicationController *controller,
     , m_controller(controller)
     , m_native(std::make_unique<Native>(controller, this, std::move(host)))
 {
+    connect(m_native->panel.get(), &DictationPanel::whatsNewRequested, this, [this] {
+        showSettingsWindow();
+        m_native->settingsWindow()->showWhatsNew();
+    });
+    controller->updates()->setRestoreStateProvider([this, controller] {
+        QStringList state;
+        const DictationState sessionState = controller->session()->state();
+        if (sessionState != DictationState::Idle && sessionState != DictationState::Error) {
+            state.append(QStringLiteral("listening"));
+        }
+        if (m_native->settings && m_native->settings->isVisible()) {
+            state.append(QStringLiteral("settings"));
+        }
+        return state.join(QLatin1Char(','));
+    });
     connect(m_controller->updates(), &UpdateController::openReleasePageRequested, this, [] {
         ShellExecuteW(nullptr,
                       L"open",
@@ -82,7 +98,10 @@ WinFrontEnd::WinFrontEnd(ApplicationController *controller,
     });
 }
 
-WinFrontEnd::~WinFrontEnd() = default;
+WinFrontEnd::~WinFrontEnd()
+{
+    m_controller->updates()->setRestoreStateProvider({});
+}
 
 void WinFrontEnd::showMainWindow()
 {

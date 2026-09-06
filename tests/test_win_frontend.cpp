@@ -69,6 +69,46 @@ private slots:
         controller.reset();
     }
 
+    void updateChipFollowsUpdaterAndSessionState()
+    {
+        using State = UpdateController::State;
+        const auto chip = [](State state, DictationState session = DictationState::Idle,
+                             const QString &error = {}, bool repeated = false) {
+            return win::updateChipState(state, QStringLiteral("0.2.0"), 42,
+                                        error, repeated, session);
+        };
+        const auto available = chip(State::UpdateAvailable, DictationState::Listening);
+        QCOMPARE(available.text, QStringLiteral("Speecher 0.2.0 available — install and restart"));
+        QVERIFY(available.visible && available.enabled);
+        const auto downloading = chip(State::Downloading);
+        QCOMPARE(downloading.text, QStringLiteral("Downloading 42%"));
+        QVERIFY(downloading.visible && !downloading.enabled);
+        const auto ready = chip(State::ReadyToRestart, DictationState::Listening);
+        QCOMPARE(ready.text, QStringLiteral("Restart to finish updating"));
+        QVERIFY(ready.visible && ready.enabled);
+        QCOMPARE(chip(State::ReadyToRestart, DictationState::Idle, "Install failed").text,
+                 QStringLiteral("Install failed"));
+        const auto pending = chip(State::RestartPending);
+        QCOMPARE(pending.text, QStringLiteral("Restarting after this dictation…"));
+        QVERIFY(pending.visible && !pending.enabled);
+        const auto restarting = chip(State::Restarting);
+        QCOMPARE(restarting.text, QStringLiteral("Restarting…"));
+        QVERIFY(restarting.visible && !restarting.enabled);
+        const auto error = chip(State::Error, DictationState::Idle, "Download failed");
+        QCOMPARE(error.text, QStringLiteral("Download failed"));
+        QVERIFY(error.visible && error.enabled);
+        QVERIFY(!chip(State::Error, DictationState::Listening).enabled);
+        QVERIFY(chip(State::Error, DictationState::Error).enabled);
+        const auto failed = chip(State::CheckFailed, DictationState::Idle, {}, true);
+        QCOMPARE(failed.text, QStringLiteral("Update check failed"));
+        QVERIFY(failed.visible && failed.enabled);
+        QVERIFY(!chip(State::CheckFailed, DictationState::Listening, {}, true).enabled);
+        for (State state : {State::Idle, State::Checking, State::UpToDate, State::CheckFailed}) {
+            const auto hidden = chip(state);
+            QVERIFY(!hidden.visible && !hidden.enabled);
+        }
+    }
+
     void retainedCollectionBaseline_data()
     {
         QTest::addColumn<bool>("scalarCommit");

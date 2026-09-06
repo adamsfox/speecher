@@ -24,6 +24,8 @@ public:
     // Creates the window if none is open, brings it forward, reloads the
     // draft, and remembers the pane from last time.
     void show();
+    void showWhatsNew();
+    bool isVisible() const;
 
     // Saves a picture of the window for --grab. SPEECHER_GRAB_PAGE names a
     // pane id (general, dictation, shortcut, text, delivery, apps, vocabulary,
