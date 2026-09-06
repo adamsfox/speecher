@@ -5,6 +5,11 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QLocalSocket>
+#ifdef Q_OS_WIN
+#include <QCryptographicHash>
+#include <QScopeGuard>
+#include <qt_windows.h>
+#endif
 
 #include <utility>
 
@@ -114,6 +119,12 @@ SingleInstanceIpc::~SingleInstanceIpc()
     for (QLocalSocket *socket : m_server.findChildren<QLocalSocket *>()) {
         socket->disconnect(this);
     }
+#ifdef Q_OS_WIN
+    m_server.close();
+    if (m_instanceGuard) {
+        CloseHandle(m_instanceGuard);
+    }
+#endif
 }
 
 QString SingleInstanceIpc::socketName() const
@@ -131,6 +142,26 @@ bool SingleInstanceIpc::listen(QString *error)
 {
     const QString listenName = socketName();
 #ifdef Q_OS_WIN
+    // Windows permits multiple QLocalServers on one pipe. Keep an atomic
+    // process-lifetime claim while probing legacy endpoints and opening ours.
+    const QString guardName = QStringLiteral("Global\\speecher-instance-")
+        + QString::fromLatin1(QCryptographicHash::hash(listenName.toUtf8(),
+                                                      QCryptographicHash::Sha256).toHex());
+    HANDLE guard = CreateMutexW(nullptr, FALSE, guardName.toStdWString().c_str());
+    const DWORD guardError = GetLastError();
+    const auto releaseGuard = qScopeGuard([&] {
+        if (guard) {
+            CloseHandle(guard);
+        }
+    });
+    if (!guard || guardError == ERROR_ALREADY_EXISTS) {
+        if (error) {
+            *error = guard ? activeInstanceMessage(listenName)
+                           : QStringLiteral("Could not reserve Speecher instance: Windows error %1")
+                                 .arg(guardError);
+        }
+        return false;
+    }
     if (canConnectToServer(listenName, 200)) {
         if (error) {
             *error = activeInstanceMessage(listenName);
@@ -148,6 +179,9 @@ bool SingleInstanceIpc::listen(QString *error)
     }
 
     if (m_server.listen(listenName)) {
+#ifdef Q_OS_WIN
+        m_instanceGuard = std::exchange(guard, nullptr);
+#endif
         return true;
     }
 
@@ -167,6 +201,9 @@ bool SingleInstanceIpc::listen(QString *error)
         }
         return false;
     }
+#ifdef Q_OS_WIN
+    m_instanceGuard = std::exchange(guard, nullptr);
+#endif
     return true;
 }
 
