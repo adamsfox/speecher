@@ -271,7 +271,7 @@ DeliveryResult TextDelivery::deliver(const OutputSettings &settings,
                                &QEventLoop::quit);
             waitForClipboardConsumer.exec(QEventLoop::ExcludeUserInputEvents);
         }
-        return m_clipboardDelivery.restore(previousClipboard, error);
+        return m_clipboardDelivery.restore(previousClipboard, error, true);
     };
     bool initiallyHtmlAvailable = false;
     QString initialCopyError;

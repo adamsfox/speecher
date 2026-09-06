@@ -985,6 +985,31 @@ private slots:
         QVERIFY(attempts.isEmpty());
     }
 
+    void clipboardRestorePreservesNewCopyDuringDelivery()
+    {
+        QApplication::clipboard()->setText(QStringLiteral("previous clipboard"));
+        FakeTargetProvider targetProvider;
+        targetProvider.directInsertionAvailable = true;
+        targetProvider.inserted = true;
+        TextDelivery delivery(&targetProvider);
+        OutputSettings settings;
+        settings.method = QString::fromLatin1(OutputMethod::DirectInsert);
+        settings.restoreClipboardAfterTyping = true;
+        Target target;
+        target.applicationId = QStringLiteral("test.editor");
+
+        QTimer::singleShot(0, &delivery, [] {
+            QApplication::clipboard()->setText(QStringLiteral("new user copy"));
+        });
+        const DeliveryResult result = delivery.deliver(
+            settings, makeDeliveryContent(QStringLiteral("dictated text"), OutputFormat::PlainText), target);
+
+        QVERIFY(result.ok);
+        QCOMPARE(result.receipt, DeliveryReceipt::AcceptedByTarget);
+        QCOMPARE(result.message, QStringLiteral("Accepted by Target"));
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("new user copy"));
+    }
+
     void outputRestoresClipboardAfterDelayWhenVirtualKeyboardInputCannotBeVerified()
     {
         auto *previous = new QMimeData;
