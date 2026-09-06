@@ -6,6 +6,7 @@
 #include "app/PlatformComposition.h"
 #include "core/LearnedCorrection.h"
 #include "core/SettingsStore.h"
+#include "dictation/DictationSession.h"
 #include "platform/CorrectionDiff.h"
 #include "platform/GlobalShortcutBinder.h"
 #ifdef Q_OS_LINUX
@@ -164,6 +165,11 @@ public:
         return m_delegate->createAudioInput(settings, parent);
     }
 
+    void requestMicrophoneAccess(QObject *, std::function<void(bool)> completed) const override
+    {
+        microphoneAnswer = std::move(completed);
+    }
+
     MediaController *createMediaController(QObject *parent) const override
     {
         return m_delegate->createMediaController(parent);
@@ -215,6 +221,7 @@ public:
         return true;
     }
 
+    mutable std::function<void(bool)> microphoneAnswer;
     mutable FakeGlobalShortcutBinder *binder = nullptr;
     mutable AccessibilityState accessibility{true, true, false};
     mutable std::function<void()> accessibilityRefresh;
@@ -269,6 +276,50 @@ class PlatformCompositionTests : public QObject {
     Q_OBJECT
 
 private slots:
+    void shortcutReleaseWhilePermissionPending_data()
+    {
+        QTest::addColumn<bool>("hold");
+        QTest::addColumn<bool>("grantBeforeRelease");
+        QTest::newRow("tap before grant") << false << false;
+        QTest::newRow("hold before grant") << true << false;
+        QTest::newRow("tap after grant") << false << true;
+        QTest::newRow("hold after grant") << true << true;
+    }
+
+    void shortcutReleaseWhilePermissionPending()
+    {
+        QFETCH(bool, hold);
+        QFETCH(bool, grantBeforeRelease);
+        const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
+        ApplicationController controller(true, platform);
+        const bool setupCompleted = controller.settings()->setupCompleted();
+        const auto restore = qScopeGuard([&] { controller.settings()->setSetupCompleted(setupCompleted); });
+        controller.settings()->setSetupCompleted(true);
+        emit platform->binder->activated();
+        QVERIFY(platform->microphoneAnswer);
+        QCOMPARE(controller.session()->state(), DictationState::Idle);
+        if (grantBeforeRelease) platform->microphoneAnswer(true);
+        if (hold) QTest::qSleep(410);
+        emit platform->binder->deactivated();
+        if (!grantBeforeRelease) platform->microphoneAnswer(true);
+        QCOMPARE(controller.session()->state(), hold ? DictationState::Idle : DictationState::Starting);
+        controller.stopListening();
+    }
+
+    void stopCancelsPendingMicrophoneStart()
+    {
+        const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
+        ApplicationController controller(true, platform);
+        const bool setupCompleted = controller.settings()->setupCompleted();
+        const auto restore = qScopeGuard([&] { controller.settings()->setSetupCompleted(setupCompleted); });
+        controller.settings()->setSetupCompleted(true);
+        controller.startListening();
+        QVERIFY(platform->microphoneAnswer);
+        controller.stopListening();
+        platform->microphoneAnswer(true);
+        QCOMPARE(controller.session()->state(), DictationState::Idle);
+    }
+
 #if defined(Q_OS_LINUX) || defined(Q_OS_WIN)
     void guiLaunchKeepsRunningAfterLastWindowCloses()
     {
