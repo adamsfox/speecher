@@ -302,7 +302,7 @@ private slots:
     // key monitor: recording must let go of the registration and take it back
     // when recording ends, or pressing the bound combination while recording
     // starts dictation instead of re-recording it.
-    void shortcutRecordingSuspendsAndRestoresTheHotKey()
+    void overlappingShortcutRecordingsRestoreAfterTheLastEnds()
     {
         ApplicationController controller(false);
         SpeecherBridge *bridge = [[SpeecherBridge alloc] initWithController:&controller];
@@ -312,12 +312,15 @@ private slots:
         QVERIFY(!hotKeyComboIsFree());
 
         [bridge beginShortcutRecording];
+        [bridge beginShortcutRecording];
         QVERIFY(hotKeyComboIsFree());
         // Deferred startup must not restore a shortcut while it is recorded.
         controller.frontEndReady();
         QCoreApplication::processEvents();
         QVERIFY(hotKeyComboIsFree());
 
+        [bridge endShortcutRecording];
+        QVERIFY(hotKeyComboIsFree());
         [bridge endShortcutRecording];
         QVERIFY(!hotKeyComboIsFree());
     }

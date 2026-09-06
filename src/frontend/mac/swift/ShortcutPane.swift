@@ -15,7 +15,7 @@ final class ShortcutRecorder: ObservableObject {
     /// Restores the hotkey registration recording suspended. The bound
     /// combination is consumed system-wide while registered, so the monitor
     /// would never see it — pressing it would start dictation instead.
-    private var restoreShortcut: (() -> Void)?
+    private var restoreShortcut: (@MainActor @Sendable () -> Void)?
     /// Escape abandons the recording rather than becoming the shortcut.
     private let escapeKeyCode: UInt16 = 53
 
@@ -50,6 +50,11 @@ final class ShortcutRecorder: ObservableObject {
     deinit {
         if let monitor {
             NSEvent.removeMonitor(monitor)
+        }
+        // Deinitialization can run outside the main actor. Capture the cleanup
+        // rather than the dying recorder, and restore on the actor it requires.
+        if let restoreShortcut {
+            Task { @MainActor in restoreShortcut() }
         }
     }
 }

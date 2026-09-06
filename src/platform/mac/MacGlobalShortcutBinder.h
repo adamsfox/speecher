@@ -28,8 +28,8 @@ private:
     void unregisterHotKey();
 
     QKeySequence m_shortcut;
-    // Whether suspend() dropped a live registration resume() must restore.
-    bool m_suspended = false;
+    // Setup and settings can record concurrently; only the last resume binds.
+    int m_suspensionCount = 0;
     bool m_resumeBinding = false;
     // EventHotKeyRef, EventHandlerRef and EventHandlerUPP, kept opaque so this
     // header stays plain C++ for moc.

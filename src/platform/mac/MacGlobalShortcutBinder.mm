@@ -181,7 +181,7 @@ QString MacGlobalShortcutBinder::unsupportedReason() const
 
 void MacGlobalShortcutBinder::bind()
 {
-    if (m_suspended) {
+    if (m_suspensionCount > 0) {
         m_resumeBinding = true;
         return;
     }
@@ -210,18 +210,14 @@ bool MacGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString 
 // event, so recording it (or any replacement) needs the registration gone.
 void MacGlobalShortcutBinder::suspend()
 {
-    if (m_suspended) return;
-    m_suspended = true;
+    if (m_suspensionCount++ > 0) return;
     m_resumeBinding = m_hotKey != nullptr;
     unregisterHotKey();
 }
 
 void MacGlobalShortcutBinder::resume()
 {
-    if (!m_suspended) {
-        return;
-    }
-    m_suspended = false;
+    if (m_suspensionCount == 0 || --m_suspensionCount > 0) return;
     if (m_resumeBinding) {
         m_resumeBinding = false;
         bind();
