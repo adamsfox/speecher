@@ -30,10 +30,14 @@ struct RootView: View {
     @ViewBuilder private var detail: some View {
         if let pane = model.pane(withId: model.pane) {
             VStack(alignment: .leading, spacing: 0) {
-                if model.whatsNewPending {
+                if model.updateBannerShown {
+                    UpdateBanner(model: model)
+                        .scenePadding([.top, .horizontal])
+                } else if model.whatsNewPending {
                     GroupBox {
                         HStack {
-                            Label("Speecher was updated.", systemImage: "sparkles")
+                            Label("Speecher \(model.installedVersionNumber) is installed",
+                                  systemImage: "sparkles")
                             Spacer()
                             Button("See what's new") { model.showWhatsNew() }
                             Button("Dismiss") { model.dismissWhatsNew() }
@@ -50,6 +54,63 @@ struct RootView: View {
             ContentUnavailableView("No Pane Selected",
                                    systemImage: "sidebar.left",
                                    description: Text("Pick a pane in the sidebar."))
+        }
+    }
+}
+
+/// The update banner over the detail column, mirroring the Linux settings
+/// banner state for state: offer, download progress, restart, and error.
+struct UpdateBanner: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        GroupBox {
+            HStack {
+                Label(text, systemImage: model.update.state == .error
+                    ? "exclamationmark.triangle.fill"
+                    : "arrow.down.circle")
+                Spacer()
+                if model.update.state == .downloading {
+                    ProgressView(value: Double(model.update.percent), total: 100)
+                        .frame(width: 120)
+                }
+                switch model.update.state {
+                case .updateAvailable:
+                    Button("Install and restart") { model.installUpdateAndRestart() }
+                    Button("Dismiss") { model.dismissUpdate() }
+                case .readyToRestart:
+                    Button("Restart now") { model.updateNow() }
+                    Button("Later") { model.updateBannerDeferred = true }
+                case .error:
+                    Button("Try again") { model.updateNow() }
+                    Button("Dismiss") { model.dismissUpdate() }
+                default:
+                    // Downloading, restart pending and restarting carry no
+                    // actions: the sentence is the whole message.
+                    EmptyView()
+                }
+            }
+        }
+    }
+
+    private var text: String {
+        switch model.update.state {
+        case .updateAvailable:
+            return model.update.stableReplacement
+                ? "Switch to Stable Release \(model.update.version) (replaces this Nightly Build)"
+                : "Speecher \(model.update.version) is available"
+        case .downloading:
+            return "Downloading Speecher \(model.update.version)"
+        case .readyToRestart:
+            return model.update.error.isEmpty ? "Restart to finish updating" : model.update.error
+        case .restartPending:
+            return "Restarting after this dictation…"
+        case .restarting:
+            return "Restarting…"
+        case .error:
+            return model.update.error
+        default:
+            return ""
         }
     }
 }
@@ -142,6 +203,9 @@ final class SpeecherSettingsWindow {
             window?.title = panes.first { $0.id == pane }?.title ?? "Settings"
         }
     }
+
+    /// Whether the window is on screen, which a Sparkle relaunch restores.
+    var isVisible: Bool { window.isVisible }
 
     func show() {
         window.makeKeyAndOrderFront(nil)

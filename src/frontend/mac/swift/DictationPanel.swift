@@ -14,6 +14,9 @@ private let pillHeight: CGFloat = 72
 private let minimumPillWidth: CGFloat = 420
 private let previewChromeWidth: CGFloat = 190
 private let screenEdgeMargin: CGFloat = 80
+/// The update and what's-new capsules stacked above the pill.
+private let chipHeight: CGFloat = 28
+private let chipSpacing: CGFloat = 8
 
 /// Scratch-branch-only E2E seam: every panel callback lands as a JSON line in
 /// SPEECHER_E2E_EVIDENCE_DIR/panel-events.jsonl for the harness to assert on.
@@ -64,6 +67,43 @@ final class DictationPanelState: ObservableObject {
     @Published var level: Float = 0
     @Published var phase = Phase.live
     @Published var problem = ""
+    /// The update chip's line, empty while there is nothing to offer.
+    @Published var updateChip = ""
+    @Published var updateChipEnabled = false
+    /// The what's-new chip's line, empty once hidden or dismissed.
+    @Published var whatsNewChip = ""
+}
+
+/// One small capsule above the pill: a line of text that is a button, and on
+/// the what's-new chip a dismiss beside it.
+private struct PanelChip: View {
+    let text: String
+    let enabled: Bool
+    let action: () -> Void
+    var dismiss: (() -> Void)? = nil
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: action) {
+                Text(text)
+                    .font(.callout)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .disabled(!enabled)
+            if let dismiss {
+                Button(action: dismiss) {
+                    Image(systemName: "xmark")
+                        .imageScale(.small)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss what's new")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: chipHeight)
+        .background(.regularMaterial, in: .capsule)
+    }
 }
 
 /// One glass pill. This is the one place in this front end that asks for Liquid
@@ -72,8 +112,29 @@ final class DictationPanelState: ObservableObject {
 struct DictationPanelView: View {
     @ObservedObject var state: DictationPanelState
     let dismiss: () -> Void
+    let installUpdate: () -> Void
+    let openWhatsNew: () -> Void
+    let dismissWhatsNew: () -> Void
 
     var body: some View {
+        VStack(spacing: chipSpacing) {
+            if !state.updateChip.isEmpty {
+                PanelChip(text: state.updateChip,
+                          enabled: state.updateChipEnabled,
+                          action: installUpdate)
+            }
+            if !state.whatsNewChip.isEmpty {
+                PanelChip(text: state.whatsNewChip,
+                          enabled: true,
+                          action: openWhatsNew,
+                          dismiss: dismissWhatsNew)
+            }
+            pill
+        }
+        .frame(maxHeight: .infinity, alignment: .bottom)
+    }
+
+    private var pill: some View {
         HStack {
             if finished {
                 // The delivery outcome takes the whole pill, centred as one
@@ -217,6 +278,7 @@ private struct ShimmerText: View {
 @MainActor
 final class SpeecherDictationPanel {
     private let state = DictationPanelState()
+    private let model: AppModel
     private let bridge: SpeecherBridge
     private let panel: NSPanel
     private var frozen = false
@@ -224,11 +286,18 @@ final class SpeecherDictationPanel {
     private(set) var presentedGeneration: UInt64 = 0
     private var levelObserver: AnyCancellable?
     private var screenObserver: AnyCancellable?
+    private var updateObserver: AnyCancellable?
+    private var whatsNewObserver: AnyCancellable?
+    private var whatsNewAutoHide: Timer?
+    /// Opens the settings window on the What's New pane. Set by SpeecherMacUI,
+    /// which owns that window.
+    var openWhatsNew: (() -> Void)?
     /// The panel is 28pt above the bottom of the screen it sits on, which is
     /// where the Qt popup put itself and where the eye expects it.
     private let bottomMargin: CGFloat = 28
 
     init(model: AppModel) {
+        self.model = model
         bridge = model.bridge
         // Non-activating is the whole point, and only an NSPanel accepts that
         // style mask. Borderless because the pill is the window: a titlebar
@@ -247,15 +316,33 @@ final class SpeecherDictationPanel {
         panel.animationBehavior = .utilityWindow
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.contentView = NSHostingView(rootView: DictationPanelView(state: state) { [weak self] in
-            self?.dismiss()
-        })
+        panel.contentView = NSHostingView(rootView: DictationPanelView(
+            state: state,
+            dismiss: { [weak self] in self?.dismiss() },
+            installUpdate: { [weak self] in self?.bridge.installUpdateAndRestart() },
+            openWhatsNew: { [weak self] in self?.openWhatsNew?() },
+            dismissWhatsNew: { [weak self] in
+                self?.setWhatsNewChip("")
+                self?.bridge.clearPendingWhatsNew()
+            }))
         wire()
         installE2ECaptureSeam()
         // The level arrives through the model, which is the one reader of the
         // bridge's audio callback: two readers of one block would mean the
         // second one silently replaced the first.
         levelObserver = model.$level.sink { [weak self] level in self?.state.level = level }
+        // The chip's line depends on the update state and, for whether an error
+        // chip can act, on the dictation state, so it follows both.
+        updateObserver = model.$update.combineLatest(model.$status)
+            .sink { [weak self] update, status in
+                self?.refreshUpdateChip(update, status: status)
+            }
+        // A what's-new offer dismissed from the settings window leaves here too.
+        whatsNewObserver = model.$whatsNewPending.sink { [weak self] pending in
+            if !pending {
+                self?.setWhatsNewChip("")
+            }
+        }
         screenObserver = NotificationCenter.default
             .publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in
@@ -393,8 +480,69 @@ final class SpeecherDictationPanel {
     /// The panel belongs on the display the user is working on, which on a
     /// multi-display Mac is often not the primary one.
     private func present() {
+        refreshWhatsNewChip()
         position()
         panel.orderFrontRegardless()
+    }
+
+    /// The update chip's line for the state, exactly as the Qt popup words it.
+    private func refreshUpdateChip(_ update: AppModel.UpdateStatus, status: String) {
+        let canAct = ["idle", "error"].contains(status.lowercased())
+        switch update.state {
+        case .updateAvailable:
+            setUpdateChip("Speecher \(update.version) available — install and restart",
+                          enabled: true)
+        case .downloading:
+            setUpdateChip("Downloading \(update.percent)%", enabled: false)
+        case .readyToRestart:
+            // Clicking during a dictation is safe: the restart parks until the
+            // session is idle and the relaunch restores what was on screen.
+            setUpdateChip(update.error.isEmpty ? "Restart to finish updating" : update.error,
+                          enabled: true)
+        case .restartPending:
+            setUpdateChip("Restarting after this dictation…", enabled: false)
+        case .restarting:
+            setUpdateChip("Restarting…", enabled: false)
+        case .error:
+            setUpdateChip(update.error, enabled: canAct)
+        default:
+            setUpdateChip("", enabled: false)
+        }
+    }
+
+    private func setUpdateChip(_ text: String, enabled: Bool) {
+        state.updateChip = text
+        state.updateChipEnabled = enabled
+        syncFrameHeight()
+    }
+
+    /// The offer returns with every showing of the panel and tidies itself away
+    /// six seconds later; only the dismiss button clears the pending state.
+    private func refreshWhatsNewChip() {
+        setWhatsNewChip(model.whatsNewPending
+            ? "Speecher \(model.installedVersionNumber) installed — see what's new"
+            : "")
+        whatsNewAutoHide?.invalidate()
+        guard !state.whatsNewChip.isEmpty else { return }
+        whatsNewAutoHide = Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async { self?.setWhatsNewChip("") }
+        }
+    }
+
+    private func setWhatsNewChip(_ text: String) {
+        state.whatsNewChip = text
+        syncFrameHeight()
+    }
+
+    /// The window grows upward to make room for the chips: its origin is the
+    /// bottom-left corner, which position() pins above the screen edge.
+    private func syncFrameHeight() {
+        let chips = (state.updateChip.isEmpty ? 0 : 1) + (state.whatsNewChip.isEmpty ? 0 : 1)
+        let height = pillHeight + CGFloat(chips) * (chipHeight + chipSpacing)
+        guard abs(panel.frame.height - height) >= 1 else { return }
+        var frame = panel.frame
+        frame.size.height = height
+        panel.setFrame(frame, display: true)
     }
 
     private func position() {

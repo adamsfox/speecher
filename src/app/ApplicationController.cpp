@@ -134,7 +134,7 @@ ApplicationController::ApplicationController(bool popupOnly,
     m_session->setScreenshotContextProvider(
         m_platform->createScreenshotContextProvider(this));
 #ifdef Q_OS_MACOS
-    m_updates = new MacSparkleUpdater(m_settings, this);
+    m_updates = new MacSparkleUpdater(m_settings, m_session, this);
 #elif defined(Q_OS_WIN)
     m_updates = new WindowsInstallerUpdater(m_settings, m_session, this);
 #else

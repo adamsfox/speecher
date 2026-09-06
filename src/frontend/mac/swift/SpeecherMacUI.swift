@@ -65,6 +65,10 @@ private final class ReopenApplicationDelegate: NSObject, NSApplicationDelegate {
         super.init()
         menuBar = SpeecherMenuBarExtra(model: model,
                                       openSettings: { [weak self] in self?.showSettings() })
+        panel.openWhatsNew = { [weak self] in
+            self?.showSettings()
+            self?.model.showWhatsNew()
+        }
         applicationDelegate = ReopenApplicationDelegate(forwardingTo: NSApp.delegate) {
             [weak self] in self?.showSettings()
         }
@@ -147,6 +151,11 @@ private final class ReopenApplicationDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     @objc public var whatsNewOfferVisible: Bool { model.whatsNewPending }
+
+    /// Whether the settings window is on screen, which is what a restart after
+    /// an update puts back.
+    @MainActor
+    @objc public var settingsWindowVisible: Bool { settings?.isVisible ?? false }
 
     /// Brings Speecher forward so whatever it just put on screen can be seen.
     @MainActor

@@ -179,6 +179,20 @@ typedef NS_ENUM(NSInteger, SpeecherPaneLayout) {
                        record:(SpeecherRecord *)record;
 @end
 
+// The update flow as the banners see it. Mirrors speecher::UpdateController::State.
+typedef NS_ENUM(NSInteger, SpeecherUpdateState) {
+    SpeecherUpdateStateIdle,
+    SpeecherUpdateStateChecking,
+    SpeecherUpdateStateCheckFailed,
+    SpeecherUpdateStateUpToDate,
+    SpeecherUpdateStateUpdateAvailable,
+    SpeecherUpdateStateDownloading,
+    SpeecherUpdateStateReadyToRestart,
+    SpeecherUpdateStateRestartPending,
+    SpeecherUpdateStateRestarting,
+    SpeecherUpdateStateError,
+};
+
 @interface SpeecherBridge : NSObject
 @property (nonatomic, readonly, strong) SettingsSchemaModel *settingsSchema;
 @property (nonatomic, readonly, copy) NSString *stateName;
@@ -188,6 +202,27 @@ typedef NS_ENUM(NSInteger, SpeecherPaneLayout) {
 @property (nonatomic, readonly) BOOL whatsNewPending;
 @property (nonatomic, copy, nullable) void (^whatsNewChanged)(void);
 - (void)clearPendingWhatsNew;
+
+// The update flow, which the settings banner and the panel's update chip draw.
+@property (nonatomic, readonly) SpeecherUpdateState updateState;
+// The version an update offers. Empty while none does.
+@property (nonatomic, readonly, copy) NSString *updateVersion;
+// The running version, whose bare number the what's-new offers show.
+@property (nonatomic, readonly, copy) NSString *installedVersion;
+@property (nonatomic, readonly) NSInteger updatePercent;
+@property (nonatomic, readonly, copy) NSString *updateError;
+@property (nonatomic, readonly) BOOL updateBannerVisible;
+// The offered stable release replaces a running nightly build.
+@property (nonatomic, readonly) BOOL updateStableReplacement;
+@property (nonatomic, copy, nullable) void (^updateChanged)(void);
+// One click through the whole tail of the flow: download if needed, install,
+// then restart. A restart requested mid-dictation waits for the session to end.
+- (void)installUpdateAndRestart;
+// The current state's single step: download an offered update, restart a ready
+// one, or retry a failed check.
+- (void)updateNow;
+// Hides the offered version until a newer one appears; clears an error banner.
+- (void)dismissUpdate;
 - (void)toggle;
 - (void)startListening;
 - (void)stopListening;
