@@ -19,16 +19,16 @@ import SwiftUI
         let available = AppModel.UpdateStatus(state: .updateAvailable, version: "0.2.0")
         let ready = AppModel.UpdateStatus(state: .readyToRestart)
 
-        let updateChipState = DictationPanelState()
-        updateChipState.status = "Listening"
-        updateChipState.preview = "the quick brown fox"
-        updateChipState.updateChip = "Speecher 0.2.0 available — install and restart"
-        updateChipState.updateChipEnabled = true
+        let updateBannerState = DictationPanelState()
+        updateBannerState.status = "Listening"
+        updateBannerState.preview = "the quick brown fox"
+        updateBannerState.updateMessage = "Speecher 0.2.0 available"
+        updateBannerState.updateAction = "Install and restart"
 
-        let whatsNewChipState = DictationPanelState()
-        whatsNewChipState.status = "Listening"
-        whatsNewChipState.preview = "the quick brown fox"
-        whatsNewChipState.whatsNewChip = "Speecher 0.2.0 installed — see what's new"
+        let whatsNewBannerState = DictationPanelState()
+        whatsNewBannerState.status = "Listening"
+        whatsNewBannerState.preview = "the quick brown fox"
+        whatsNewBannerState.whatsNewMessage = "Speecher 0.2.0 installed"
 
         let jobs: [(String, CGSize, AnyView)] = [
             ("01-settings-banner-update-available.png", CGSize(width: 640, height: 90),
@@ -37,10 +37,10 @@ import SwiftUI
              AnyView(card(UpdateBannerContent(update: ready).row))),
             ("03-settings-whats-new-strip.png", CGSize(width: 640, height: 90),
              AnyView(card(WhatsNewStrip(installedNumber: "0.2.0").row))),
-            ("04-panel-update-chip.png", CGSize(width: 520, height: 140),
-             AnyView(panel(updateChipState))),
-            ("05-panel-whats-new-chip.png", CGSize(width: 520, height: 140),
-             AnyView(panel(whatsNewChipState))),
+            ("04-panel-update-chip.png", CGSize(width: 520, height: 150),
+             AnyView(panel(updateBannerState))),
+            ("05-panel-whats-new-chip.png", CGSize(width: 520, height: 150),
+             AnyView(panel(whatsNewBannerState))),
         ]
 
         var written: [String] = []

@@ -14,9 +14,9 @@ private let pillHeight: CGFloat = 72
 private let minimumPillWidth: CGFloat = 420
 private let previewChromeWidth: CGFloat = 190
 private let screenEdgeMargin: CGFloat = 80
-/// The update and what's-new capsules stacked above the pill.
-private let chipHeight: CGFloat = 28
-private let chipSpacing: CGFloat = 8
+/// The update and what's-new banners stacked above the pill.
+private let bannerHeight: CGFloat = 36
+private let bannerSpacing: CGFloat = 8
 
 /// Scratch-branch-only E2E seam: every panel callback lands as a JSON line in
 /// SPEECHER_E2E_EVIDENCE_DIR/panel-events.jsonl for the harness to assert on.
@@ -67,43 +67,34 @@ final class DictationPanelState: ObservableObject {
     @Published var level: Float = 0
     @Published var phase = Phase.live
     @Published var problem = ""
-    /// The update chip's line, empty while there is nothing to offer.
-    @Published var updateChip = ""
-    @Published var updateChipEnabled = false
-    /// The what's-new chip's line, empty once hidden or dismissed.
-    @Published var whatsNewChip = ""
+    /// The update banner's message, empty while there is nothing to offer, and
+    /// the label of the button beside it, empty for a passive progress state.
+    @Published var updateMessage = ""
+    @Published var updateAction = ""
+    /// The what's-new banner's message, empty once hidden or dismissed.
+    @Published var whatsNewMessage = ""
 }
 
-/// One small capsule above the pill. Clickable states are a prominent accent
-/// capsule so the chip unmistakably reads as a button; passive progress states
-/// fall back to the pill's own material, status rather than action. The
-/// what's-new dismiss is a matching ✕ button beside the capsule, as on the Qt
-/// popup.
-private struct PanelChip: View {
-    let text: String
-    let enabled: Bool
-    let action: () -> Void
+/// One banner capsule above the pill, on the pill's own material: a plain
+/// message with an explicitly labelled accent button beside it, so the action
+/// reads as a button rather than asking the user to guess that a colored
+/// capsule is clickable, exactly as on the Qt popup. Passive progress states
+/// pass no label and get no button.
+private struct PanelBanner: View {
+    let message: String
+    var actionLabel = ""
+    var action: () -> Void = {}
     var dismiss: (() -> Void)? = nil
 
     var body: some View {
-        HStack(spacing: 6) {
-            if enabled {
-                Button(action: action) {
-                    Text(text)
-                        .font(.callout)
-                        .lineLimit(1)
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .controlSize(.large)
-            } else {
-                Text(text)
-                    .font(.callout)
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 14)
-                    .frame(height: chipHeight)
-                    .background(.regularMaterial, in: .capsule)
+        HStack(spacing: 10) {
+            Text(message)
+                .font(.callout)
+                .lineLimit(1)
+            if !actionLabel.isEmpty {
+                Button(actionLabel, action: action)
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
             }
             if let dismiss {
                 Button(action: dismiss) {
@@ -115,7 +106,10 @@ private struct PanelChip: View {
                 .accessibilityLabel("Dismiss what's new")
             }
         }
-        .frame(height: chipHeight)
+        .padding(.leading, 16)
+        .padding(.trailing, 5)
+        .frame(height: bannerHeight)
+        .background(.regularMaterial, in: .capsule)
     }
 }
 
@@ -130,17 +124,17 @@ struct DictationPanelView: View {
     let dismissWhatsNew: () -> Void
 
     var body: some View {
-        VStack(spacing: chipSpacing) {
-            if !state.updateChip.isEmpty {
-                PanelChip(text: state.updateChip,
-                          enabled: state.updateChipEnabled,
-                          action: installUpdate)
+        VStack(spacing: bannerSpacing) {
+            if !state.updateMessage.isEmpty {
+                PanelBanner(message: state.updateMessage,
+                            actionLabel: state.updateAction,
+                            action: installUpdate)
             }
-            if !state.whatsNewChip.isEmpty {
-                PanelChip(text: state.whatsNewChip,
-                          enabled: true,
-                          action: openWhatsNew,
-                          dismiss: dismissWhatsNew)
+            if !state.whatsNewMessage.isEmpty {
+                PanelBanner(message: state.whatsNewMessage,
+                            actionLabel: "See what's new",
+                            action: openWhatsNew,
+                            dismiss: dismissWhatsNew)
             }
             pill
         }
@@ -335,7 +329,7 @@ final class SpeecherDictationPanel {
             installUpdate: { [weak self] in self?.bridge.installUpdateAndRestart() },
             openWhatsNew: { [weak self] in self?.openWhatsNew?() },
             dismissWhatsNew: { [weak self] in
-                self?.setWhatsNewChip("")
+                self?.setWhatsNewMessage("")
                 self?.bridge.clearPendingWhatsNew()
             }))
         wire()
@@ -344,16 +338,13 @@ final class SpeecherDictationPanel {
         // bridge's audio callback: two readers of one block would mean the
         // second one silently replaced the first.
         levelObserver = model.$level.sink { [weak self] level in self?.state.level = level }
-        // The chip's line depends on the update state and, for whether an error
-        // chip can act, on the dictation state, so it follows both.
-        updateObserver = model.$update.combineLatest(model.$status)
-            .sink { [weak self] update, status in
-                self?.refreshUpdateChip(update, status: status)
-            }
+        updateObserver = model.$update.sink { [weak self] update in
+            self?.refreshUpdateBanner(update)
+        }
         // A what's-new offer dismissed from the settings window leaves here too.
         whatsNewObserver = model.$whatsNewPending.sink { [weak self] pending in
             if !pending {
-                self?.setWhatsNewChip("")
+                self?.setWhatsNewMessage("")
             }
         }
         screenObserver = NotificationCenter.default
@@ -493,69 +484,69 @@ final class SpeecherDictationPanel {
     /// The panel belongs on the display the user is working on, which on a
     /// multi-display Mac is often not the primary one.
     private func present() {
-        refreshWhatsNewChip()
+        refreshWhatsNewBanner()
         position()
         panel.orderFrontRegardless()
     }
 
-    /// The update chip's line for the state, exactly as the Qt popup words it.
-    private func refreshUpdateChip(_ update: AppModel.UpdateStatus, status: String) {
-        let canAct = ["idle", "error"].contains(status.lowercased())
+    /// The update banner's message and button for the state, exactly as the Qt
+    /// popup words them.
+    private func refreshUpdateBanner(_ update: AppModel.UpdateStatus) {
         switch update.state {
         case .updateAvailable:
             // The bare number only: a nightly identifier's "-nightly…" suffix
-            // would stretch the chip across the screen, exactly as on the Qt
+            // would stretch the banner across the screen, exactly as on the Qt
             // popup (and as installedVersionNumber trims for the offer below).
-            let number = String(update.version.split(separator: "-").first ?? "")
-            setUpdateChip("Speecher \(number) available — install and restart",
-                          enabled: true)
-        case .downloading:
-            setUpdateChip("Downloading \(update.percent)%", enabled: false)
-        case .readyToRestart:
             // Clicking during a dictation is safe: the restart parks until the
             // session is idle and the relaunch restores what was on screen.
-            setUpdateChip(update.error.isEmpty ? "Restart to finish updating" : update.error,
-                          enabled: true)
+            let number = String(update.version.split(separator: "-").first ?? "")
+            setUpdateBanner("Speecher \(number) available", action: "Install and restart")
+        case .downloading:
+            setUpdateBanner("Downloading \(update.percent)%")
+        case .readyToRestart:
+            setUpdateBanner(update.error.isEmpty ? "Update ready" : update.error,
+                            action: "Restart now")
         case .restartPending:
-            setUpdateChip("Restarting after this dictation…", enabled: false)
+            setUpdateBanner("Restarting after this dictation…")
         case .restarting:
-            setUpdateChip("Restarting…", enabled: false)
+            setUpdateBanner("Restarting…")
         case .error:
-            setUpdateChip(update.error, enabled: canAct)
+            setUpdateBanner(update.error, action: "Try again")
         default:
-            setUpdateChip("", enabled: false)
+            setUpdateBanner("")
         }
     }
 
-    private func setUpdateChip(_ text: String, enabled: Bool) {
-        state.updateChip = text
-        state.updateChipEnabled = enabled
+    private func setUpdateBanner(_ message: String, action: String = "") {
+        state.updateMessage = message
+        state.updateAction = action
         syncFrameHeight()
     }
 
     /// The offer returns with every showing of the panel and tidies itself away
     /// six seconds later; only the dismiss button clears the pending state.
-    private func refreshWhatsNewChip() {
-        setWhatsNewChip(model.whatsNewPending
-            ? "Speecher \(model.installedVersionNumber) installed — see what's new"
+    private func refreshWhatsNewBanner() {
+        setWhatsNewMessage(model.whatsNewPending
+            ? "Speecher \(model.installedVersionNumber) installed"
             : "")
         whatsNewAutoHide?.invalidate()
-        guard !state.whatsNewChip.isEmpty else { return }
+        guard !state.whatsNewMessage.isEmpty else { return }
         whatsNewAutoHide = Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async { self?.setWhatsNewChip("") }
+            DispatchQueue.main.async { self?.setWhatsNewMessage("") }
         }
     }
 
-    private func setWhatsNewChip(_ text: String) {
-        state.whatsNewChip = text
+    private func setWhatsNewMessage(_ message: String) {
+        state.whatsNewMessage = message
         syncFrameHeight()
     }
 
-    /// The window grows upward to make room for the chips: its origin is the
+    /// The window grows upward to make room for the banners: its origin is the
     /// bottom-left corner, which position() pins above the screen edge.
     private func syncFrameHeight() {
-        let chips = (state.updateChip.isEmpty ? 0 : 1) + (state.whatsNewChip.isEmpty ? 0 : 1)
-        let height = pillHeight + CGFloat(chips) * (chipHeight + chipSpacing)
+        let banners = (state.updateMessage.isEmpty ? 0 : 1)
+            + (state.whatsNewMessage.isEmpty ? 0 : 1)
+        let height = pillHeight + CGFloat(banners) * (bannerHeight + bannerSpacing)
         guard abs(panel.frame.height - height) >= 1 else { return }
         var frame = panel.frame
         frame.size.height = height
