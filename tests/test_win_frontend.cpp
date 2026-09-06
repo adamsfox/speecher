@@ -80,6 +80,11 @@ private slots:
         const auto available = chip(State::UpdateAvailable, DictationState::Listening);
         QCOMPARE(available.text, QStringLiteral("Speecher 0.2.0 available — install and restart"));
         QVERIFY(available.visible && available.enabled);
+        QCOMPARE(win::updateChipState(State::UpdateAvailable,
+                                      QStringLiteral("0.2.0-nightly.20260906"), 0, {}, false,
+                                      DictationState::Idle)
+                     .text,
+                 QStringLiteral("Speecher 0.2.0 available — install and restart"));
         const auto downloading = chip(State::Downloading);
         QCOMPARE(downloading.text, QStringLiteral("Downloading 42%"));
         QVERIFY(downloading.visible && !downloading.enabled);

@@ -82,7 +82,10 @@ win::UpdateChipState win::updateChipState(UpdateController::State state, const Q
     using State = UpdateController::State;
     switch (state) {
     case State::UpdateAvailable:
-        return {QStringLiteral("Speecher %1 available — install and restart").arg(version), true, true};
+        // The chip carries the base version; a nightly's -suffix is noise here.
+        return {QStringLiteral("Speecher %1 available — install and restart")
+                    .arg(version.section(QLatin1Char('-'), 0, 0)),
+                true, true};
     case State::Downloading:
         return {QStringLiteral("Downloading %1%").arg(percent), true, false};
     case State::ReadyToRestart:
@@ -225,13 +228,28 @@ struct DictationPanel::Native : QObject {
         root = StackPanel();
         root.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
         root.Spacing(4);
+        // The chips must read as buttons, not banners: system accent look on
+        // anything clickable, a capsule corner radius (half the ~32px chip
+        // height), and room around the label. Radius and padding are local
+        // values, so they survive the per-state style swap in refresh().
+        accentStyle = Application::Current().Resources()
+                          .Lookup(box_value(hstring(L"AccentButtonStyle")))
+                          .as<Microsoft::UI::Xaml::Style>();
+        const CornerRadius capsule{16, 16, 16, 16};
+        const Thickness chipPadding{14, 6, 14, 6};
         whatsNewRow = StackPanel();
         whatsNewRow.Orientation(Orientation::Horizontal);
         whatsNewRow.HorizontalAlignment(HorizontalAlignment::Center);
+        whatsNewRow.Spacing(6);
         whatsNewChip = Button();
+        whatsNewChip.Style(accentStyle);
+        whatsNewChip.CornerRadius(capsule);
+        whatsNewChip.Padding(chipPadding);
         whatsNewChip.Click([this](const auto &, const auto &) { emit panel->whatsNewRequested(); });
         whatsNewRow.Children().Append(whatsNewChip);
         Button whatsNewDismiss;
+        whatsNewDismiss.CornerRadius(capsule);
+        whatsNewDismiss.Padding({10, 6, 10, 6});
         FontIcon closeIcon;
         closeIcon.Glyph(L"\uE711");
         closeIcon.FontSize(12);
@@ -245,6 +263,8 @@ struct DictationPanel::Native : QObject {
         root.Children().Append(whatsNewRow);
         updateChip = Button();
         updateChip.HorizontalAlignment(HorizontalAlignment::Center);
+        updateChip.CornerRadius(capsule);
+        updateChip.Padding(chipPadding);
         updateText = TextBlock();
         updateText.TextWrapping(TextWrapping::Wrap);
         updateChip.Content(updateText);
@@ -532,6 +552,13 @@ struct DictationPanel::Native : QObject {
         updateText.Text(hstring(chip.text.toStdWString()));
         updateChip.Visibility(chip.visible ? Visibility::Visible : Visibility::Collapsed);
         updateChip.IsEnabled(chip.enabled);
+        // Clickable states wear the accent look; passive progress states drop
+        // back to the default button fill so they read as status, not action.
+        if (chip.enabled) {
+            updateChip.Style(accentStyle);
+        } else {
+            updateChip.ClearValue(FrameworkElement::StyleProperty());
+        }
         updateChip.MaxWidth(maximumWidth);
         const bool showWhatsNew = !whatsNewHidden && !controller->pendingWhatsNewVersion().isEmpty();
         whatsNewChip.Content(box_value(hstring(
@@ -604,6 +631,7 @@ struct DictationPanel::Native : QObject {
     Border chrome{nullptr};
     Button updateChip{nullptr};
     TextBlock updateText{nullptr};
+    Microsoft::UI::Xaml::Style accentStyle{nullptr};
     StackPanel whatsNewRow{nullptr};
     Button whatsNewChip{nullptr};
     QTimer whatsNewAutoHide;
