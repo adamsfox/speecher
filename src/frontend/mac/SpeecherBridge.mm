@@ -1005,6 +1005,16 @@ Qt::KeyboardModifiers qtModifiersForFlags(NSUInteger flags)
     return error.isEmpty() ? @"That shortcut could not be bound." : error.toNSString();
 }
 
+- (void)beginShortcutRecording
+{
+    _state->controller->suspendGlobalShortcut();
+}
+
+- (void)endShortcutRecording
+{
+    _state->controller->resumeGlobalShortcut();
+}
+
 - (void)dealloc
 {
     delete _state;

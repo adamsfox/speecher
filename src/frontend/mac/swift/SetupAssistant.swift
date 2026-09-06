@@ -652,7 +652,7 @@ private struct ReadyStep: View {
                 Toggle("Set up a dictation shortcut", isOn: $flow.createShortcut)
                 LabeledContent("Dictation shortcut") {
                     Button(caption) {
-                        recorder.record { characters, flags in
+                        recorder.record(suspending: flow.model) { characters, flags in
                             flow.recordShortcut(characters: characters, flags: flags)
                         }
                     }

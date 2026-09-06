@@ -10,6 +10,7 @@
 #include "ui/TranscriberPopup.h"
 
 #import <AppKit/AppKit.h>
+#import <Carbon/Carbon.h>
 
 // The Swift class's Objective-C runtime name is mangled, so a hand-written
 // @interface cannot stand in for the generated header.
@@ -48,6 +49,25 @@ SettingsRowModel *settingsRow(SettingsSchemaModel *schema, NSString *rowId)
         }
     }
     return nil;
+}
+
+// Whether ⌃⌥⇧F9 is unregistered system-wide right now: Carbon's exclusive
+// option refuses the registration while anyone — including this process's own
+// shortcut binder — holds the combination.
+bool hotKeyComboIsFree()
+{
+    const EventHotKeyID identifier{'spct', 99};
+    EventHotKeyRef probe = nullptr;
+    const OSStatus status = RegisterEventHotKey(kVK_F9,
+                                                controlKey | optionKey | shiftKey,
+                                                identifier,
+                                                GetApplicationEventTarget(),
+                                                kEventHotKeyExclusive,
+                                                &probe);
+    if (status == noErr && probe) {
+        UnregisterEventHotKey(probe);
+    }
+    return status == noErr;
 }
 
 } // namespace
@@ -276,6 +296,50 @@ private slots:
                  QStringLiteral("Signed in with Claude Code"));
         [bridge.settingsSchema setValue:@"cliproxy" forRowId:@"anthropicAuthMode"];
         QCOMPARE(bridge.anthropicCredentialStatus.length, NSUInteger(0));
+    }
+
+    // A Carbon hotkey is consumed system-wide and never reaches a recorder's
+    // key monitor: recording must let go of the registration and take it back
+    // when recording ends, or pressing the bound combination while recording
+    // starts dictation instead of re-recording it.
+    void shortcutRecordingSuspendsAndRestoresTheHotKey()
+    {
+        ApplicationController controller(false);
+        SpeecherBridge *bridge = [[SpeecherBridge alloc] initWithController:&controller];
+        // An obscure combination, so nothing else on a CI host holds it.
+        QVERIFY(controller.setGlobalShortcut(
+            QKeySequence(Qt::META | Qt::ALT | Qt::SHIFT | Qt::Key_F9)));
+        QVERIFY(!hotKeyComboIsFree());
+
+        [bridge beginShortcutRecording];
+        QVERIFY(hotKeyComboIsFree());
+        // Deferred startup must not restore a shortcut while it is recorded.
+        controller.frontEndReady();
+        QCoreApplication::processEvents();
+        QVERIFY(hotKeyComboIsFree());
+
+        [bridge endShortcutRecording];
+        QVERIFY(!hotKeyComboIsFree());
+    }
+
+    // Ending a recording that bound a replacement keeps the replacement rather
+    // than restoring the suspended combination over it.
+    void endingARecordingKeepsAShortcutBoundDuringIt()
+    {
+        ApplicationController controller(false);
+        SpeecherBridge *bridge = [[SpeecherBridge alloc] initWithController:&controller];
+        QVERIFY(controller.setGlobalShortcut(
+            QKeySequence(Qt::META | Qt::ALT | Qt::SHIFT | Qt::Key_F9)));
+
+        [bridge beginShortcutRecording];
+        QVERIFY([bridge bindShortcutWithCharacters:@"g"
+                                     modifierFlags:NSEventModifierFlagControl
+                                                   | NSEventModifierFlagOption] == nil);
+        [bridge endShortcutRecording];
+
+        QCOMPARE(controller.globalShortcut(),
+                 QKeySequence(Qt::META | Qt::ALT | Qt::Key_G));
+        QVERIFY(hotKeyComboIsFree());
     }
 
     void whatsNewOfferFollowsPendingUpgradeState()

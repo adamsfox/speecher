@@ -20,12 +20,17 @@ public:
     void bind() override;
     QKeySequence shortcut() const override;
     bool setShortcut(const QKeySequence &shortcut, QString *error = nullptr) override;
+    void suspend() override;
+    void resume() override;
 
 private:
     bool registerHotKey(const QKeySequence &shortcut, QString *error);
     void unregisterHotKey();
 
     QKeySequence m_shortcut;
+    // Whether suspend() dropped a live registration resume() must restore.
+    bool m_suspended = false;
+    bool m_resumeBinding = false;
     // EventHotKeyRef, EventHandlerRef and EventHandlerUPP, kept opaque so this
     // header stays plain C++ for moc.
     void *m_hotKey = nullptr;

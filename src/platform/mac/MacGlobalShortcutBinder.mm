@@ -181,6 +181,10 @@ QString MacGlobalShortcutBinder::unsupportedReason() const
 
 void MacGlobalShortcutBinder::bind()
 {
+    if (m_suspended) {
+        m_resumeBinding = true;
+        return;
+    }
     QString error;
     if (!registerHotKey(m_shortcut, &error)) {
         qWarning().noquote() << "Could not register the global shortcut:" << error;
@@ -200,6 +204,28 @@ bool MacGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString 
     m_shortcut = shortcut;
     storeShortcut(shortcut);
     return true;
+}
+
+// A Carbon hotkey is consumed system-wide and never arrives as an app key
+// event, so recording it (or any replacement) needs the registration gone.
+void MacGlobalShortcutBinder::suspend()
+{
+    if (m_suspended) return;
+    m_suspended = true;
+    m_resumeBinding = m_hotKey != nullptr;
+    unregisterHotKey();
+}
+
+void MacGlobalShortcutBinder::resume()
+{
+    if (!m_suspended) {
+        return;
+    }
+    m_suspended = false;
+    if (m_resumeBinding) {
+        m_resumeBinding = false;
+        bind();
+    }
 }
 
 void MacGlobalShortcutBinder::unregisterHotKey()
