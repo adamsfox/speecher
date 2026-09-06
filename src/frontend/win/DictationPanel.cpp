@@ -36,31 +36,14 @@ using namespace Microsoft::UI::Xaml::Controls;
 using namespace Microsoft::UI::Xaml::Hosting;
 using namespace Microsoft::UI::Xaml::Media;
 
+// The panel's layout constants are DIPs, as the XAML content measures them;
+// every HWND move and resize scales them by the window's DPI.
 constexpr int minimumWidth = 300;
 constexpr int panelHeight = 52;
 constexpr int previewChromeWidth = 190;
 constexpr int screenEdgeMargin = 80;
 constexpr int bottomMargin = 28;
 constexpr auto windowClassName = L"SpeecherDictationPanel";
-
-LRESULT CALLBACK panelWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    if (message == WM_DISPLAYCHANGE) {
-        RECT rect{};
-        POINT pointer{};
-        GetWindowRect(window, &rect);
-        GetCursorPos(&pointer);
-        MONITORINFO monitor{sizeof(monitor)};
-        GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
-        const int width = rect.right - rect.left;
-        SetWindowPos(window, HWND_TOPMOST,
-                     monitor.rcWork.left
-                         + (monitor.rcWork.right - monitor.rcWork.left - width) / 2,
-                     monitor.rcWork.bottom - (rect.bottom - rect.top) - bottomMargin,
-                     0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
-    }
-    return DefWindowProcW(window, message, wParam, lParam);
-}
 
 QString phaseGlyph(const QString &status, bool problem)
 {
@@ -139,7 +122,7 @@ struct DictationPanel::Native : QObject {
             return;
         }
         WNDCLASSW windowClass{};
-        windowClass.lpfnWndProc = panelWindowProc;
+        windowClass.lpfnWndProc = windowProc;
         windowClass.hInstance = GetModuleHandleW(nullptr);
         windowClass.lpszClassName = windowClassName;
         RegisterClassW(&windowClass);
@@ -148,6 +131,7 @@ struct DictationPanel::Native : QObject {
             windowClassName, L"Speecher dictation", WS_POPUP,
             0, 0, minimumWidth, panelHeight, nullptr, nullptr,
             windowClass.hInstance, nullptr);
+        SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
         const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
         DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -156,7 +140,7 @@ struct DictationPanel::Native : QObject {
         source = DesktopWindowXamlSource();
         source.Initialize(Microsoft::UI::GetWindowIdFromWindow(window));
 
-        Border chrome;
+        chrome = Border();
         chrome.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
         chrome.Padding({20, 0, 20, 0});
         row = StackPanel();
@@ -223,6 +207,7 @@ struct DictationPanel::Native : QObject {
         completed = false;
         pendingGeneration = generation;
         ensureWindow();
+        applyTheme();
         refresh();
         reposition();
         ShowWindow(window, SW_SHOWNOACTIVATE);
@@ -240,6 +225,7 @@ struct DictationPanel::Native : QObject {
         problem = message;
         pendingGeneration = 0;
         ensureWindow();
+        applyTheme();
         refresh();
         reposition();
         ShowWindow(window, SW_SHOWNOACTIVATE);
@@ -249,6 +235,15 @@ struct DictationPanel::Native : QObject {
     {
         if (window) {
             ShowWindow(window, SW_HIDE);
+        }
+    }
+
+    // The window and its XAML tree outlive a theme change in Settings; the
+    // captured RequestedTheme has to follow it on the next showing.
+    void applyTheme()
+    {
+        if (chrome) {
+            chrome.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
         }
     }
 
@@ -309,7 +304,8 @@ struct DictationPanel::Native : QObject {
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
         const int maximumWidth = std::max(
-            minimumWidth, int(monitor.rcWork.right - monitor.rcWork.left) - screenEdgeMargin);
+            minimumWidth,
+            int((monitor.rcWork.right - monitor.rcWork.left) / scale()) - screenEdgeMargin);
         const int wantedWidth = std::clamp(
             minimumWidth + std::max(0, int(shown.size()) - 32) * 7,
             minimumWidth, maximumWidth);
@@ -339,11 +335,21 @@ struct DictationPanel::Native : QObject {
         }
     }
 
+    double scale() const
+    {
+        return window ? GetDpiForWindow(window) / 96.0 : 1.0;
+    }
+
+    int px(int dip) const
+    {
+        return int(dip * scale() + 0.5);
+    }
+
     void resize(int newWidth)
     {
         width = newWidth;
         if (source) {
-            source.SiteBridge().MoveAndResize({0, 0, width, panelHeight});
+            source.SiteBridge().MoveAndResize({0, 0, px(width), px(panelHeight)});
         }
     }
 
@@ -356,10 +362,12 @@ struct DictationPanel::Native : QObject {
         GetCursorPos(&pointer);
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
+        const int physicalWidth = px(width);
+        const int physicalHeight = px(panelHeight);
         const int x = monitor.rcWork.left
-            + (monitor.rcWork.right - monitor.rcWork.left - width) / 2;
-        const int y = monitor.rcWork.bottom - panelHeight - bottomMargin;
-        SetWindowPos(window, HWND_TOPMOST, x, y, width, panelHeight,
+            + (monitor.rcWork.right - monitor.rcWork.left - physicalWidth) / 2;
+        const int y = monitor.rcWork.bottom - physicalHeight - px(bottomMargin);
+        SetWindowPos(window, HWND_TOPMOST, x, y, physicalWidth, physicalHeight,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
@@ -367,6 +375,7 @@ struct DictationPanel::Native : QObject {
     DictationPanel *panel;
     HWND window = nullptr;
     DesktopWindowXamlSource source{nullptr};
+    Border chrome{nullptr};
     FontIcon glyph{nullptr};
     TextBlock text{nullptr};
     ProgressBar level{nullptr};
@@ -383,7 +392,39 @@ struct DictationPanel::Native : QObject {
     bool completed = false;
     bool refining = false;
     bool loaded = false;
+
+    static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 };
+
+LRESULT CALLBACK DictationPanel::Native::windowProc(HWND window,
+                                                    UINT message,
+                                                    WPARAM wParam,
+                                                    LPARAM lParam)
+{
+    if (message == WM_DISPLAYCHANGE) {
+        RECT rect{};
+        POINT pointer{};
+        GetWindowRect(window, &rect);
+        GetCursorPos(&pointer);
+        MONITORINFO monitor{sizeof(monitor)};
+        GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
+        const int width = rect.right - rect.left;
+        SetWindowPos(window, HWND_TOPMOST,
+                     monitor.rcWork.left
+                         + (monitor.rcWork.right - monitor.rcWork.left - width) / 2,
+                     monitor.rcWork.bottom - (rect.bottom - rect.top) - bottomMargin,
+                     0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+    if (message == WM_DPICHANGED) {
+        // Re-derive the physical size and the island's bounds at the new DPI.
+        auto *native = reinterpret_cast<Native *>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (native) {
+            native->refresh();
+            return 0;
+        }
+    }
+    return DefWindowProcW(window, message, wParam, lParam);
+}
 
 DictationPanel::DictationPanel(ApplicationController *controller, QObject *parent)
     : QObject(parent)

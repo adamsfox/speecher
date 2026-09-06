@@ -119,11 +119,16 @@ UIElement credentialField(PaneHost &host)
         ++host.apiKeyEdits;
     });
     const auto save = [&host] {
-        if (!host.apiKeyLoaded && host.apiKeyEdits == 0) {
+        // Nothing typed means nothing to write: saving the keyring's own value
+        // back would rewrite the credential on every focus loss.
+        if (host.apiKeyEdits == 0) {
             return;
         }
-        host.credentialProblem = host.model->saveApiKey(host.apiKey);
-        if (!host.credentialProblem.isEmpty()) {
+        const QString problem = host.model->saveApiKey(host.apiKey);
+        const bool changed = problem != host.credentialProblem;
+        host.credentialProblem = problem;
+        // Success after a shown error must also refresh, to clear the line.
+        if (changed) {
             host.refresh();
         }
     };

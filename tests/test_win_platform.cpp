@@ -65,6 +65,9 @@ private slots:
             QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_D),
             QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space),
             QKeySequence(Qt::ALT | Qt::Key_F5),
+            // Punctuation maps through the active layout; comma sits on
+            // VK_OEM_COMMA on effectively every layout.
+            QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_Comma),
         };
         for (const QKeySequence &shortcut : shortcuts) {
             QString error;
@@ -74,6 +77,30 @@ private slots:
                          hotKey->modifiers, hotKey->virtualKey),
                      shortcut);
         }
+    }
+
+    void suspendReleasesHotkeyUntilLastResume()
+    {
+        WinGlobalShortcutBinder shortcut;
+        QString error;
+        QVERIFY2(shortcut.setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_D), &error),
+                 qPrintable(error));
+        QVERIFY(shortcut.m_hotKeyId != 0);
+
+        shortcut.suspend();
+        shortcut.suspend();
+        QCOMPARE(shortcut.m_hotKeyId, 0);
+
+        // A rebind while suspended validates but leaves the keys available.
+        QVERIFY2(shortcut.setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_E), &error),
+                 qPrintable(error));
+        QCOMPARE(shortcut.m_hotKeyId, 0);
+
+        QCOMPARE(shortcut.resume(), QString());
+        QCOMPARE(shortcut.m_hotKeyId, 0);
+        QCOMPARE(shortcut.resume(), QString());
+        QVERIFY(shortcut.m_hotKeyId != 0);
+        QCOMPARE(shortcut.shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_E));
     }
 
     void keyboardBreakReleasesPressedShortcut()

@@ -5,6 +5,7 @@
 #include "core/SettingsStore.h"
 #include "frontend/win/SettingsModel.h"
 #include "frontend/win/SettingsPage.h"
+#include "frontend/win/ShortcutRecorder.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -178,7 +179,12 @@ struct SettingsWindow::Native {
 
     ~Native()
     {
+        // The Closed token is revoked before Close(), so windowClosed() never
+        // runs on this path; quitting with the window open must still save its
+        // geometry and give a suspended hotkey back.
         if (window) {
+            saveGeometry();
+            ShortcutRecorder::setRecording(host, false);
             window.Closed(closedToken);
             window.Close();
         }
@@ -337,7 +343,7 @@ struct SettingsWindow::Native {
         saveGeometry();
         // The editors hold XAML trees of the window that is going away.
         host.editors.clear();
-        host.shortcutRecording = false;
+        ShortcutRecorder::setRecording(host, false);
         window = nullptr;
         root = nullptr;
         titleBar = nullptr;
@@ -355,11 +361,21 @@ struct SettingsWindow::Native {
                                       .split(QLatin1Char(','));
         auto appWindow = window.AppWindow();
         if (parts.size() == 4) {
-            appWindow.MoveAndResize({parts.at(0).toInt(), parts.at(1).toInt(),
-                                     parts.at(2).toInt(), parts.at(3).toInt()});
-            return;
+            const RECT saved{parts.at(0).toInt(), parts.at(1).toInt(),
+                             parts.at(0).toInt() + parts.at(2).toInt(),
+                             parts.at(1).toInt() + parts.at(3).toInt()};
+            // A monitor unplugged since the save can leave the saved physical
+            // coordinates on no display at all.
+            if (parts.at(2).toInt() > 0 && parts.at(3).toInt() > 0
+                && MonitorFromRect(&saved, MONITOR_DEFAULTTONULL)) {
+                appWindow.MoveAndResize({parts.at(0).toInt(), parts.at(1).toInt(),
+                                         parts.at(2).toInt(), parts.at(3).toInt()});
+                return;
+            }
         }
-        appWindow.Resize({1100, 760});
+        // AppWindow sizes are physical pixels; 1100×760 is meant in DIPs.
+        const double scale = GetDpiForWindow(windowHandle()) / 96.0;
+        appWindow.Resize({int(1100 * scale), int(760 * scale)});
     }
 
     void saveGeometry()
@@ -441,6 +457,11 @@ struct SettingsWindow::Native {
 
     void selectPane(const QString &id)
     {
+        // Leaving the shortcut pane ends a recording; the suspended hotkey
+        // must come back and the pane's key handler is going away.
+        if (id != kShortcutPane) {
+            ShortcutRecorder::setRecording(host, false);
+        }
         currentPane = id;
         controller->settings()->raw().setValue(kPaneSetting, id);
         if (titleBar) {
