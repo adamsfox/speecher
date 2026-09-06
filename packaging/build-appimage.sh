@@ -114,6 +114,11 @@ CMAKE_CONFIGURE_ARGS=(
 if [[ -n "$QT_PREFIX_HINT" ]]; then
   CMAKE_CONFIGURE_ARGS+=("-DCMAKE_PREFIX_PATH=$QT_PREFIX_HINT")
 fi
+# The update end-to-end run builds AppImages with the E2E hooks compiled in.
+if [[ -n "${SPEECHER_APPIMAGE_CMAKE_EXTRA:-}" ]]; then
+  # shellcheck disable=SC2206
+  CMAKE_CONFIGURE_ARGS+=($SPEECHER_APPIMAGE_CMAKE_EXTRA)
+fi
 echo "Configuring AppImage build in $BUILD_DIR"
 cmake -S "$ROOT_DIR" -B "$BUILD_DIR" "${CMAKE_CONFIGURE_ARGS[@]}"
 echo "Compiling speecher"

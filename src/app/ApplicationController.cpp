@@ -558,6 +558,16 @@ void ApplicationController::handleIpcCommand(const QString &command,
     } else if (command == QStringLiteral("showSetup")) {
         showSetup();
         SingleInstanceIpc::writeResponse(socket, response());
+    } else if (command == QStringLiteral("grab")) {
+        // Screenshot seam for end-to-end runs: saves the main window into
+        // SPEECHER_GRAB_DIR, numbered so a flow can grab several states.
+        const QString grabDir = qEnvironmentVariable("SPEECHER_GRAB_DIR");
+        static int grabNumber = 0;
+        const bool saved = !grabDir.isEmpty()
+            && grabMainWindow(QStringLiteral("%1/window-%2.png")
+                                  .arg(grabDir)
+                                  .arg(++grabNumber, 2, 10, QLatin1Char('0')));
+        SingleInstanceIpc::writeResponse(socket, response(saved));
     } else if (command == QStringLiteral("status")) {
         SingleInstanceIpc::writeResponse(socket, response());
     } else if (command == QStringLiteral("quit")) {
