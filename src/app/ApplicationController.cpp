@@ -395,28 +395,23 @@ void ApplicationController::showSetupAssistant(SetupAssistantPage page)
 // session start has to wait for the answer instead of capturing silence.
 void ApplicationController::startWithMicrophone(std::function<void()> start)
 {
-#ifdef Q_OS_MACOS
-    const auto refuse = [this] {
-        if (m_frontEnd) {
+    if (m_microphoneStartPending) {
+        return;
+    }
+    const quint64 generation = ++m_microphoneStartGeneration;
+    m_microphoneStartPending = true;
+    m_platform->requestMicrophoneAccess(this, [this, generation, start = std::move(start)](bool granted) {
+        if (generation != m_microphoneStartGeneration) {
+            return;
+        }
+        m_microphoneStartPending = false;
+        if (granted) {
+            start();
+        } else if (m_frontEnd) {
             m_frontEnd->showDictationError(QStringLiteral(
                 "Microphone access is off. Allow Speecher under Privacy & Security > Microphone, then try again."));
         }
-    };
-    switch (qApp->checkPermission(QMicrophonePermission{})) {
-    case Qt::PermissionStatus::Denied:
-        refuse();
-        return;
-    case Qt::PermissionStatus::Undetermined:
-        qApp->requestPermission(QMicrophonePermission{}, this,
-                                [start = std::move(start), refuse](const QPermission &permission) {
-                                    permission.status() == Qt::PermissionStatus::Granted ? start() : refuse();
-                                });
-        return;
-    case Qt::PermissionStatus::Granted:
-        break;
-    }
-#endif
-    start();
+    });
 }
 
 bool ApplicationController::sessionActive() const
@@ -430,9 +425,8 @@ bool ApplicationController::sessionActive() const
 void ApplicationController::handleShortcutPressed()
 {
     m_shortcutPress.start();
-    const bool wasActive = sessionActive();
+    m_shortcutStartedSession = !sessionActive() && !m_microphoneStartPending;
     toggle();
-    m_shortcutStartedSession = !wasActive && sessionActive();
 }
 
 void ApplicationController::handleShortcutReleased()
@@ -441,13 +435,18 @@ void ApplicationController::handleShortcutReleased()
         return;
     }
     m_shortcutStartedSession = false;
-    if (sessionActive() && m_shortcutPress.elapsed() > pushToTalkHoldMs) {
+    if ((sessionActive() || m_microphoneStartPending)
+        && m_shortcutPress.elapsed() > pushToTalkHoldMs) {
         stopListening();
     }
 }
 
 void ApplicationController::toggle()
 {
+    if (sessionActive() || m_microphoneStartPending) {
+        stopListening();
+        return;
+    }
     if (!ensureSetupCompleted()) {
         return;
     }
@@ -464,6 +463,8 @@ void ApplicationController::startListening()
 
 void ApplicationController::stopListening()
 {
+    ++m_microphoneStartGeneration;
+    m_microphoneStartPending = false;
     m_session->stopListening();
 }
 
@@ -508,9 +509,13 @@ void ApplicationController::handleIpcCommand(const QString &command,
             SingleInstanceIpc::writeResponse(socket, response());
             return;
         }
-        startWithMicrophone([this, hasFormat, format] {
-            hasFormat ? m_session->toggleWithFormat(format) : m_session->toggle();
-        });
+        if (sessionActive() || m_microphoneStartPending) {
+            stopListening();
+        } else {
+            startWithMicrophone([this, hasFormat, format] {
+                hasFormat ? m_session->toggleWithFormat(format) : m_session->toggle();
+            });
+        }
         SingleInstanceIpc::writeResponse(socket, response());
     } else if (command == QStringLiteral("start")) {
         if (!ensureSetupCompleted()) {
