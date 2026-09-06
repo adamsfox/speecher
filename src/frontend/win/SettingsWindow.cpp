@@ -15,6 +15,8 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
+
 #include <windows.h>
 #include <microsoft.ui.xaml.window.h>
 
@@ -355,27 +357,39 @@ struct SettingsWindow::Native {
 
     void restoreGeometry()
     {
-        const QStringList parts = controller->settings()->raw()
-                                      .value(kGeometrySetting)
+        auto appWindow = window.AppWindow();
+        const UINT dpi = GetDpiForWindow(windowHandle());
+        const auto position = appWindow.Position();
+        POINT origin{position.X, position.Y};
+        int width = int(1100 * dpi / 96.0);
+        int height = int(760 * dpi / 96.0);
+        const QStringList parts = controller->settings()->raw().value(kGeometrySetting)
                                       .toString()
                                       .split(QLatin1Char(','));
-        auto appWindow = window.AppWindow();
-        if (parts.size() == 4) {
-            const RECT saved{parts.at(0).toInt(), parts.at(1).toInt(),
-                             parts.at(0).toInt() + parts.at(2).toInt(),
-                             parts.at(1).toInt() + parts.at(3).toInt()};
-            // A monitor unplugged since the save can leave the saved physical
-            // coordinates on no display at all.
-            if (parts.at(2).toInt() > 0 && parts.at(3).toInt() > 0
-                && MonitorFromRect(&saved, MONITOR_DEFAULTTONULL)) {
-                appWindow.MoveAndResize({parts.at(0).toInt(), parts.at(1).toInt(),
-                                         parts.at(2).toInt(), parts.at(3).toInt()});
-                return;
-            }
+        if (parts.size() == 4 && parts.at(2).toInt() > 0 && parts.at(3).toInt() > 0) {
+            origin = {parts.at(0).toInt(), parts.at(1).toInt()};
+            width = parts.at(2).toInt();
+            height = parts.at(3).toInt();
         }
-        // AppWindow sizes are physical pixels; 1100×760 is meant in DIPs.
-        const double scale = GetDpiForWindow(windowHandle()) / 96.0;
-        appWindow.Resize({int(1100 * scale), int(760 * scale)});
+
+        MONITORINFO monitor{sizeof(monitor)};
+        if (!GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTONEAREST), &monitor)) {
+            return;
+        }
+        const RECT area = monitor.rcWork;
+        const int availableWidth = area.right - area.left;
+        const int availableHeight = area.bottom - area.top;
+        // A partial intersection can still leave the titlebar off-screen.
+        // Bound the entire window, including the scaled default on small screens.
+        width = std::clamp(width,
+                           std::min(GetSystemMetricsForDpi(SM_CXMINTRACK, dpi), availableWidth),
+                           availableWidth);
+        height = std::clamp(height,
+                            std::min(GetSystemMetricsForDpi(SM_CYMINTRACK, dpi), availableHeight),
+                            availableHeight);
+        const int x = std::clamp(int(origin.x), int(area.left), int(area.right) - width);
+        const int y = std::clamp(int(origin.y), int(area.top), int(area.bottom) - height);
+        appWindow.MoveAndResize({x, y, width, height});
     }
 
     void saveGeometry()

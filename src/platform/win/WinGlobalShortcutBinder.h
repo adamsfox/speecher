@@ -57,7 +57,7 @@ private:
     QKeySequence m_shortcut;
     HWND m_messageWindow = nullptr;
     int m_hotKeyId = 0;
-    quint32 m_virtualKey = 0;
+    quint32 m_pressedKey = 0;
     bool m_pressed = false;
     // Setup and settings can record concurrently; only the last resume binds.
     int m_suspensionCount = 0;

@@ -267,6 +267,7 @@ bool WinGlobalShortcutBinder::nativeEventFilter(const QByteArray &eventType,
     if (nativeMessage->message == WM_HOTKEY && int(nativeMessage->wParam) == m_hotKeyId) {
         qInfo() << "Global Shortcut pressed";
         m_pressed = true;
+        m_pressedKey = HIWORD(nativeMessage->lParam);
         emit activated();
     }
     return false;
@@ -302,7 +303,6 @@ bool WinGlobalShortcutBinder::registerShortcut(const QKeySequence &shortcut, QSt
 
     unregisterShortcut();
     m_hotKeyId = newId;
-    m_virtualKey = hotKey->virtualKey;
     return true;
 }
 
@@ -312,7 +312,8 @@ void WinGlobalShortcutBinder::unregisterShortcut()
         UnregisterHotKey(nullptr, m_hotKeyId);
         m_hotKeyId = 0;
     }
-    m_pressed = false;
+    // Raw input remains registered so an outstanding press still receives
+    // its release while recording a replacement shortcut.
 }
 
 bool WinGlobalShortcutBinder::ensureMessageWindow(QString *error)
@@ -380,7 +381,7 @@ void WinGlobalShortcutBinder::handleRawInput(const RAWINPUT &input)
 {
     if (input.header.dwType != RIM_TYPEKEYBOARD
         || !(input.data.keyboard.Flags & RI_KEY_BREAK)
-        || input.data.keyboard.VKey != m_virtualKey
+        || input.data.keyboard.VKey != m_pressedKey
         || !m_pressed) {
         return;
     }
