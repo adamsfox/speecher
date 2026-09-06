@@ -4,6 +4,7 @@
 #include "dictation/DictationSession.h"
 
 #include <QDebug>
+#include <QTimer>
 
 #import <Sparkle/Sparkle.h>
 
@@ -141,9 +142,11 @@ bool restartSafe(DictationState state)
 
 - (void)showUserInitiatedUpdateCheckWithCancellation:(void (^)(void))cancellation
 {
-    if (_owner) {
-        _owner->driverCheckStarted();
+    if (!_owner) {
+        return;
     }
+    void (^cancel)(void) = [cancellation copy];
+    _owner->driverCheckStarted([cancel] { cancel(); });
 }
 
 - (void)showUpdateFoundWithAppcastItem:(SUAppcastItem *)appcastItem
@@ -197,9 +200,11 @@ bool restartSafe(DictationState state)
 
 - (void)showDownloadInitiatedWithCancellation:(void (^)(void))cancellation
 {
-    if (_owner) {
-        _owner->driverDownloadStarted();
+    if (!_owner) {
+        return;
     }
+    void (^cancel)(void) = [cancellation copy];
+    _owner->driverDownloadStarted([cancel] { cancel(); });
 }
 
 - (void)showDownloadDidReceiveExpectedContentLength:(uint64_t)expectedContentLength
@@ -283,11 +288,22 @@ MacSparkleUpdater::MacSparkleUpdater(SettingsStore *settings,
                                                     userDriver:m_native->userDriver
                                                       delegate:m_native->delegate];
     m_dismissedVersion = m_settings->updatesDismissedVersion();
+    m_selectedNightly = m_settings->updateChannel() == UpdateChannel::Nightly;
+    m_checkTimer = new QTimer(this);
+    connect(m_checkTimer, &QTimer::timeout, this, &MacSparkleUpdater::beginBackgroundCheck);
+    m_transientTimer = new QTimer(this);
+    m_transientTimer->setSingleShot(true);
+    m_transientTimer->setInterval(6000);
+    connect(m_transientTimer, &QTimer::timeout, this, [this] {
+        if (m_state == State::UpToDate) {
+            setState(State::Idle);
+        }
+    });
     applySettings();
     connect(settings,
             &SettingsStore::updateSettingsChanged,
             this,
-            &MacSparkleUpdater::applySettings);
+            &MacSparkleUpdater::updateSettingsChanged);
     connect(m_session, &DictationSession::stateChanged, this, [this] {
         if (m_state == State::RestartPending && restartSafe(m_session->state())) {
             finishRestart();
@@ -306,6 +322,11 @@ void MacSparkleUpdater::start()
     if (![m_native->updater startUpdater:&error]) {
         qWarning().noquote() << "Sparkle updater failed to start:"
                              << QString::fromNSString(error.localizedDescription);
+    }
+    // We own the schedule: Sparkle 2.9.6 clamps its own interval to an hour, so
+    // the timer honours a shorter "check frequency" the way Linux does.
+    if (m_settings->autoCheckUpdates()) {
+        m_checkTimer->start();
     }
 }
 
@@ -345,8 +366,13 @@ bool MacSparkleUpdater::bannerVisible() const
     if (m_state == State::UpdateAvailable) {
         return m_availableVersion != m_dismissedVersion;
     }
-    return m_state == State::Downloading || m_state == State::ReadyToRestart
-        || m_state == State::RestartPending || m_state == State::Restarting;
+    // Checking/UpToDate/CheckFailed only ever come from a user-initiated check —
+    // Sparkle keeps a scheduled check silent — so a manual "Check now" gets the
+    // same progress/up-to-date/failure feedback the other platforms give.
+    return m_state == State::Checking || m_state == State::UpToDate
+        || m_state == State::CheckFailed || m_state == State::Downloading
+        || m_state == State::ReadyToRestart || m_state == State::RestartPending
+        || m_state == State::Restarting;
 }
 
 // Sparkle keeps a silent scheduled check's failure to itself (the user driver
@@ -363,12 +389,66 @@ bool MacSparkleUpdater::stableReplacementAvailable() const
 
 void MacSparkleUpdater::checkForUpdates(UpdateChannel channel)
 {
+    // The user asked, so this is Sparkle's user-initiated check: it drives the
+    // check callbacks, which is what surfaces progress and the up-to-date or
+    // failure result in the banner.
     const bool nightly = channel == UpdateChannel::Nightly;
     const bool stableReplacement = !nightly
         && currentVersion().contains(QStringLiteral("-nightly"));
     m_nightlyChannel = nightly;
     [m_native->delegate setNightly:nightly allowStableReplacement:stableReplacement];
     [m_native->updater checkForUpdates];
+}
+
+void MacSparkleUpdater::beginBackgroundCheck()
+{
+    if (!m_settings->autoCheckUpdates() || sessionActive()) {
+        return;
+    }
+    const bool nightly = m_settings->updateChannel() == UpdateChannel::Nightly;
+    m_nightlyChannel = nightly;
+    // A scheduled check never offers the one-off stable-for-nightly swap; that
+    // stays a manual choice, exactly as ManifestUpdater's automatic check. A
+    // background check is silent unless it finds an update.
+    [m_native->delegate setNightly:nightly allowStableReplacement:NO];
+    [m_native->updater checkForUpdatesInBackground];
+}
+
+bool MacSparkleUpdater::sessionActive() const
+{
+    switch (m_state) {
+    case State::Checking:
+    case State::UpdateAvailable:
+    case State::Downloading:
+    case State::ReadyToRestart:
+    case State::RestartPending:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void MacSparkleUpdater::cancelActiveSession()
+{
+    m_restartWhenReady = false;
+    // Answer whichever stage Sparkle is waiting on: a reply of Dismiss ends an
+    // offer or a ready-to-install prompt, and the stored cancellation block
+    // aborts an in-flight check or download. Sparkle then tears the session
+    // down through dismissUpdateInstallation.
+    if (m_updateReply) {
+        std::exchange(m_updateReply, nullptr)(Reply::Dismiss);
+    } else if (m_installReply) {
+        std::exchange(m_installReply, nullptr)(Reply::Dismiss);
+    } else if (m_cancelDownload) {
+        std::exchange(m_cancelDownload, nullptr)();
+    } else if (m_cancelCheck) {
+        std::exchange(m_cancelCheck, nullptr)();
+    }
+    m_cancelCheck = nullptr;
+    m_cancelDownload = nullptr;
+    m_availableVersion.clear();
+    m_downloadPercent = 0;
+    setState(State::Idle);
 }
 
 void MacSparkleUpdater::updateNow()
@@ -427,7 +507,10 @@ void MacSparkleUpdater::finishRestart()
 
 void MacSparkleUpdater::dismissAvailableVersion()
 {
-    if (m_state == State::Error) {
+    // The manual-check feedback states clear straight to Idle: their Dismiss
+    // button acknowledges a failure or an up-to-date result.
+    if (m_state == State::Error || m_state == State::CheckFailed
+        || m_state == State::UpToDate) {
         setState(State::Idle);
         return;
     }
@@ -443,13 +526,23 @@ void MacSparkleUpdater::dismissAvailableVersion()
     }
 }
 
-void MacSparkleUpdater::driverCheckStarted()
+void MacSparkleUpdater::driverCheckStarted(std::function<void()> cancel)
 {
+    m_cancelCheck = std::move(cancel);
     setState(State::Checking);
 }
 
 void MacSparkleUpdater::driverUpdateFound(const QString &version, ReplyHandler reply)
 {
+    m_cancelCheck = nullptr;
+    // A version the user already dismissed must not hold Sparkle open: an
+    // un-answered reply leaves the session active, and then no later check —
+    // scheduled or manual — can start, so dismissing once would block every
+    // future update. Answer Dismiss and stay quiet; scheduling resumes.
+    if (!version.isEmpty() && version == m_dismissedVersion) {
+        reply(Reply::Dismiss);
+        return;
+    }
     m_availableVersion = version;
     m_updateReply = std::move(reply);
     setState(State::UpdateAvailable);
@@ -457,12 +550,17 @@ void MacSparkleUpdater::driverUpdateFound(const QString &version, ReplyHandler r
 
 void MacSparkleUpdater::driverUpToDate()
 {
+    m_cancelCheck = nullptr;
     m_availableVersion.clear();
     setState(State::UpToDate);
+    // Transient: the manual check said so, and the banner clears itself.
+    m_transientTimer->start();
 }
 
-void MacSparkleUpdater::driverDownloadStarted()
+void MacSparkleUpdater::driverDownloadStarted(std::function<void()> cancel)
 {
+    m_cancelCheck = nullptr;
+    m_cancelDownload = std::move(cancel);
     m_downloadTotal = 0;
     m_downloadReceived = 0;
     m_downloadPercent = 0;
@@ -489,6 +587,7 @@ void MacSparkleUpdater::driverDownloadReceived(qint64 bytes)
 
 void MacSparkleUpdater::driverReadyToRestart(ReplyHandler install)
 {
+    m_cancelDownload = nullptr;
     m_installReply = std::move(install);
     m_downloadPercent = 100;
     setState(State::ReadyToRestart);
@@ -507,6 +606,8 @@ void MacSparkleUpdater::driverFailed(const QString &message)
 {
     m_updateReply = nullptr;
     m_installReply = nullptr;
+    m_cancelCheck = nullptr;
+    m_cancelDownload = nullptr;
     setState(m_state == State::Checking ? State::CheckFailed : State::Error, message);
 }
 
@@ -517,6 +618,8 @@ void MacSparkleUpdater::driverSessionEnded()
     // and the restart that explains why the app is about to exit.
     m_updateReply = nullptr;
     m_installReply = nullptr;
+    m_cancelCheck = nullptr;
+    m_cancelDownload = nullptr;
     switch (m_state) {
     case State::Idle:
     case State::CheckFailed:
@@ -542,9 +645,35 @@ void MacSparkleUpdater::applySettings()
     m_nightlyChannel = m_settings->updateChannel() == UpdateChannel::Nightly;
     [m_native->delegate setNightly:m_nightlyChannel allowStableReplacement:NO];
     SPUUpdater *updater = m_native->updater;
-    updater.automaticallyChecksForUpdates = m_settings->autoCheckUpdates();
+    // The schedule is ours (Sparkle clamps its own to an hour); Sparkle keeps
+    // the download and install mechanics. Its own scheduler stays off so the
+    // two do not both fire.
+    updater.automaticallyChecksForUpdates = NO;
     updater.automaticallyDownloadsUpdates = m_settings->autoInstallUpdates();
-    updater.updateCheckInterval = m_settings->updateCheckIntervalMinutes() * 60;
+    m_checkTimer->setInterval(m_settings->updateCheckIntervalMinutes() * 60 * 1000);
+    if (m_settings->autoCheckUpdates()) {
+        if (!m_checkTimer->isActive()) {
+            m_checkTimer->start();
+        }
+    } else {
+        m_checkTimer->stop();
+    }
+}
+
+void MacSparkleUpdater::updateSettingsChanged()
+{
+    applySettings();
+    const bool nightly = m_settings->updateChannel() == UpdateChannel::Nightly;
+    if (nightly == m_selectedNightly) {
+        return;
+    }
+    m_selectedNightly = nightly;
+    // A real channel switch abandons whatever the old channel had in flight, so
+    // a one-click download cannot go on to install and restart into the channel
+    // the user just left.
+    if (sessionActive()) {
+        cancelActiveSession();
+    }
 }
 
 void MacSparkleUpdater::setState(State state, const QString &error)

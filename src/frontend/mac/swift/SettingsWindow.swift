@@ -34,16 +34,10 @@ struct RootView: View {
                     UpdateBanner(model: model)
                         .scenePadding([.top, .horizontal])
                 } else if model.whatsNewPending {
-                    GroupBox {
-                        HStack {
-                            Label("Speecher \(model.installedVersionNumber) is installed",
-                                  systemImage: "sparkles")
-                            Spacer()
-                            Button("See what's new") { model.showWhatsNew() }
-                            Button("Dismiss") { model.dismissWhatsNew() }
-                        }
-                    }
-                    .scenePadding([.top, .horizontal])
+                    WhatsNewStrip(installedNumber: model.installedVersionNumber,
+                                  seeWhatsNew: { model.showWhatsNew() },
+                                  dismiss: { model.dismissWhatsNew() })
+                        .scenePadding([.top, .horizontal])
                 }
                 Text(pane.title)
                     .font(.title2.weight(.semibold))
@@ -58,59 +52,121 @@ struct RootView: View {
     }
 }
 
-/// The update banner over the detail column, mirroring the Linux settings
-/// banner state for state: offer, download progress, restart, and error.
+/// The update banner over the detail column, bound to the live model. The
+/// state-driven content is a separate value view so an offscreen renderer can
+/// seed each state directly.
 struct UpdateBanner: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        GroupBox {
-            HStack {
-                Label(text, systemImage: model.update.state == .error
-                    ? "exclamationmark.triangle.fill"
-                    : "arrow.down.circle")
-                Spacer()
-                if model.update.state == .downloading {
-                    ProgressView(value: Double(model.update.percent), total: 100)
-                        .frame(width: 120)
-                }
-                switch model.update.state {
-                case .updateAvailable:
-                    Button("Install and restart") { model.installUpdateAndRestart() }
-                    Button("Dismiss") { model.dismissUpdate() }
-                case .readyToRestart:
-                    Button("Restart now") { model.updateNow() }
-                    Button("Later") { model.updateBannerDeferred = true }
-                case .error:
-                    Button("Try again") { model.updateNow() }
-                    Button("Dismiss") { model.dismissUpdate() }
-                default:
-                    // Downloading, restart pending and restarting carry no
-                    // actions: the sentence is the whole message.
-                    EmptyView()
-                }
+        UpdateBannerContent(update: model.update,
+                            install: { model.installUpdateAndRestart() },
+                            restart: { model.updateNow() },
+                            later: { model.updateBannerDeferred = true },
+                            retry: { model.updateNow() },
+                            dismiss: { model.dismissUpdate() })
+    }
+}
+
+/// The banner's look for one update state, mirroring the Linux settings banner:
+/// offer, download progress, restart, and error. Value-driven, so the actions
+/// default to nothing and a renderer can show a state without a model.
+struct UpdateBannerContent: View {
+    let update: AppModel.UpdateStatus
+    var install: () -> Void = {}
+    var restart: () -> Void = {}
+    var later: () -> Void = {}
+    var retry: () -> Void = {}
+    var dismiss: () -> Void = {}
+
+    var body: some View {
+        GroupBox { row }
+    }
+
+    /// The banner's row, kept separate from its GroupBox so the offscreen
+    /// preview renderer can place it on a card ImageRenderer can rasterise.
+    @ViewBuilder var row: some View {
+        HStack {
+            Label(text, systemImage: icon)
+            Spacer()
+            if update.state == .downloading {
+                ProgressView(value: Double(update.percent), total: 100)
+                    .frame(width: 120)
+            } else if update.state == .checking {
+                ProgressView().controlSize(.small)
+            }
+            switch update.state {
+            case .updateAvailable:
+                Button("Install and restart", action: install)
+                Button("Dismiss", action: dismiss)
+            case .readyToRestart:
+                Button("Restart now", action: restart)
+                Button("Later", action: later)
+            case .error, .checkFailed:
+                Button("Try again", action: retry)
+                Button("Dismiss", action: dismiss)
+            case .upToDate:
+                Button("Dismiss", action: dismiss)
+            default:
+                // Checking, downloading, restart pending and restarting carry
+                // no actions: the sentence is the whole message.
+                EmptyView()
             }
         }
     }
 
+    private var icon: String {
+        switch update.state {
+        case .error, .checkFailed: return "exclamationmark.triangle.fill"
+        case .upToDate: return "checkmark.circle"
+        case .checking: return "arrow.triangle.2.circlepath"
+        default: return "arrow.down.circle"
+        }
+    }
+
     private var text: String {
-        switch model.update.state {
+        switch update.state {
+        case .checking:
+            return "Checking for updates…"
+        case .upToDate:
+            return "Speecher is up to date"
         case .updateAvailable:
-            return model.update.stableReplacement
-                ? "Switch to Stable Release \(model.update.version) (replaces this Nightly Build)"
-                : "Speecher \(model.update.version) is available"
+            return update.stableReplacement
+                ? "Switch to Stable Release \(update.version) (replaces this Nightly Build)"
+                : "Speecher \(update.version) is available"
         case .downloading:
-            return "Downloading Speecher \(model.update.version)"
+            return "Downloading Speecher \(update.version)"
         case .readyToRestart:
-            return model.update.error.isEmpty ? "Restart to finish updating" : model.update.error
+            return update.error.isEmpty ? "Restart to finish updating" : update.error
         case .restartPending:
             return "Restarting after this dictation…"
         case .restarting:
             return "Restarting…"
-        case .error:
-            return model.update.error
+        case .error, .checkFailed:
+            return update.error.isEmpty ? "Update check failed" : update.error
         default:
             return ""
+        }
+    }
+}
+
+/// The post-update strip: the installed version and a way into What's New. Value
+/// driven for the same reason as the banner content.
+struct WhatsNewStrip: View {
+    let installedNumber: String
+    var seeWhatsNew: () -> Void = {}
+    var dismiss: () -> Void = {}
+
+    var body: some View {
+        GroupBox { row }
+    }
+
+    @ViewBuilder var row: some View {
+        HStack {
+            Label("Speecher \(installedNumber) is installed", systemImage: "sparkles")
+            Spacer()
+            Button("See what's new", action: seeWhatsNew)
+            Button("Dismiss", action: dismiss)
         }
     }
 }

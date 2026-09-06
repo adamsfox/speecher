@@ -567,6 +567,7 @@ set(SPEECHER_FRONTEND_MAC_SWIFT_SOURCES
   src/frontend/mac/swift/SetupAssistant.swift
   src/frontend/mac/swift/ShortcutPane.swift
   src/frontend/mac/swift/SpeecherMacUI.swift
+  src/frontend/mac/swift/UpdatePreview.swift
 )
 
 set(SPEECHER_FRONTEND_WIN_SOURCES

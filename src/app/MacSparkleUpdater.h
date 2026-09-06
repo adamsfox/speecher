@@ -5,6 +5,8 @@
 #include <functional>
 #include <memory>
 
+class QTimer;
+
 namespace speecher {
 
 class DictationSession;
@@ -39,11 +41,13 @@ public:
 
     // The seam the Sparkle user driver drives, public so off-device tests can
     // walk the state machine without an appcast. Sparkle calls its user driver
-    // on the main thread, which is also Qt's.
-    void driverCheckStarted();
+    // on the main thread, which is also Qt's. Only a user-initiated check makes
+    // Sparkle call the check callbacks, so Checking/UpToDate/CheckFailed always
+    // mean a manual check the settings banner should report.
+    void driverCheckStarted(std::function<void()> cancel = {});
     void driverUpdateFound(const QString &version, ReplyHandler reply);
     void driverUpToDate();
-    void driverDownloadStarted();
+    void driverDownloadStarted(std::function<void()> cancel = {});
     void driverDownloadExpects(qint64 totalBytes);
     void driverDownloadReceived(qint64 bytes);
     void driverReadyToRestart(ReplyHandler install);
@@ -61,6 +65,10 @@ public slots:
 private:
     struct Native;
     void applySettings();
+    void updateSettingsChanged();
+    void beginBackgroundCheck();
+    void cancelActiveSession();
+    bool sessionActive() const;
     void setState(State state, const QString &error = {});
     void restartNow();
     void finishRestart();
@@ -68,6 +76,11 @@ private:
     SettingsStore *m_settings;
     DictationSession *m_session;
     std::unique_ptr<Native> m_native;
+    // Sparkle's schedule clamps to a one-hour minimum, so the sub-hour check
+    // frequency is ours to drive, like ManifestUpdater's own timer.
+    QTimer *m_checkTimer = nullptr;
+    // Clears a transient "up to date" banner a few seconds after a manual check.
+    QTimer *m_transientTimer = nullptr;
     State m_state = State::Idle;
     QString m_availableVersion;
     QString m_error;
@@ -77,11 +90,16 @@ private:
     QString m_pendingRestoreState;
     ReplyHandler m_updateReply;
     ReplyHandler m_installReply;
+    // Sparkle's own cancellation hooks for the two stages that have no reply of
+    // their own, so a channel switch can abort an in-flight check or download.
+    std::function<void()> m_cancelCheck;
+    std::function<void()> m_cancelDownload;
     qint64 m_downloadTotal = 0;
     qint64 m_downloadReceived = 0;
     int m_downloadPercent = 0;
     bool m_restartWhenReady = false;
     bool m_nightlyChannel = false;
+    bool m_selectedNightly = false;
 };
 
 } // namespace speecher
