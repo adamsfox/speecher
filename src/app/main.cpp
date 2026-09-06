@@ -28,6 +28,10 @@
 
 #include <QApplication>
 #include <QDateTime>
+#ifdef Q_OS_WIN
+#include <QDeadlineTimer>
+#include <QThread>
+#endif
 #include <QDir>
 #include <QFile>
 #include <QIcon>
@@ -258,11 +262,29 @@ int main(int argc, char **argv)
 #ifdef Q_OS_WIN
         if (!daemon) {
             AllowSetForegroundWindow(ASFW_ANY);
+            auto result = SingleInstanceIpc::sendCommandDetailed(showCommand, nullptr);
+            // The startup claim can precede the winning instance's pipe listener.
+            if (ipcError.startsWith(QStringLiteral("Another Speecher instance"))) {
+                QDeadlineTimer deadline(750);
+                while (result == IpcCommandResult::Unavailable && !deadline.hasExpired()) {
+                    QThread::msleep(25);
+                    const auto remaining = deadline.remainingTime();
+                    if (remaining <= 0) {
+                        break;
+                    }
+                    result = SingleInstanceIpc::sendCommandDetailed(showCommand, nullptr,
+                                                                   int(remaining));
+                }
+            }
+            if (result == IpcCommandResult::Sent) {
+                return 0;
+            }
         }
-#endif
+#else
         if (!daemon && SingleInstanceIpc::sendCommand(showCommand, nullptr)) {
             return 0;
         }
+#endif
         std::cerr << ipcError.toStdString() << "\n";
         return 1;
     }
