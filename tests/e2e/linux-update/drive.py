@@ -168,7 +168,7 @@ def flow_popup() -> None:
     # The daemon was launched by inner.sh; startup auto-check runs against the
     # local manifest (updates/lastCheckTime seeded to 0).
     app_command("start")
-    chip = require("install and restart", 45)
+    chip = require("Install and restart", 45)
     old_pid = chip.get_process_id()
     ok("update chip visible on the popup during a dictation")
     save_popup("update-chip")
@@ -179,7 +179,7 @@ def flow_popup() -> None:
     save_popup("restart-pending")
 
     app_command("stop")
-    new_pid = wait_for_new_process(old_pid, "see what's new", 60)
+    new_pid = wait_for_new_process(old_pid, "See what's new", 60)
     executable = os.readlink(f"/proc/{new_pid}/exe")
     version = subprocess.run(
         [executable, "--version"], capture_output=True, text=True, env=APP_ENV
@@ -191,12 +191,12 @@ def flow_popup() -> None:
 
     # The relaunched process restored the dictation (popup visible again) and
     # offers what's new above it.
-    require("see what's new", 5)
+    require("See what's new", 5)
     ok("dictation restored after restart, what's-new chip offered")
     save_popup("whats-new-chip")
 
     time.sleep(8)
-    if find_containing("see what's new", 0.5) is not None:
+    if find_containing("See what's new", 0.5) is not None:
         fail("what's-new chip did not auto-hide within 8s")
     ok("what's-new chip auto-hides after a few seconds")
 

@@ -15,6 +15,7 @@
 #include "ui/TranscriberPopup.h"
 
 #include <QFile>
+#include <QFrame>
 #include <QLabel>
 #include <QProcessEnvironment>
 #include <QPushButton>
@@ -113,9 +114,14 @@ public:
 
 class QtFrontEndTestAccess {
 public:
-    static QPushButton *updateChip(QtFrontEnd &frontEnd)
+    static QFrame *updateBanner(QtFrontEnd &frontEnd)
     {
-        return frontEnd.m_popup->findChild<QPushButton *>(QStringLiteral("updateChip"));
+        return frontEnd.m_popup->findChild<QFrame *>(QStringLiteral("updateBanner"));
+    }
+
+    static QLabel *updateBannerText(QtFrontEnd &frontEnd)
+    {
+        return frontEnd.m_popup->findChild<QLabel *>(QStringLiteral("updateBannerText"));
     }
 
     static TranscriberPopup *popup(QtFrontEnd &frontEnd)
@@ -622,11 +628,13 @@ private slots:
         QtFrontEnd frontEnd(&controller);
         TranscriberPopup *popup = QtFrontEndTestAccess::popup(frontEnd);
         auto *row = popup->findChild<QWidget *>(QStringLiteral("whatsNewRow"));
-        auto *chip = popup->findChild<QPushButton *>(QStringLiteral("whatsNewChip"));
+        auto *message = popup->findChild<QLabel *>(QStringLiteral("whatsNewText"));
+        auto *action = popup->findChild<QPushButton *>(QStringLiteral("whatsNewAction"));
         auto *timer = popup->findChild<QTimer *>(QStringLiteral("whatsNewAutoHide"));
-        QVERIFY(row && chip && timer);
+        QVERIFY(row && message && action && timer);
         QVERIFY(!row->isHidden());
-        QVERIFY(chip->text().contains(QStringLiteral("see what's new")));
+        QVERIFY(message->text().contains(QStringLiteral("installed")));
+        QCOMPARE(action->text(), QStringLiteral("See what's new"));
 
         // Auto-hide tidies the popup but keeps the offer pending; only the
         // dismiss button drops it.
@@ -649,9 +657,9 @@ private slots:
                                   Q_ARG(quint64, 2));
         QVERIFY(!row->isHidden());
 
-        // Clicking the chip asks to open the What's New page.
+        // Clicking the button asks to open the What's New page.
         QSignalSpy whatsNewSpy(popup, &TranscriberPopup::whatsNewRequested);
-        chip->click();
+        action->click();
         QCOMPARE(whatsNewSpy.count(), 1);
 
         auto *dismiss = popup->findChild<QPushButton *>(QStringLiteral("whatsNewDismiss"));
@@ -821,8 +829,9 @@ private slots:
         QtFrontEnd frontEnd(&controller);
         auto *controllerUpdater = dynamic_cast<ManifestUpdater *>(controller.updates());
         QVERIFY(controllerUpdater);
-        QPushButton *chip = QtFrontEndTestAccess::updateChip(frontEnd);
-        QVERIFY(chip);
+        QFrame *banner = QtFrontEndTestAccess::updateBanner(frontEnd);
+        QLabel *message = QtFrontEndTestAccess::updateBannerText(frontEnd);
+        QVERIFY(banner && message);
         ManifestUpdaterTestAccess::setAvailableVersion(*controllerUpdater,
                                                        QStringLiteral("2.0"));
         const QList<std::pair<UpdateController::State, bool>> chipStates{
@@ -841,22 +850,22 @@ private slots:
             ManifestUpdaterTestAccess::setState(*controllerUpdater,
                                                 state,
                                                 QStringLiteral("install failed"));
-            QCOMPARE(!chip->isHidden(), visible);
+            QCOMPARE(!banner->isHidden(), visible);
         }
         ManifestUpdaterTestAccess::setAutomaticCheckFailures(*controllerUpdater, 3);
         ManifestUpdaterTestAccess::setState(*controllerUpdater,
                                             UpdateController::State::CheckFailed,
                                             QStringLiteral("Could not check for updates"));
-        QVERIFY(!chip->isHidden());
-        QCOMPARE(chip->text(), QStringLiteral("Update check failed"));
+        QVERIFY(!banner->isHidden());
+        QCOMPARE(message->text(), QStringLiteral("Update check failed"));
         ManifestUpdaterTestAccess::setState(*controllerUpdater,
                                             UpdateController::State::Error,
                                             QStringLiteral("install failed"));
-        QVERIFY(!chip->isHidden());
-        QCOMPARE(chip->text(), QStringLiteral("install failed"));
+        QVERIFY(!banner->isHidden());
+        QCOMPARE(message->text(), QStringLiteral("install failed"));
         ManifestUpdaterTestAccess::setState(*controllerUpdater,
                                             UpdateController::State::Restarting);
-        QCOMPARE(chip->text(), QStringLiteral("Restarting…"));
+        QCOMPARE(message->text(), QStringLiteral("Restarting…"));
 #endif
     }
 

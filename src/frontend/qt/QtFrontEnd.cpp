@@ -280,51 +280,54 @@ void QtFrontEnd::wireSessionToPopup()
 void QtFrontEnd::refreshUpdateChip()
 {
     UpdateController *updates = m_controller->updates();
-    const DictationState sessionState = m_controller->session()->state();
-    const bool canAct = sessionState == DictationState::Idle
-        || sessionState == DictationState::Error;
     switch (updates->state()) {
     case UpdateController::State::UpdateAvailable:
-        // Base version only: a full nightly identifier would stretch the chip
-        // across the screen.
-        m_popup->setUpdateChip(
-            QStringLiteral("Speecher %1 available — install and restart")
+        // Base version only: a full nightly identifier would stretch the
+        // banner across the screen. Clicking during a dictation is safe: the
+        // restart parks until the session is idle and the relaunch restores
+        // what was on screen.
+        m_popup->setUpdateBanner(
+            QStringLiteral("Speecher %1 available")
                 .arg(updates->availableVersion().section(QLatin1Char('-'), 0, 0)),
-            true,
+            QStringLiteral("Install and restart"),
             true);
         break;
     case UpdateController::State::Downloading:
-        m_popup->setUpdateChip(
-            QStringLiteral("Downloading %1%").arg(updates->downloadPercent()), true, false);
+        m_popup->setUpdateBanner(
+            QStringLiteral("Downloading %1%").arg(updates->downloadPercent()), {}, false);
         break;
     case UpdateController::State::ReadyToRestart:
-        // Clicking during a dictation is safe: the restart parks until the
-        // session is idle and the relaunch restores what was on screen.
-        m_popup->setUpdateChip(updates->errorMessage().isEmpty()
-                                   ? QStringLiteral("Restart to finish updating")
-                                   : updates->errorMessage(),
-                               true,
-                               true);
+        m_popup->setUpdateBanner(updates->errorMessage().isEmpty()
+                                     ? QStringLiteral("Update ready")
+                                     : updates->errorMessage(),
+                                 QStringLiteral("Restart now"),
+                                 true);
         break;
     case UpdateController::State::RestartPending:
-        m_popup->setUpdateChip(
-            QStringLiteral("Restarting after this dictation…"), true, false);
+        m_popup->setUpdateBanner(
+            QStringLiteral("Restarting after this dictation…"), {}, false);
         break;
     case UpdateController::State::Restarting:
-        m_popup->setUpdateChip(QStringLiteral("Restarting…"), true, false);
+        m_popup->setUpdateBanner(QStringLiteral("Restarting…"), {}, false);
         break;
     case UpdateController::State::Error:
-        m_popup->setUpdateChip(updates->errorMessage(), true, canAct);
+        m_popup->setUpdateBanner(updates->errorMessage(),
+                                 updates->manualInstallRequired()
+                                     ? QStringLiteral("Open release page")
+                                     : QStringLiteral("Try again"),
+                                 true);
         break;
     case UpdateController::State::CheckFailed:
         if (updates->repeatedAutomaticCheckFailure()) {
-            m_popup->setUpdateChip(QStringLiteral("Update check failed"), true, canAct);
+            m_popup->setUpdateBanner(QStringLiteral("Update check failed"),
+                                     QStringLiteral("Try again"),
+                                     true);
         } else {
-            m_popup->setUpdateChip({}, false, false);
+            m_popup->setUpdateBanner({}, {}, false);
         }
         break;
     default:
-        m_popup->setUpdateChip({}, false, false);
+        m_popup->setUpdateBanner({}, {}, false);
         break;
     }
 }
@@ -332,11 +335,11 @@ void QtFrontEnd::refreshUpdateChip()
 void QtFrontEnd::refreshWhatsNewChip()
 {
     if (m_controller->pendingWhatsNewVersion().isEmpty()) {
-        m_popup->setWhatsNewChip({}, false);
+        m_popup->setWhatsNewBanner({}, false);
         return;
     }
-    m_popup->setWhatsNewChip(
-        QStringLiteral("Speecher %1 installed — see what's new")
+    m_popup->setWhatsNewBanner(
+        QStringLiteral("Speecher %1 installed")
             .arg(m_controller->updates()->currentVersion().section(QLatin1Char('-'), 0, 0)),
         true);
 }
