@@ -3,6 +3,8 @@
 #include <QObject>
 #include <QString>
 
+#include <functional>
+
 namespace speecher {
 
 enum class UpdateChannel;
@@ -41,14 +43,33 @@ public:
     virtual bool manualInstallRequired() const = 0;
     virtual bool stableReplacementAvailable() const = 0;
 
+    // Asked what the app should restore after an update restart ("listening",
+    // "settings", both, or empty), captured right before the process goes away.
+    void setRestoreStateProvider(std::function<QString()> provider)
+    {
+        m_restoreStateProvider = std::move(provider);
+    }
+
 public slots:
     virtual void checkForUpdates(UpdateChannel channel) = 0;
     virtual void updateNow() = 0;
+    // One click through the whole tail of the flow: download if needed,
+    // install, then restart without waiting for another prompt.
+    virtual void installAndRestart() = 0;
     virtual void dismissAvailableVersion() = 0;
 
 signals:
     void changed();
     void openReleasePageRequested();
+
+protected:
+    QString restoreState() const
+    {
+        return m_restoreStateProvider ? m_restoreStateProvider() : QString();
+    }
+
+private:
+    std::function<QString()> m_restoreStateProvider;
 };
 
 } // namespace speecher

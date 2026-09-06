@@ -19,8 +19,6 @@
 namespace speecher {
 namespace {
 
-constexpr qint64 startupCheckIntervalMs = 20LL * 60 * 60 * 1000;
-constexpr int dailyCheckIntervalMs = 24 * 60 * 60 * 1000;
 constexpr int initialRetryIntervalMs = 5 * 60 * 1000;
 constexpr int maximumRetryIntervalMs = 60 * 60 * 1000;
 constexpr int visibleAutomaticFailureCount = 3;
@@ -76,6 +74,7 @@ ManifestUpdater::ManifestUpdater(SettingsStore *settings,
 
     connect(m_session, &DictationSession::stateChanged, this, [this] {
         if (m_state == State::RestartPending && restartSafe(m_session->state())) {
+            writeRestoreState();
             restartApplication();
         }
     });
@@ -92,7 +91,7 @@ ManifestUpdater::~ManifestUpdater()
 
 void ManifestUpdater::start()
 {
-    m_dailyTimer->setInterval(dailyCheckIntervalMs);
+    m_dailyTimer->setInterval(baseCheckIntervalMs());
     connect(m_dailyTimer, &QTimer::timeout, this, [this] {
         if (m_settings->autoCheckUpdates()) {
             beginCheck(m_settings->updateChannel(), true);
@@ -103,10 +102,15 @@ void ManifestUpdater::start()
     QTimer::singleShot(0, this, [this] {
         const qint64 lastCheck = m_settings->updatesLastCheckTime();
         if (m_settings->autoCheckUpdates()
-            && QDateTime::currentMSecsSinceEpoch() - lastCheck > startupCheckIntervalMs) {
+            && QDateTime::currentMSecsSinceEpoch() - lastCheck > baseCheckIntervalMs()) {
             beginCheck(m_settings->updateChannel(), true);
         }
     });
+}
+
+int ManifestUpdater::baseCheckIntervalMs() const
+{
+    return m_settings->updateCheckIntervalMinutes() * 60 * 1000;
 }
 
 UpdateController::State ManifestUpdater::state() const
@@ -252,6 +256,7 @@ void ManifestUpdater::beginCheck(UpdateChannel channel, bool automaticCheck)
 
     m_manifest = {};
     m_manualInstallRequired = false;
+    m_restartWhenReady = false;
     m_checkChannel = channel;
     m_automaticCheck = automaticCheck;
     setState(State::Checking);
@@ -288,16 +293,39 @@ void ManifestUpdater::updateNow()
     beginDownload(true);
 }
 
+void ManifestUpdater::installAndRestart()
+{
+    // Only arm the automatic restart when an update is actually in hand;
+    // in error states this button retries the check, and a leftover flag
+    // would turn a later background download into a surprise restart.
+    if (m_state == State::UpdateAvailable || m_state == State::Downloading
+        || m_state == State::ReadyToRestart) {
+        m_restartWhenReady = true;
+    }
+    updateNow();
+}
+
 void ManifestUpdater::restartNow()
 {
     if (m_state != State::ReadyToRestart) {
         return;
     }
+    // Captured at the moment of the restart request: a restart deferred to the
+    // end of a dictation still restores what the user was doing when they asked.
+    m_pendingRestoreState = restoreState();
     if (!restartSafe(m_session->state())) {
         setState(State::RestartPending);
         return;
     }
+    writeRestoreState();
     restartApplication();
+}
+
+void ManifestUpdater::writeRestoreState()
+{
+    if (!m_pendingRestoreState.isEmpty()) {
+        m_settings->setUpdatesRestoreState(m_pendingRestoreState);
+    }
 }
 
 void ManifestUpdater::dismissAvailableVersion()
@@ -359,7 +387,7 @@ void ManifestUpdater::finishCheck(QNetworkReply *reply)
     }
     m_settings->setUpdatesLastCheckTime(QDateTime::currentMSecsSinceEpoch());
     m_automaticCheckFailures = 0;
-    m_dailyTimer->setInterval(dailyCheckIntervalMs);
+    m_dailyTimer->setInterval(baseCheckIntervalMs());
     if (!shouldOfferManifest(*parsed,
                              currentBuildNumber(),
                              currentVersion(),
@@ -388,11 +416,15 @@ void ManifestUpdater::recordAutomaticCheckFailure()
         return;
     }
     ++m_automaticCheckFailures;
-    m_dailyTimer->setInterval(automaticRetryInterval(m_automaticCheckFailures));
+    m_dailyTimer->setInterval(
+        qMin(automaticRetryInterval(m_automaticCheckFailures), baseCheckIntervalMs()));
 }
 
 void ManifestUpdater::updateSettingsChanged()
 {
+    if (m_automaticCheckFailures == 0) {
+        m_dailyTimer->setInterval(baseCheckIntervalMs());
+    }
     const UpdateChannel channel = m_settings->updateChannel();
     if (channel == m_selectedChannel) {
         return;
@@ -415,6 +447,7 @@ void ManifestUpdater::updateSettingsChanged()
     m_downloadError.clear();
     m_downloadPercent = 0;
     m_manualInstallRequired = false;
+    m_restartWhenReady = false;
     setState(State::Idle);
 }
 
@@ -507,6 +540,10 @@ void ManifestUpdater::finishDownload(QNetworkReply *reply)
     }
     m_downloadPercent = 100;
     setState(State::ReadyToRestart);
+    if (m_restartWhenReady) {
+        m_restartWhenReady = false;
+        restartNow();
+    }
 }
 
 void ManifestUpdater::clearDownload()
@@ -524,6 +561,9 @@ void ManifestUpdater::clearDownload()
 
 void ManifestUpdater::setState(State state, const QString &error)
 {
+    if (state == State::Error || state == State::CheckFailed) {
+        m_restartWhenReady = false;
+    }
     m_state = state;
     m_error = error;
     emit changed();

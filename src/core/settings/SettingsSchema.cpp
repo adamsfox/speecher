@@ -506,10 +506,31 @@ SettingsPage generalPage(const SchemaContext &context)
     SettingsRow autoCheck = toggleRow(
         QStringLiteral("autoCheckUpdates"),
         QStringLiteral("Check for updates automatically"),
-        QStringLiteral("Check the selected Update Channel at startup and once a day."),
+        QStringLiteral("Check the selected Update Channel at startup and on the "
+                       "schedule below."),
         [](const AppSettings &settings) { return settings.updates.autoCheck; },
         [](AppSettings &settings, bool value) { settings.updates.autoCheck = value; });
     autoCheck.sinceVersion = QStringLiteral("0.1.0");
+    SettingsRow checkInterval = choiceRow(
+        QStringLiteral("updateCheckInterval"),
+        QStringLiteral("Check frequency"),
+        QString(),
+        fixedOptions({
+            {QStringLiteral("30"), QStringLiteral("Every 30 minutes"), QString()},
+            {QStringLiteral("60"), QStringLiteral("Every hour"), QString()},
+            {QStringLiteral("360"), QStringLiteral("Every 6 hours"), QString()},
+            {QStringLiteral("1440"), QStringLiteral("Once a day"), QString()},
+        }),
+        [](const AppSettings &settings) {
+            return QString::number(settings.updates.checkIntervalMinutes);
+        },
+        [](AppSettings &settings, const QString &value) {
+            settings.updates.checkIntervalMinutes = value.toInt();
+        });
+    checkInterval.sinceVersion = QStringLiteral("0.1.5");
+    checkInterval.visible = [](const AppSettings &settings, const Capabilities &) {
+        return settings.updates.autoCheck;
+    };
     SettingsRow autoInstall = toggleRow(
         QStringLiteral("autoInstallUpdates"),
         QStringLiteral("Download and install updates automatically"),
@@ -578,6 +599,7 @@ SettingsPage generalPage(const SchemaContext &context)
              {
                  std::move(updateChannel),
                  std::move(autoCheck),
+                 std::move(checkInterval),
                  std::move(autoInstall),
                  actionRow(QStringLiteral("checkForUpdates"),
                            QStringLiteral("Check for updates"),
@@ -1776,6 +1798,7 @@ static QList<SettingsPane> settingsPanes()
               group("Maintenance", {QStringLiteral("runSetup")}),
               group("Updates", {QStringLiteral("updateChannel"),
                                 QStringLiteral("autoCheckUpdates"),
+                                QStringLiteral("updateCheckInterval"),
                                 QStringLiteral("autoInstallUpdates"),
                                 QStringLiteral("checkForUpdates"),
                                 QStringLiteral("currentVersion"),

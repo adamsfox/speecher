@@ -36,6 +36,7 @@ public:
     QStringList pageTitles() const;
     int pageCount() const;
     void navigateToSettings(AppPageId page = AppPageId::General);
+    void showWhatsNew();
     void flushPendingAutoSave();
     void rememberGeometry();
 
@@ -53,7 +54,6 @@ private:
     void runAutoSave();
     void filterSidebarPages(const QString &query);
     void refreshUpdateBanner();
-    void showWhatsNew();
     void leaveWhatsNew();
 
     ApplicationController *m_controller;

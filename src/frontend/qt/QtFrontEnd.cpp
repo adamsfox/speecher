@@ -32,7 +32,26 @@ QtFrontEnd::QtFrontEnd(ApplicationController *controller, QObject *parent)
             this,
             &QtFrontEnd::refreshUpdateChip);
     connect(m_popup, &TranscriberPopup::updateRequested,
-            controller->updates(), &UpdateController::updateNow);
+            controller->updates(), &UpdateController::installAndRestart);
+    connect(controller, &ApplicationController::whatsNewChanged,
+            this, &QtFrontEnd::refreshWhatsNewChip);
+    connect(m_popup, &TranscriberPopup::whatsNewRequested, this, [this] {
+        showMainWindow();
+        m_appWindow->showWhatsNew();
+    });
+    connect(m_popup, &TranscriberPopup::whatsNewDismissed,
+            controller, &ApplicationController::clearPendingWhatsNew);
+    controller->updates()->setRestoreStateProvider([this, controller] {
+        QStringList state;
+        const DictationState sessionState = controller->session()->state();
+        if (sessionState != DictationState::Idle && sessionState != DictationState::Error) {
+            state.append(QStringLiteral("listening"));
+        }
+        if (m_appWindow && m_appWindow->isVisible()) {
+            state.append(QStringLiteral("settings"));
+        }
+        return state.join(QLatin1Char(','));
+    });
     connect(controller->updates(), &UpdateController::openReleasePageRequested, this, [] {
         QDesktopServices::openUrl(
             QUrl(QStringLiteral("https://github.com/firemonster612/speecher/releases")));
@@ -41,7 +60,15 @@ QtFrontEnd::QtFrontEnd(ApplicationController *controller, QObject *parent)
             &DictationSession::stateChanged,
             this,
             &QtFrontEnd::refreshUpdateChip);
+    // Each popup re-derives the What's New chip: the offer auto-hides per
+    // appearance but returns on the next dictation until it is dismissed, the
+    // same as the mac and Windows panels.
+    connect(controller->session(),
+            &DictationSession::popupShowRequested,
+            this,
+            &QtFrontEnd::refreshWhatsNewChip);
     refreshUpdateChip();
+    refreshWhatsNewChip();
 
     // SPEECHER_POPUP_CAPTURE_DIR: capture seam mirroring the mac setup
     // assistant's; saves numbered frames of the dictation popup while it is
@@ -64,6 +91,9 @@ QtFrontEnd::QtFrontEnd(ApplicationController *controller, QObject *parent)
 
 QtFrontEnd::~QtFrontEnd()
 {
+    // The updater outlives the front end, so drop the provider that reaches
+    // back into this object and its windows.
+    m_controller->updates()->setRestoreStateProvider({});
     delete m_popup;
 }
 
@@ -148,6 +178,10 @@ bool QtFrontEnd::captureMainWindow(const QString &path)
     const QStringList size = qEnvironmentVariable("SPEECHER_GRAB_SIZE").split(u'x');
     if (size.size() == 2) {
         m_appWindow->resize(size.at(0).toInt(), size.at(1).toInt());
+    }
+    if (request.first() == QStringLiteral("whatsnew")) {
+        m_appWindow->showWhatsNew();
+        QCoreApplication::processEvents();
     }
     if (page >= 0) {
         m_appWindow->navigateToSettings(static_cast<AppPageId>(page));
@@ -246,45 +280,68 @@ void QtFrontEnd::wireSessionToPopup()
 void QtFrontEnd::refreshUpdateChip()
 {
     UpdateController *updates = m_controller->updates();
-    const DictationState sessionState = m_controller->session()->state();
-    const bool canAct = sessionState == DictationState::Idle
-        || sessionState == DictationState::Error;
     switch (updates->state()) {
     case UpdateController::State::UpdateAvailable:
-        m_popup->setUpdateChip(QStringLiteral("Update available"), true, canAct);
+        // Base version only: a full nightly identifier would stretch the
+        // banner across the screen. Clicking during a dictation is safe: the
+        // restart parks until the session is idle and the relaunch restores
+        // what was on screen.
+        m_popup->setUpdateBanner(
+            QStringLiteral("Speecher %1 available")
+                .arg(updates->availableVersion().section(QLatin1Char('-'), 0, 0)),
+            QStringLiteral("Install and restart"),
+            true);
         break;
     case UpdateController::State::Downloading:
-        m_popup->setUpdateChip(
-            QStringLiteral("Downloading %1%").arg(updates->downloadPercent()), true, false);
+        m_popup->setUpdateBanner(
+            QStringLiteral("Downloading %1%").arg(updates->downloadPercent()), {}, false);
         break;
     case UpdateController::State::ReadyToRestart:
-        m_popup->setUpdateChip(updates->errorMessage().isEmpty()
-                                   ? QStringLiteral("Restart to finish updating")
-                                   : updates->errorMessage(),
-                               true,
-                               canAct);
+        m_popup->setUpdateBanner(updates->errorMessage().isEmpty()
+                                     ? QStringLiteral("Update ready")
+                                     : updates->errorMessage(),
+                                 QStringLiteral("Restart now"),
+                                 true);
         break;
     case UpdateController::State::RestartPending:
-        m_popup->setUpdateChip(
-            QStringLiteral("Restarting after this dictation…"), true, false);
+        m_popup->setUpdateBanner(
+            QStringLiteral("Restarting after this dictation…"), {}, false);
         break;
     case UpdateController::State::Restarting:
-        m_popup->setUpdateChip(QStringLiteral("Restarting…"), true, false);
+        m_popup->setUpdateBanner(QStringLiteral("Restarting…"), {}, false);
         break;
     case UpdateController::State::Error:
-        m_popup->setUpdateChip(updates->errorMessage(), true, canAct);
+        m_popup->setUpdateBanner(updates->errorMessage(),
+                                 updates->manualInstallRequired()
+                                     ? QStringLiteral("Open release page")
+                                     : QStringLiteral("Try again"),
+                                 true);
         break;
     case UpdateController::State::CheckFailed:
         if (updates->repeatedAutomaticCheckFailure()) {
-            m_popup->setUpdateChip(QStringLiteral("Update check failed"), true, canAct);
+            m_popup->setUpdateBanner(QStringLiteral("Update check failed"),
+                                     QStringLiteral("Try again"),
+                                     true);
         } else {
-            m_popup->setUpdateChip({}, false, false);
+            m_popup->setUpdateBanner({}, {}, false);
         }
         break;
     default:
-        m_popup->setUpdateChip({}, false, false);
+        m_popup->setUpdateBanner({}, {}, false);
         break;
     }
+}
+
+void QtFrontEnd::refreshWhatsNewChip()
+{
+    if (m_controller->pendingWhatsNewVersion().isEmpty()) {
+        m_popup->setWhatsNewBanner({}, false);
+        return;
+    }
+    m_popup->setWhatsNewBanner(
+        QStringLiteral("Speecher %1 installed")
+            .arg(m_controller->updates()->currentVersion().section(QLatin1Char('-'), 0, 0)),
+        true);
 }
 
 } // namespace speecher

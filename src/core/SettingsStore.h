@@ -122,6 +122,10 @@ public:
     using SettingsCodecs::writingProfileSettings;
     using SettingsCodecs::ydotoolEnabled;
     using SettingsCodecs::updateChannel;
+    using SettingsCodecs::updateCheckIntervalMinutes;
+    using SettingsCodecs::updatesRestoreState;
+    using SettingsCodecs::updatesRestoreStateTime;
+    using SettingsCodecs::setUpdatesRestoreState;
     using SettingsCodecs::updatesDismissedVersion;
     using SettingsCodecs::updatesLastRunVersion;
     using SettingsCodecs::updatesLastRunBuildNumber;
@@ -140,6 +144,7 @@ public:
     void setUpdateChannel(UpdateChannel value);
     void setAutoCheckUpdates(bool value);
     void setAutoInstallUpdates(bool value);
+    void setUpdateCheckIntervalMinutes(int value);
 
     QSettings &raw();
 

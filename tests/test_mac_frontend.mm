@@ -1,6 +1,8 @@
 #include "common/test_suites.h"
 
 #include "app/ApplicationController.h"
+#include "app/MacSparkleUpdater.h"
+#include "core/AppSettings.h"
 #include "core/SettingsStore.h"
 #include "core/settings/SettingsKeys.h"
 #include "frontend/mac/MacFrontEnd.h"
@@ -20,6 +22,7 @@
 #include <QApplication>
 #include <QFile>
 #include <QScopeGuard>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 
 using namespace speecher;
@@ -383,6 +386,188 @@ private slots:
                                      kEventHotKeyExclusive, &competingHotKey), OSStatus(noErr));
         NSString *error = [bridge endShortcutRecording];
         QVERIFY(error.length > 0);
+    }
+
+    // The Sparkle user driver's callbacks arrive through the public driver
+    // seam, so the state machine walks here without an appcast.
+    void sparkleDriverSeamMapsStates()
+    {
+        ApplicationController controller(false);
+        auto *updates = qobject_cast<MacSparkleUpdater *>(controller.updates());
+        QVERIFY(updates);
+        QSignalSpy changed(updates, &UpdateController::changed);
+
+        updates->driverCheckStarted();
+        QCOMPARE(updates->state(), UpdateController::State::Checking);
+        // A user-initiated check reports its progress in the banner.
+        QVERIFY(updates->bannerVisible());
+
+        bool installRequested = false;
+        updates->driverUpdateFound(QStringLiteral("9.9.9"),
+                                   [&installRequested](MacSparkleUpdater::Reply reply) {
+                                       installRequested = reply == MacSparkleUpdater::Reply::Install;
+                                   });
+        QCOMPARE(updates->state(), UpdateController::State::UpdateAvailable);
+        QCOMPARE(updates->availableVersion(), QStringLiteral("9.9.9"));
+        QVERIFY(updates->bannerVisible());
+
+        updates->updateNow();
+        QVERIFY(installRequested);
+
+        updates->driverDownloadStarted();
+        QCOMPARE(updates->state(), UpdateController::State::Downloading);
+        QVERIFY(updates->bannerVisible());
+        updates->driverDownloadExpects(200);
+        updates->driverDownloadReceived(50);
+        QCOMPARE(updates->downloadPercent(), 25);
+
+        bool installReplied = false;
+        updates->driverReadyToRestart(
+            [&installReplied](MacSparkleUpdater::Reply) { installReplied = true; });
+        QCOMPARE(updates->state(), UpdateController::State::ReadyToRestart);
+        QCOMPARE(updates->downloadPercent(), 100);
+        QVERIFY(updates->bannerVisible());
+        // Ready is an offer, not an order: nothing restarts until asked.
+        QVERIFY(!installReplied);
+
+        updates->driverFailed(QStringLiteral("The download failed"));
+        QCOMPARE(updates->state(), UpdateController::State::Error);
+        QCOMPARE(updates->errorMessage(), QStringLiteral("The download failed"));
+        QVERIFY(updates->bannerVisible());
+        QVERIFY(changed.count() >= 6);
+    }
+
+    void dismissedVersionSuppressesTheBanner()
+    {
+        ApplicationController controller(false);
+        auto *updates = qobject_cast<MacSparkleUpdater *>(controller.updates());
+        QVERIFY(updates);
+
+        bool dismissed = false;
+        updates->driverUpdateFound(QStringLiteral("9.9.9"),
+                                   [&dismissed](MacSparkleUpdater::Reply reply) {
+                                       dismissed = reply == MacSparkleUpdater::Reply::Dismiss;
+                                   });
+        QVERIFY(updates->bannerVisible());
+
+        updates->dismissAvailableVersion();
+        QVERIFY(dismissed);
+        QCOMPARE(controller.settings()->updatesDismissedVersion(), QStringLiteral("9.9.9"));
+        updates->driverSessionEnded();
+        QCOMPARE(updates->state(), UpdateController::State::Idle);
+
+        // Found again, the dismissed version is answered rather than held: an
+        // unanswered reply would keep Sparkle in a session and block every later
+        // check. It stays silent and does not hold the session open.
+        bool reDismissed = false;
+        updates->driverUpdateFound(QStringLiteral("9.9.9"),
+                                   [&reDismissed](MacSparkleUpdater::Reply reply) {
+                                       reDismissed = reply == MacSparkleUpdater::Reply::Dismiss;
+                                   });
+        QVERIFY(reDismissed);
+        QVERIFY(updates->state() != UpdateController::State::UpdateAvailable);
+        QVERIFY(!updates->bannerVisible());
+
+        // A newer version still surfaces.
+        updates->driverSessionEnded();
+        updates->driverUpdateFound(QStringLiteral("10.0.0"), [](MacSparkleUpdater::Reply) {});
+        QCOMPARE(updates->state(), UpdateController::State::UpdateAvailable);
+        QVERIFY(updates->bannerVisible());
+    }
+
+    // A channel switch mid-download abandons the old channel's in-flight update
+    // rather than installing and restarting into the channel just left.
+    void channelSwitchDuringDownloadCancelsAndDisarms()
+    {
+        ApplicationController controller(false);
+        controller.settings()->setUpdateChannel(UpdateChannel::Stable);
+        auto *updates = qobject_cast<MacSparkleUpdater *>(controller.updates());
+        QVERIFY(updates);
+
+        updates->driverUpdateFound(QStringLiteral("9.9.9"), [](MacSparkleUpdater::Reply) {});
+        updates->installAndRestart();
+        bool downloadCancelled = false;
+        updates->driverDownloadStarted([&downloadCancelled] { downloadCancelled = true; });
+        QCOMPARE(updates->state(), UpdateController::State::Downloading);
+
+        controller.settings()->setUpdateChannel(UpdateChannel::Nightly);
+        QVERIFY(downloadCancelled);
+        QCOMPARE(updates->state(), UpdateController::State::Idle);
+        QVERIFY(!updates->bannerVisible());
+
+        // The armed restart is disarmed: a later ready-to-restart must not
+        // relaunch on its own into the abandoned download.
+        bool installed = false;
+        updates->driverReadyToRestart(
+            [&installed](MacSparkleUpdater::Reply) { installed = true; });
+        QVERIFY(!installed);
+    }
+
+    // A manual check gives feedback the standard Sparkle dialogs used to: it
+    // shows progress, an up-to-date result, and a failure.
+    void manualCheckSurfacesProgressResultAndFailure()
+    {
+        ApplicationController controller(false);
+        auto *updates = qobject_cast<MacSparkleUpdater *>(controller.updates());
+        QVERIFY(updates);
+
+        updates->driverCheckStarted();
+        QVERIFY(updates->bannerVisible());
+        updates->driverUpToDate();
+        QCOMPARE(updates->state(), UpdateController::State::UpToDate);
+        QVERIFY(updates->bannerVisible());
+        updates->dismissAvailableVersion();
+        QCOMPARE(updates->state(), UpdateController::State::Idle);
+        QVERIFY(!updates->bannerVisible());
+
+        updates->driverCheckStarted();
+        updates->driverFailed(QStringLiteral("You are offline"));
+        QCOMPARE(updates->state(), UpdateController::State::CheckFailed);
+        QVERIFY(updates->bannerVisible());
+        QCOMPARE(updates->errorMessage(), QStringLiteral("You are offline"));
+    }
+
+    void installAndRestartWritesTheRestoreState()
+    {
+        ApplicationController controller(false);
+        MacFrontEnd frontEnd(&controller);
+        controller.setFrontEnd(&frontEnd);
+        auto *updates = qobject_cast<MacSparkleUpdater *>(controller.updates());
+        QVERIFY(updates);
+
+        frontEnd.showSettingsWindow();
+
+        updates->driverUpdateFound(QStringLiteral("9.9.9"), [](MacSparkleUpdater::Reply) {});
+        updates->installAndRestart();
+        bool installRequested = false;
+        updates->driverReadyToRestart(
+            [&installRequested](MacSparkleUpdater::Reply reply) {
+                installRequested = reply == MacSparkleUpdater::Reply::Install;
+            });
+
+        // The armed restart fires as soon as the install is ready, and the
+        // relaunch is told to bring the settings window back.
+        QVERIFY(installRequested);
+        QCOMPARE(updates->state(), UpdateController::State::Restarting);
+        QCOMPARE(controller.settings()->updatesRestoreState(), QStringLiteral("settings"));
+    }
+
+    // A CI-only capture: with SPEECHER_UPDATE_PREVIEW_DIR set, render the five
+    // update UI states to PNGs the workflow uploads. Skipped in a normal run,
+    // so it neither slows the suite nor needs a display of its own.
+    void renderUpdatePreviewsWhenRequested()
+    {
+        const QString directory = qEnvironmentVariable("SPEECHER_UPDATE_PREVIEW_DIR");
+        if (directory.isEmpty()) {
+            QSKIP("SPEECHER_UPDATE_PREVIEW_DIR unset; preview capture is CI-only");
+        }
+        NSArray<NSString *> *written =
+            [SpeecherUpdatePreview renderToDirectory:directory.toNSString()];
+        QCOMPARE(written.count, NSUInteger(5));
+        for (NSString *name in written) {
+            const QString path = directory + QStringLiteral("/") + QString::fromNSString(name);
+            QVERIFY2(QFile::exists(path), qPrintable(path));
+        }
     }
 
     void whatsNewOfferFollowsPendingUpgradeState()

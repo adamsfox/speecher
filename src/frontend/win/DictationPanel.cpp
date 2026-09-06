@@ -17,6 +17,7 @@
 #include <winrt/Microsoft.UI.Content.h>
 #include <winrt/Microsoft.UI.Interop.h>
 #include <winrt/Microsoft.UI.Xaml.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
@@ -46,6 +47,7 @@ constexpr int panelHeight = 52;
 constexpr int previewChromeWidth = 190;
 constexpr int screenEdgeMargin = 80;
 constexpr int bottomMargin = 28;
+constexpr int bannerGap = 12;
 constexpr auto windowClassName = L"SpeecherDictationPanel";
 
 QString phaseGlyph(const QString &status, bool problem)
@@ -72,6 +74,44 @@ QString phaseGlyph(const QString &status, bool problem)
 
 } // namespace
 
+win::UpdateChipState win::updateChipState(UpdateController::State state, const QString &version,
+                                          int percent, const QString &error, bool repeatedFailure,
+                                          bool manualInstall, DictationState sessionState)
+{
+    const bool canAct = sessionState == DictationState::Idle
+        || sessionState == DictationState::Error;
+    using State = UpdateController::State;
+    switch (state) {
+    case State::UpdateAvailable:
+        // The banner carries the base version; a nightly's -suffix is noise here.
+        return {QStringLiteral("Speecher %1 available")
+                    .arg(version.section(QLatin1Char('-'), 0, 0)),
+                QStringLiteral("Install and restart"), true, true};
+    case State::Downloading:
+        return {QStringLiteral("Downloading %1%").arg(percent), {}, true, false};
+    case State::ReadyToRestart:
+        return {error.isEmpty() ? QStringLiteral("Update ready") : error,
+                QStringLiteral("Restart now"), true, true};
+    case State::RestartPending:
+        return {QStringLiteral("Restarting after this dictation…"), {}, true, false};
+    case State::Restarting:
+        return {QStringLiteral("Restarting…"), {}, true, false};
+    case State::Error:
+        return {error,
+                manualInstall ? QStringLiteral("Open release page")
+                              : QStringLiteral("Try again"),
+                true, canAct};
+    case State::CheckFailed:
+        if (repeatedFailure) {
+            return {QStringLiteral("Update check failed"), QStringLiteral("Try again"),
+                    true, canAct};
+        }
+        return {};
+    default:
+        return {};
+    }
+}
+
 struct DictationPanel::Native : QObject {
     enum class Phase { Live, Transcribing, Refining };
 
@@ -80,7 +120,22 @@ struct DictationPanel::Native : QObject {
         , controller(owner)
         , panel(q)
     {
+        whatsNewAutoHide.setSingleShot(true);
+        whatsNewAutoHide.setInterval(6000);
+        connect(&whatsNewAutoHide, &QTimer::timeout, this, [this] {
+            whatsNewHidden = true;
+            refresh();
+        });
+        connect(controller->updates(), &UpdateController::changed, this, &Native::refresh);
+        connect(controller, &ApplicationController::whatsNewChanged, this, [this] {
+            whatsNewHidden = false;
+            if (window && IsWindowVisible(window)) {
+                whatsNewAutoHide.start();
+            }
+            refresh();
+        });
         DictationSession *session = controller->session();
+        connect(session, &DictationSession::stateChanged, this, &Native::refresh);
         connect(session, &DictationSession::previewDisplayChanged, this,
                 [this](const QString &text) { setPreview(text); });
         connect(session, &DictationSession::popupRefinementPreviewChanged, this,
@@ -129,12 +184,43 @@ struct DictationPanel::Native : QObject {
 
     ~Native() override
     {
+        if (bannerSource) {
+            bannerSource.Close();
+        }
+        if (banner) {
+            DestroyWindow(banner);
+        }
         if (source) {
             source.Close();
         }
         if (window) {
             DestroyWindow(window);
         }
+    }
+
+    static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+    {
+        if (message == WM_NCCREATE) {
+            const auto *create = reinterpret_cast<CREATESTRUCTW *>(lParam);
+            SetWindowLongPtrW(window, GWLP_USERDATA,
+                              reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+        }
+        if (message == WM_DISPLAYCHANGE || message == WM_DPICHANGED) {
+            auto *native = reinterpret_cast<Native *>(GetWindowLongPtrW(window, GWLP_USERDATA));
+            if (native) {
+                // Re-derive the physical size and position at the new DPI or
+                // monitor layout; refresh alone only repositions on a width
+                // change.
+                QTimer::singleShot(0, native, [native] {
+                    native->refresh();
+                    native->resize(native->width);
+                    if (IsWindowVisible(native->window)) {
+                        native->reposition();
+                    }
+                });
+            }
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
     }
 
     void ensureWindow()
@@ -151,8 +237,7 @@ struct DictationPanel::Native : QObject {
             WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             windowClassName, L"Speecher dictation", WS_POPUP,
             0, 0, panelWidth, panelHeight, nullptr, nullptr,
-            windowClass.hInstance, nullptr);
-        SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+            windowClass.hInstance, this);
 
         const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
         DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -220,6 +305,132 @@ struct DictationPanel::Native : QObject {
         resize(panelWidth);
     }
 
+    // The notices live in their own rounded acrylic surface floating above
+    // the pill, never inside the pill's slab: each one is a plain message
+    // with an explicitly labelled accent button beside it, so the action
+    // reads as a button rather than asking the user to guess that colored
+    // text is clickable.
+    void ensureBanner()
+    {
+        if (banner) {
+            return;
+        }
+        banner = CreateWindowExW(
+            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            windowClassName, L"Speecher notices", WS_POPUP,
+            0, 0, panelWidth, panelHeight, nullptr, nullptr,
+            GetModuleHandleW(nullptr), nullptr);
+        const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
+        DwmSetWindowAttribute(banner, DWMWA_WINDOW_CORNER_PREFERENCE,
+                              &corner, sizeof(corner));
+
+        bannerSource = DesktopWindowXamlSource();
+        bannerSource.Initialize(Microsoft::UI::GetWindowIdFromWindow(banner));
+
+        const auto accentStyle = Application::Current().Resources()
+                                     .Lookup(box_value(hstring(L"AccentButtonStyle")))
+                                     .as<Microsoft::UI::Xaml::Style>();
+        const auto makeRow = [&accentStyle](TextBlock &message, Button &action) {
+            StackPanel row;
+            row.Orientation(Orientation::Horizontal);
+            row.HorizontalAlignment(HorizontalAlignment::Center);
+            row.Spacing(10);
+            message = TextBlock();
+            message.VerticalAlignment(VerticalAlignment::Center);
+            message.TextWrapping(TextWrapping::Wrap);
+            row.Children().Append(message);
+            action = Button();
+            action.Style(accentStyle);
+            action.CornerRadius({8, 8, 8, 8});
+            action.Padding({14, 6, 14, 6});
+            row.Children().Append(action);
+            return row;
+        };
+
+        bannerRoot = StackPanel();
+        bannerRoot.Spacing(8);
+        bannerRoot.Padding({16, 10, 16, 10});
+        whatsNewRow = makeRow(whatsNewText, whatsNewAction);
+        whatsNewAction.Content(box_value(L"See what's new"));
+        whatsNewAction.Click([this](const auto &, const auto &) {
+            emit panel->whatsNewRequested();
+        });
+        Button whatsNewDismiss;
+        whatsNewDismiss.Width(28);
+        whatsNewDismiss.Height(28);
+        whatsNewDismiss.Padding({0, 0, 0, 0});
+        whatsNewDismiss.CornerRadius({14, 14, 14, 14});
+        FontIcon closeIcon;
+        closeIcon.Glyph(L"");
+        closeIcon.FontSize(10);
+        whatsNewDismiss.Content(closeIcon);
+        Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+            whatsNewDismiss, L"Dismiss what's new");
+        whatsNewDismiss.Click([this](const auto &, const auto &) {
+            controller->clearPendingWhatsNew();
+        });
+        whatsNewRow.Children().Append(whatsNewDismiss);
+        bannerRoot.Children().Append(whatsNewRow);
+        updateRow = makeRow(updateText, updateAction);
+        updateAction.Click([this](const auto &, const auto &) {
+            controller->updates()->installAndRestart();
+        });
+        bannerRoot.Children().Append(updateRow);
+        bannerSource.Content(bannerRoot);
+        bannerSource.SystemBackdrop(DesktopAcrylicBackdrop());
+    }
+
+    void refreshBanner()
+    {
+        auto *updates = controller->updates();
+        const auto notice = win::updateChipState(
+            updates->state(), updates->availableVersion(), updates->downloadPercent(),
+            updates->errorMessage(), updates->repeatedAutomaticCheckFailure(),
+            updates->manualInstallRequired(), controller->session()->state());
+        const bool showWhatsNew = !whatsNewHidden
+            && !controller->pendingWhatsNewVersion().isEmpty();
+        if (!window || !IsWindowVisible(window) || (!notice.visible && !showWhatsNew)) {
+            if (banner) {
+                ShowWindow(banner, SW_HIDE);
+            }
+            return;
+        }
+        ensureBanner();
+        bannerRoot.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
+        updateText.Text(hstring(notice.text.toStdWString()));
+        updateAction.Content(box_value(hstring(notice.action.toStdWString())));
+        updateAction.Visibility(notice.action.isEmpty() ? Visibility::Collapsed
+                                                        : Visibility::Visible);
+        updateAction.IsEnabled(notice.enabled);
+        updateRow.Visibility(notice.visible ? Visibility::Visible : Visibility::Collapsed);
+        whatsNewText.Text(hstring(
+            QStringLiteral("Speecher %1 installed")
+                .arg(updates->currentVersion().section(QLatin1Char('-'), 0, 0))
+                .toStdWString()));
+        whatsNewRow.Visibility(showWhatsNew ? Visibility::Visible : Visibility::Collapsed);
+        positionBanner();
+        ShowWindow(banner, SW_SHOWNOACTIVATE);
+    }
+
+    // Centered above the pill with a small gap, sized to the measured rows.
+    void positionBanner()
+    {
+        MONITORINFO monitor{sizeof(monitor)};
+        GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor);
+        const float maximumWidth = float(
+            (monitor.rcWork.right - monitor.rcWork.left) / scale() - screenEdgeMargin);
+        bannerRoot.Measure({maximumWidth, std::numeric_limits<float>::infinity()});
+        const int bannerWidth = px(int(std::ceil(bannerRoot.DesiredSize().Width)));
+        const int bannerHeight = px(int(std::ceil(bannerRoot.DesiredSize().Height)));
+        RECT pill{};
+        GetWindowRect(window, &pill);
+        const int x = pill.left + (pill.right - pill.left - bannerWidth) / 2;
+        const int y = pill.top - bannerHeight - px(bannerGap);
+        SetWindowPos(banner, HWND_TOPMOST, x, y, bannerWidth, bannerHeight,
+                     SWP_NOACTIVATE);
+        bannerSource.SiteBridge().MoveAndResize({0, 0, bannerWidth, bannerHeight});
+    }
+
     void show(quint64 generation)
     {
         problem.clear();
@@ -234,9 +445,14 @@ struct DictationPanel::Native : QObject {
         // Each dictation starts back at the floor, like the mac panel's
         // empty-preview reset, instead of inheriting the last one's width.
         resize(panelWidth);
+        whatsNewHidden = false;
         refresh();
         reposition();
         ShowWindow(window, SW_SHOWNOACTIVATE);
+        refreshBanner();
+        if (!controller->pendingWhatsNewVersion().isEmpty()) {
+            whatsNewAutoHide.start();
+        }
         if (loaded) {
             QTimer::singleShot(0, panel, [this, generation] {
                 presentedGeneration = generation;
@@ -252,14 +468,23 @@ struct DictationPanel::Native : QObject {
         pendingGeneration = 0;
         ensureWindow();
         applyTheme();
+        whatsNewHidden = false;
         refresh();
         reposition();
         ShowWindow(window, SW_SHOWNOACTIVATE);
+        refreshBanner();
+        if (!controller->pendingWhatsNewVersion().isEmpty()) {
+            whatsNewAutoHide.start();
+        }
     }
 
     void hide()
     {
+        whatsNewAutoHide.stop();
         setShimmer(false);
+        if (banner) {
+            ShowWindow(banner, SW_HIDE);
+        }
         if (window) {
             ShowWindow(window, SW_HIDE);
         }
@@ -429,6 +654,7 @@ struct DictationPanel::Native : QObject {
                 reposition();
             }
         }
+        refreshBanner();
     }
 
     double scale() const
@@ -477,13 +703,27 @@ struct DictationPanel::Native : QObject {
         const int y = monitor.rcWork.bottom - physicalHeight - px(bottomMargin);
         SetWindowPos(window, HWND_TOPMOST, x, y, physicalWidth, physicalHeight,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        if (banner && IsWindowVisible(banner)) {
+            positionBanner();
+        }
     }
 
     ApplicationController *controller;
     DictationPanel *panel;
     HWND window = nullptr;
+    HWND banner = nullptr;
     DesktopWindowXamlSource source{nullptr};
+    DesktopWindowXamlSource bannerSource{nullptr};
     Border chrome{nullptr};
+    StackPanel bannerRoot{nullptr};
+    StackPanel updateRow{nullptr};
+    TextBlock updateText{nullptr};
+    Button updateAction{nullptr};
+    StackPanel whatsNewRow{nullptr};
+    TextBlock whatsNewText{nullptr};
+    Button whatsNewAction{nullptr};
+    QTimer whatsNewAutoHide;
+    bool whatsNewHidden = false;
     FontIcon glyph{nullptr};
     TextBlock text{nullptr};
     TextBlock probe{nullptr};
@@ -505,43 +745,7 @@ struct DictationPanel::Native : QObject {
     bool completed = false;
     bool refining = false;
     bool loaded = false;
-
-    static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 };
-
-LRESULT CALLBACK DictationPanel::Native::windowProc(HWND window,
-                                                    UINT message,
-                                                    WPARAM wParam,
-                                                    LPARAM lParam)
-{
-    if (message == WM_DISPLAYCHANGE) {
-        RECT rect{};
-        POINT pointer{};
-        GetWindowRect(window, &rect);
-        GetCursorPos(&pointer);
-        MONITORINFO monitor{sizeof(monitor)};
-        GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
-        const int width = rect.right - rect.left;
-        SetWindowPos(window, HWND_TOPMOST,
-                     monitor.rcWork.left
-                         + (monitor.rcWork.right - monitor.rcWork.left - width) / 2,
-                     monitor.rcWork.bottom - (rect.bottom - rect.top) - bottomMargin,
-                     0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
-    }
-    if (message == WM_DPICHANGED) {
-        // Re-derive the physical size and the island's bounds at the new DPI.
-        auto *native = reinterpret_cast<Native *>(GetWindowLongPtrW(window, GWLP_USERDATA));
-        if (native) {
-            native->refresh();
-            native->resize(native->width);
-            if (IsWindowVisible(window)) {
-                native->reposition();
-            }
-            return 0;
-        }
-    }
-    return DefWindowProcW(window, message, wParam, lParam);
-}
 
 DictationPanel::DictationPanel(ApplicationController *controller, QObject *parent)
     : QObject(parent)

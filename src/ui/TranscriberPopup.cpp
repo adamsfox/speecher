@@ -8,6 +8,7 @@
 #include <QEasingCurve>
 #include <QFrame>
 #include <QEvent>
+#include <QHBoxLayout>
 #include <QFontMetrics>
 #include <QPalette>
 #include <QPaintEvent>
@@ -59,6 +60,64 @@ protected:
     }
 };
 
+// The popup's action chips: capsule buttons in the pill's own visual language,
+// painted like PillFrame because the popup floats on a translucent window
+// where a rectangular style-drawn button would not fit. Clickable chips fill
+// with the Highlight role so they read as buttons at a glance; a disabled chip
+// (a progress state such as "Downloading 42%") falls back to the pill's Base
+// capsule and reads as status. Palette roles only.
+class ChipButton final : public QPushButton {
+public:
+    explicit ChipButton(QWidget *parent = nullptr)
+        : QPushButton(parent)
+    {
+        setFlat(true);
+        setFocusPolicy(Qt::NoFocus);
+        setAttribute(Qt::WA_Hover);
+    }
+
+    QSize sizeHint() const override
+    {
+        const QSize label = fontMetrics().size(Qt::TextSingleLine, text());
+        return QSize(label.width() + 2 * kHorizontalPadding,
+                     label.height() + 2 * kVerticalPadding);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QPalette p = palette();
+
+        QColor fill = isEnabled() ? p.color(QPalette::Highlight)
+                                  : p.color(QPalette::Base);
+        if (isEnabled() && isDown()) {
+            fill = fill.darker(115);
+        } else if (isEnabled() && underMouse()) {
+            fill = fill.lighter(110);
+        }
+        QColor stroke = p.color(QPalette::Mid);
+        stroke.setAlpha(150);
+
+        const qreal dpr = devicePixelRatioF() > 0 ? devicePixelRatioF() : 1.0;
+        const qreal penWidth = 1.0 / dpr;
+        const qreal inset = penWidth / 2.0;
+        painter.setPen(isEnabled() ? Qt::NoPen : QPen(stroke, penWidth));
+        painter.setBrush(fill);
+        const QRectF capsule = QRectF(rect()).adjusted(inset, inset, -inset, -inset);
+        painter.drawRoundedRect(capsule, capsule.height() / 2.0, capsule.height() / 2.0);
+
+        painter.setPen(p.color(isEnabled() ? QPalette::HighlightedText
+                                           : QPalette::PlaceholderText));
+        painter.drawText(rect(), Qt::AlignCenter, text());
+    }
+
+private:
+    static constexpr int kHorizontalPadding = 14;
+    static constexpr int kVerticalPadding = 6;
+};
+
 // The thin countdown under an error. Painted here rather than by the style: a
 // 3px progress bar in any widget style still draws a frame, and the previous
 // stylesheet that hid it hardcoded the colours it replaced.
@@ -91,7 +150,6 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     , m_preview(new QLabel(this))
     , m_errorDismissProgress(new DismissBar(m_previewPill))
     , m_waveform(new WaveformWidget(this))
-    , m_updateChip(new QPushButton(this))
     , m_positioner(positioner ? positioner : new FallbackPopupPositioner(this))
 {
     m_layout = new QVBoxLayout(this);
@@ -154,12 +212,59 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
         emit errorDismissed();
     });
 
-    m_updateChip->setObjectName(QStringLiteral("updateChip"));
-    m_updateChip->setFlat(true);
-    m_updateChip->setFocusPolicy(Qt::NoFocus);
-    m_updateChip->hide();
-    connect(m_updateChip, &QPushButton::clicked, this, &TranscriberPopup::updateRequested);
-    m_layout->addWidget(m_updateChip, 0, Qt::AlignHCenter);
+    // Both notices are banners in the pill's own capsule: a plain message with
+    // an explicitly labelled button beside it, so the action reads as a button
+    // rather than asking the user to guess that colored text is clickable.
+    const auto makeBanner = [this](const char *name, QLabel *&text) {
+        auto *banner = new PillFrame(this);
+        banner->setObjectName(QLatin1String(name));
+        banner->setFrameShape(QFrame::NoFrame);
+        banner->setAutoFillBackground(false);
+        auto *layout = new QHBoxLayout(banner);
+        layout->setContentsMargins(16, 5, 5, 5);
+        layout->setSpacing(10);
+        text = new QLabel(banner);
+        text->setForegroundRole(QPalette::Text);
+        layout->addWidget(text);
+        banner->hide();
+        m_layout->addWidget(banner, 0, Qt::AlignHCenter);
+        return banner;
+    };
+
+    m_whatsNewRow = makeBanner("whatsNewRow", m_whatsNewText);
+    m_whatsNewText->setObjectName(QStringLiteral("whatsNewText"));
+    m_whatsNewAction = new ChipButton(m_whatsNewRow);
+    m_whatsNewAction->setObjectName(QStringLiteral("whatsNewAction"));
+    m_whatsNewAction->setText(QStringLiteral("See what's new"));
+    m_whatsNewDismiss = new ChipButton(m_whatsNewRow);
+    m_whatsNewDismiss->setObjectName(QStringLiteral("whatsNewDismiss"));
+    m_whatsNewDismiss->setText(QStringLiteral("✕"));
+    m_whatsNewDismiss->setToolTip(QStringLiteral("Dismiss"));
+    m_whatsNewDismiss->setAccessibleName(QStringLiteral("Dismiss what's new"));
+    m_whatsNewRow->layout()->addWidget(m_whatsNewAction);
+    m_whatsNewRow->layout()->addWidget(m_whatsNewDismiss);
+    connect(m_whatsNewAction, &QPushButton::clicked, this, &TranscriberPopup::whatsNewRequested);
+    connect(m_whatsNewDismiss, &QPushButton::clicked, this, [this] {
+        setWhatsNewBanner({}, false);
+        emit whatsNewDismissed();
+    });
+    m_whatsNewAutoHide = new QTimer(this);
+    m_whatsNewAutoHide->setObjectName(QStringLiteral("whatsNewAutoHide"));
+    m_whatsNewAutoHide->setSingleShot(true);
+    m_whatsNewAutoHide->setInterval(6000);
+    // Auto-hide only tidies this popup; the offer stays pending and returns
+    // with the next popup, unlike the dismiss button.
+    connect(m_whatsNewAutoHide, &QTimer::timeout, this, [this] {
+        setWhatsNewBanner({}, false);
+    });
+
+    m_updateBanner = makeBanner("updateBanner", m_updateBannerText);
+    m_updateBannerText->setObjectName(QStringLiteral("updateBannerText"));
+    m_updateBannerAction = new ChipButton(m_updateBanner);
+    m_updateBannerAction->setObjectName(QStringLiteral("updateBannerAction"));
+    m_updateBanner->layout()->addWidget(m_updateBannerAction);
+    connect(m_updateBannerAction, &QPushButton::clicked,
+            this, &TranscriberPopup::updateRequested);
     // No settings prompts here: the overlay cannot take focus and shows while
     // the user is speaking. Desktop accessibility is offered on the Dictation
     // page and in the setup assistant.
@@ -169,11 +274,14 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
 
 QSize TranscriberPopup::sizeHint() const
 {
+    // configurePopup asks for the hint from the constructor, before the
+    // banners exist.
     const int spacing = m_layout->spacing();
-    const int updateHeight = m_updateChip->isHidden()
-        ? 0
-        : m_updateChip->sizeHint().height() + spacing;
-    return QSize(620, 110 + updateHeight);
+    const auto bannerHeight = [spacing](const QFrame *banner) {
+        return !banner || banner->isHidden() ? 0
+                                             : banner->sizeHint().height() + spacing;
+    };
+    return QSize(620, 110 + bannerHeight(m_updateBanner) + bannerHeight(m_whatsNewRow));
 }
 
 void TranscriberPopup::setStatus(const QString &status)
@@ -348,15 +456,43 @@ void TranscriberPopup::showPopup(quint64 generation)
     show();
     raise();
     update();
+    if (!m_whatsNewRow->isHidden()) {
+        m_whatsNewAutoHide->start();
+    }
 }
 
-void TranscriberPopup::setUpdateChip(const QString &text, bool visible, bool enabled)
+void TranscriberPopup::setWhatsNewBanner(const QString &message, bool visible)
 {
-    const bool visibilityChanged = m_updateChip->isHidden() == visible;
-    const bool textChanged = m_updateChip->text() != text;
-    m_updateChip->setText(text);
-    m_updateChip->setEnabled(enabled);
-    m_updateChip->setVisible(visible);
+    const bool visibilityChanged = m_whatsNewRow->isHidden() == visible;
+    m_whatsNewText->setText(message);
+    m_whatsNewRow->setVisible(visible);
+    if (visible && isVisible()) {
+        m_whatsNewAutoHide->start();
+    } else if (!visible) {
+        m_whatsNewAutoHide->stop();
+    }
+    if (!visibilityChanged) {
+        return;
+    }
+    adjustSize();
+    if (isVisible()) {
+        m_positioner->positionBottomCenter(m_surface);
+    }
+}
+
+void TranscriberPopup::setUpdateBanner(const QString &message,
+                                       const QString &action,
+                                       bool actionEnabled)
+{
+    const bool visible = !message.isEmpty();
+    const bool visibilityChanged = m_updateBanner->isHidden() == visible;
+    const bool textChanged = m_updateBannerText->text() != message
+        || m_updateBannerAction->text() != action;
+    m_updateBannerText->setText(message);
+    m_updateBannerAction->setText(action);
+    m_updateBannerAction->setVisible(!action.isEmpty());
+    m_updateBannerAction->setEnabled(actionEnabled);
+    m_updateBanner->setVisible(visible);
     if (!visibilityChanged && !textChanged) {
         return;
     }

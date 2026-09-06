@@ -12,6 +12,7 @@ class QPushButton;
 class QPropertyAnimation;
 class QPaintEvent;
 class QResizeEvent;
+class QTimer;
 class QVBoxLayout;
 
 namespace speecher {
@@ -39,12 +40,18 @@ public slots:
     void showMessage(const QString &message);
     void showErrorMessage(const QString &message);
     void showPopup(quint64 generation);
-    void setUpdateChip(const QString &text, bool visible, bool enabled);
+    // A banner is a capsule holding a plain message and, when there is
+    // something to do, an explicitly labelled button ("Install and restart").
+    // An empty message hides the banner; an empty action hides the button.
+    void setUpdateBanner(const QString &message, const QString &action, bool actionEnabled);
+    void setWhatsNewBanner(const QString &message, bool visible);
 
 signals:
     void errorDismissed();
     void popupPresented(quint64 generation);
     void updateRequested();
+    void whatsNewRequested();
+    void whatsNewDismissed();
 
 protected:
     void changeEvent(QEvent *event) override;
@@ -68,7 +75,14 @@ private:
     QProgressBar *m_errorDismissProgress = nullptr;
     QPropertyAnimation *m_errorDismissAnimation = nullptr;
     WaveformWidget *m_waveform = nullptr;
-    QPushButton *m_updateChip = nullptr;
+    QFrame *m_updateBanner = nullptr;
+    QLabel *m_updateBannerText = nullptr;
+    QPushButton *m_updateBannerAction = nullptr;
+    QFrame *m_whatsNewRow = nullptr;
+    QLabel *m_whatsNewText = nullptr;
+    QPushButton *m_whatsNewAction = nullptr;
+    QPushButton *m_whatsNewDismiss = nullptr;
+    QTimer *m_whatsNewAutoHide = nullptr;
     PopupPositioner *m_positioner = nullptr;
     QtPopupSurface m_surface{this};
     quint64 m_pendingPresentationGeneration = 0;

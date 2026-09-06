@@ -104,6 +104,7 @@ CommandLineDecision parseCommandLine(const QStringList &arguments, const QString
         || verb == QStringLiteral("status")
         || verb == QStringLiteral("settings")
         || verb == QStringLiteral("setup")
+        || verb == QStringLiteral("grab")
         || verb == QStringLiteral("quit");
     decision.startListening = arguments.contains(QStringLiteral("--start-listening"));
     decision.showSettings = arguments.contains(QStringLiteral("--show-settings"));
@@ -168,7 +169,7 @@ int runCliCommand(const CommandLineDecision &decision,
     }
 
     if (command == QStringLiteral("stop") || command == QStringLiteral("status")
-        || command == QStringLiteral("quit")) {
+        || command == QStringLiteral("quit") || command == QStringLiteral("grab")) {
         std::cout << "idle\n";
         return 0;
     }

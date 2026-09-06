@@ -9,6 +9,7 @@
 #include "core/settings/CorrectionSettingsCodec.h"
 #include "core/settings/VocabularySettingsCodec.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -783,6 +784,39 @@ void SettingsCodecs::setAutoInstallUpdates(bool value)
     m_settings.setValue(SettingsKeys::UpdatesAutoInstall, value);
 }
 
+int SettingsCodecs::updateCheckIntervalMinutes() const
+{
+    // A hand-edited zero or negative interval would make the check timer spin.
+    return qMax(5, value(SettingsKeys::UpdatesCheckIntervalMinutes, 30).toInt());
+}
+
+void SettingsCodecs::setUpdateCheckIntervalMinutes(int value)
+{
+    m_settings.setValue(SettingsKeys::UpdatesCheckIntervalMinutes, value);
+}
+
+QString SettingsCodecs::updatesRestoreState() const
+{
+    return value(SettingsKeys::UpdatesRestoreState, QString()).toString();
+}
+
+void SettingsCodecs::setUpdatesRestoreState(const QString &value)
+{
+    if (value.isEmpty()) {
+        m_settings.remove(SettingsKeys::UpdatesRestoreState);
+        m_settings.remove(SettingsKeys::UpdatesRestoreStateTime);
+    } else {
+        m_settings.setValue(SettingsKeys::UpdatesRestoreState, value);
+        m_settings.setValue(SettingsKeys::UpdatesRestoreStateTime,
+                            QDateTime::currentMSecsSinceEpoch());
+    }
+}
+
+qint64 SettingsCodecs::updatesRestoreStateTime() const
+{
+    return value(SettingsKeys::UpdatesRestoreStateTime, 0).toLongLong();
+}
+
 qint64 SettingsCodecs::updatesLastCheckTime() const
 {
     return value(SettingsKeys::UpdatesLastCheckTime, 0).toLongLong();
@@ -996,6 +1030,7 @@ AppSettings SettingsCodecs::snapshot() const
     settings.updates.channel = updateChannel();
     settings.updates.autoCheck = autoCheckUpdates();
     settings.updates.autoInstall = autoInstallUpdates();
+    settings.updates.checkIntervalMinutes = updateCheckIntervalMinutes();
     return settings;
 }
 

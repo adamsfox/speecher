@@ -69,6 +69,58 @@ private slots:
         controller.reset();
     }
 
+    void updateChipFollowsUpdaterAndSessionState()
+    {
+        using State = UpdateController::State;
+        const auto chip = [](State state, DictationState session = DictationState::Idle,
+                             const QString &error = {}, bool repeated = false,
+                             bool manualInstall = false) {
+            return win::updateChipState(state, QStringLiteral("0.2.0"), 42,
+                                        error, repeated, manualInstall, session);
+        };
+        const auto available = chip(State::UpdateAvailable, DictationState::Listening);
+        QCOMPARE(available.text, QStringLiteral("Speecher 0.2.0 available"));
+        QCOMPARE(available.action, QStringLiteral("Install and restart"));
+        QVERIFY(available.visible && available.enabled);
+        QCOMPARE(win::updateChipState(State::UpdateAvailable,
+                                      QStringLiteral("0.2.0-nightly.20260906"), 0, {}, false,
+                                      false, DictationState::Idle)
+                     .text,
+                 QStringLiteral("Speecher 0.2.0 available"));
+        const auto downloading = chip(State::Downloading);
+        QCOMPARE(downloading.text, QStringLiteral("Downloading 42%"));
+        QVERIFY(downloading.visible && downloading.action.isEmpty() && !downloading.enabled);
+        const auto ready = chip(State::ReadyToRestart, DictationState::Listening);
+        QCOMPARE(ready.text, QStringLiteral("Update ready"));
+        QCOMPARE(ready.action, QStringLiteral("Restart now"));
+        QVERIFY(ready.visible && ready.enabled);
+        QCOMPARE(chip(State::ReadyToRestart, DictationState::Idle, "Install failed").text,
+                 QStringLiteral("Install failed"));
+        const auto pending = chip(State::RestartPending);
+        QCOMPARE(pending.text, QStringLiteral("Restarting after this dictation…"));
+        QVERIFY(pending.visible && pending.action.isEmpty() && !pending.enabled);
+        const auto restarting = chip(State::Restarting);
+        QCOMPARE(restarting.text, QStringLiteral("Restarting…"));
+        QVERIFY(restarting.visible && restarting.action.isEmpty() && !restarting.enabled);
+        const auto error = chip(State::Error, DictationState::Idle, "Download failed");
+        QCOMPARE(error.text, QStringLiteral("Download failed"));
+        QCOMPARE(error.action, QStringLiteral("Try again"));
+        QVERIFY(error.visible && error.enabled);
+        QCOMPARE(chip(State::Error, DictationState::Idle, "Download failed", false, true).action,
+                 QStringLiteral("Open release page"));
+        QVERIFY(!chip(State::Error, DictationState::Listening).enabled);
+        QVERIFY(chip(State::Error, DictationState::Error).enabled);
+        const auto failed = chip(State::CheckFailed, DictationState::Idle, {}, true);
+        QCOMPARE(failed.text, QStringLiteral("Update check failed"));
+        QCOMPARE(failed.action, QStringLiteral("Try again"));
+        QVERIFY(failed.visible && failed.enabled);
+        QVERIFY(!chip(State::CheckFailed, DictationState::Listening, {}, true).enabled);
+        for (State state : {State::Idle, State::Checking, State::UpToDate, State::CheckFailed}) {
+            const auto hidden = chip(state);
+            QVERIFY(!hidden.visible && !hidden.enabled);
+        }
+    }
+
     void retainedCollectionBaseline_data()
     {
         QTest::addColumn<bool>("scalarCommit");

@@ -108,6 +108,20 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build --output-on-failure
 
+      - name: Render update UI previews
+        env:
+          QT_QPA_PLATFORM: offscreen
+          SPEECHER_UPDATE_PREVIEW_DIR: ${{ runner.temp }}/update-previews
+        run: ctest --test-dir build -R speecher_mac_front_end --output-on-failure
+
+      - name: Upload update UI previews
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: update-ui-previews
+          path: ${{ runner.temp }}/update-previews
+          if-no-files-found: warn
+
       - name: Package app bundle
         env:
           SPEECHER_SIGN_IDENTITY: Speecher E2E

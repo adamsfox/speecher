@@ -24,6 +24,7 @@
 #include "platform/GlobalShortcutBinder.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QTimer>
 #ifdef Q_OS_MACOS
 #include <QPermissions>
@@ -134,7 +135,7 @@ ApplicationController::ApplicationController(bool popupOnly,
     m_session->setScreenshotContextProvider(
         m_platform->createScreenshotContextProvider(this));
 #ifdef Q_OS_MACOS
-    m_updates = new MacSparkleUpdater(m_settings, this);
+    m_updates = new MacSparkleUpdater(m_settings, m_session, this);
 #elif defined(Q_OS_WIN)
     m_updates = new WindowsInstallerUpdater(m_settings, m_session, this);
 #else
@@ -558,6 +559,16 @@ void ApplicationController::handleIpcCommand(const QString &command,
     } else if (command == QStringLiteral("showSetup")) {
         showSetup();
         SingleInstanceIpc::writeResponse(socket, response());
+    } else if (command == QStringLiteral("grab")) {
+        // Screenshot seam for end-to-end runs: saves the main window into
+        // SPEECHER_GRAB_DIR. The timestamp keeps a restarted process from
+        // overwriting a frame the pre-restart process saved.
+        const QString grabDir = qEnvironmentVariable("SPEECHER_GRAB_DIR");
+        const bool saved = !grabDir.isEmpty()
+            && grabMainWindow(QStringLiteral("%1/window-%2.png")
+                                  .arg(grabDir)
+                                  .arg(QDateTime::currentMSecsSinceEpoch()));
+        SingleInstanceIpc::writeResponse(socket, response(saved));
     } else if (command == QStringLiteral("status")) {
         SingleInstanceIpc::writeResponse(socket, response());
     } else if (command == QStringLiteral("quit")) {

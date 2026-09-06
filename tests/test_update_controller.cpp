@@ -15,6 +15,7 @@
 #include "ui/TranscriberPopup.h"
 
 #include <QFile>
+#include <QFrame>
 #include <QLabel>
 #include <QProcessEnvironment>
 #include <QPushButton>
@@ -113,9 +114,19 @@ public:
 
 class QtFrontEndTestAccess {
 public:
-    static QPushButton *updateChip(QtFrontEnd &frontEnd)
+    static QFrame *updateBanner(QtFrontEnd &frontEnd)
     {
-        return frontEnd.m_popup->findChild<QPushButton *>(QStringLiteral("updateChip"));
+        return frontEnd.m_popup->findChild<QFrame *>(QStringLiteral("updateBanner"));
+    }
+
+    static QLabel *updateBannerText(QtFrontEnd &frontEnd)
+    {
+        return frontEnd.m_popup->findChild<QLabel *>(QStringLiteral("updateBannerText"));
+    }
+
+    static TranscriberPopup *popup(QtFrontEnd &frontEnd)
+    {
+        return frontEnd.m_popup;
     }
 };
 
@@ -545,6 +556,120 @@ private slots:
         QCOMPARE(pendingUpdater.restartCount, 1);
     }
 
+    void installAndRestartWritesRestoreStateBeforeRestarting()
+    {
+        UpdateTestContext context(true);
+        TestManifestUpdater updater(&context.settings, context.session.get());
+        updater.setRestoreStateProvider([] { return QStringLiteral("settings"); });
+        ManifestUpdaterTestAccess::setState(updater,
+                                            UpdateController::State::ReadyToRestart);
+        updater.installAndRestart();
+        QCOMPARE(updater.restartCount, 1);
+        QCOMPARE(context.settings.updatesRestoreState(), QStringLiteral("settings"));
+        // The write is stamped so a relaunch can tell a fresh token from one a
+        // failed restart left behind.
+        QVERIFY(context.settings.updatesRestoreStateTime() > 0);
+        // Clearing the token drops its timestamp too, so an empty snapshot on a
+        // retry can't leave a stale one behind.
+        context.settings.setUpdatesRestoreState({});
+        QVERIFY(context.settings.updatesRestoreState().isEmpty());
+        QCOMPARE(context.settings.updatesRestoreStateTime(), qint64(0));
+
+        // A restart deferred to the end of a dictation restores what the user
+        // was doing when they asked, not the idle state the restart waited for.
+        UpdateTestContext pending(true);
+        TestManifestUpdater pendingUpdater(&pending.settings, pending.session.get());
+        pending.session->startListening();
+        QCOMPARE(pending.session->state(), DictationState::Starting);
+        pendingUpdater.setRestoreStateProvider([&pending] {
+            const DictationState state = pending.session->state();
+            return state == DictationState::Idle || state == DictationState::Error
+                ? QString()
+                : QStringLiteral("listening");
+        });
+        ManifestUpdaterTestAccess::setState(pendingUpdater,
+                                            UpdateController::State::ReadyToRestart);
+        pendingUpdater.installAndRestart();
+        QCOMPARE(pendingUpdater.state(), UpdateController::State::RestartPending);
+        pending.session->stopListening();
+        QCOMPARE(pendingUpdater.restartCount, 1);
+        QCOMPARE(pending.settings.updatesRestoreState(), QStringLiteral("listening"));
+    }
+
+    void installAndRestartInErrorStateOnlyRetriesTheCheck()
+    {
+        // Point the check at a closed port so the retry cannot reach GitHub.
+        qputenv("SPEECHER_UPDATE_MANIFEST_URL",
+                QByteArrayLiteral("https://127.0.0.1:1/update-manifest.json"));
+        const auto restoreUrl = qScopeGuard(
+            [] { qunsetenv("SPEECHER_UPDATE_MANIFEST_URL"); });
+
+        UpdateTestContext context(true);
+        TestManifestUpdater updater(&context.settings, context.session.get());
+        ManifestUpdaterTestAccess::setState(updater,
+                                            UpdateController::State::Error,
+                                            QStringLiteral("install failed"));
+        updater.installAndRestart();
+        QCOMPARE(updater.state(), UpdateController::State::Checking);
+        QCOMPARE(updater.restartCount, 0);
+    }
+
+#ifndef Q_OS_MACOS
+    void whatsNewChipOffersAutoHidesAndDismisses()
+    {
+        {
+            SettingsStore settings;
+            settings.raw().clear();
+            settings.setUpdatesLastRunVersion(QStringLiteral("0.0.1"));
+            settings.raw().setValue(QStringLiteral("updates/lastRunBuildNumber"), 1);
+        }
+        ApplicationController controller(true);
+        QVERIFY(!controller.pendingWhatsNewVersion().isEmpty());
+        QtFrontEnd frontEnd(&controller);
+        TranscriberPopup *popup = QtFrontEndTestAccess::popup(frontEnd);
+        auto *row = popup->findChild<QWidget *>(QStringLiteral("whatsNewRow"));
+        auto *message = popup->findChild<QLabel *>(QStringLiteral("whatsNewText"));
+        auto *action = popup->findChild<QPushButton *>(QStringLiteral("whatsNewAction"));
+        auto *timer = popup->findChild<QTimer *>(QStringLiteral("whatsNewAutoHide"));
+        QVERIFY(row && message && action && timer);
+        QVERIFY(!row->isHidden());
+        QVERIFY(message->text().contains(QStringLiteral("installed")));
+        QCOMPARE(action->text(), QStringLiteral("See what's new"));
+
+        // Auto-hide tidies the popup but keeps the offer pending; only the
+        // dismiss button drops it.
+        popup->showPopup(1);
+        QVERIFY(timer->isActive());
+        QCOMPARE(timer->interval(), 6000);
+        timer->stop();
+        timer->setInterval(0);
+        timer->start();
+        QTest::qWait(20);
+        QVERIFY(row->isHidden());
+        QVERIFY(!controller.pendingWhatsNewVersion().isEmpty());
+        popup->hide();
+
+        // The offer returns on the next popup, through the real show path
+        // rather than a hand-called refresh.
+        QMetaObject::invokeMethod(controller.session(),
+                                  "popupShowRequested",
+                                  Qt::DirectConnection,
+                                  Q_ARG(quint64, 2));
+        QVERIFY(!row->isHidden());
+
+        // Clicking the button asks to open the What's New page.
+        QSignalSpy whatsNewSpy(popup, &TranscriberPopup::whatsNewRequested);
+        action->click();
+        QCOMPARE(whatsNewSpy.count(), 1);
+
+        auto *dismiss = popup->findChild<QPushButton *>(QStringLiteral("whatsNewDismiss"));
+        QVERIFY(dismiss);
+        dismiss->click();
+        QVERIFY(row->isHidden());
+        QVERIFY(controller.pendingWhatsNewVersion().isEmpty());
+    }
+#endif
+
 #ifdef Q_OS_LINUX
     void restartPreservesAppImageExtractAndRunMode()
     {
@@ -601,7 +726,9 @@ private slots:
         context.settings.setUpdatesLastCheckTime(previousSuccess);
         TestManifestUpdater updater(&context.settings, context.session.get());
 
-        const QList<int> retryMinutes{5, 10, 20, 40, 60, 60};
+        // Backoff never retries slower than the configured check interval
+        // (30 minutes by default).
+        const QList<int> retryMinutes{5, 10, 20, 30, 30, 30};
         for (const int retryMinute : retryMinutes) {
             ManifestUpdaterTestAccess::finishCheck(
                 updater,
@@ -631,9 +758,12 @@ private slots:
                                             &updater),
             true);
         QVERIFY(context.settings.updatesLastCheckTime() > previousSuccess);
-        QCOMPARE(ManifestUpdaterTestAccess::retryInterval(updater),
-                 24 * 60 * minuteMs);
+        QCOMPARE(ManifestUpdaterTestAccess::retryInterval(updater), 30 * minuteMs);
         QVERIFY(!updater.repeatedAutomaticCheckFailure());
+
+        // Changing the configured interval reschedules the timer immediately.
+        context.settings.setUpdateCheckIntervalMinutes(60);
+        QCOMPARE(ManifestUpdaterTestAccess::retryInterval(updater), 60 * minuteMs);
     }
 
     void updateBannerActionsDescribeWhatTheyDo()
@@ -699,8 +829,9 @@ private slots:
         QtFrontEnd frontEnd(&controller);
         auto *controllerUpdater = dynamic_cast<ManifestUpdater *>(controller.updates());
         QVERIFY(controllerUpdater);
-        QPushButton *chip = QtFrontEndTestAccess::updateChip(frontEnd);
-        QVERIFY(chip);
+        QFrame *banner = QtFrontEndTestAccess::updateBanner(frontEnd);
+        QLabel *message = QtFrontEndTestAccess::updateBannerText(frontEnd);
+        QVERIFY(banner && message);
         ManifestUpdaterTestAccess::setAvailableVersion(*controllerUpdater,
                                                        QStringLiteral("2.0"));
         const QList<std::pair<UpdateController::State, bool>> chipStates{
@@ -719,22 +850,22 @@ private slots:
             ManifestUpdaterTestAccess::setState(*controllerUpdater,
                                                 state,
                                                 QStringLiteral("install failed"));
-            QCOMPARE(!chip->isHidden(), visible);
+            QCOMPARE(!banner->isHidden(), visible);
         }
         ManifestUpdaterTestAccess::setAutomaticCheckFailures(*controllerUpdater, 3);
         ManifestUpdaterTestAccess::setState(*controllerUpdater,
                                             UpdateController::State::CheckFailed,
                                             QStringLiteral("Could not check for updates"));
-        QVERIFY(!chip->isHidden());
-        QCOMPARE(chip->text(), QStringLiteral("Update check failed"));
+        QVERIFY(!banner->isHidden());
+        QCOMPARE(message->text(), QStringLiteral("Update check failed"));
         ManifestUpdaterTestAccess::setState(*controllerUpdater,
                                             UpdateController::State::Error,
                                             QStringLiteral("install failed"));
-        QVERIFY(!chip->isHidden());
-        QCOMPARE(chip->text(), QStringLiteral("install failed"));
+        QVERIFY(!banner->isHidden());
+        QCOMPARE(message->text(), QStringLiteral("install failed"));
         ManifestUpdaterTestAccess::setState(*controllerUpdater,
                                             UpdateController::State::Restarting);
-        QCOMPARE(chip->text(), QStringLiteral("Restarting…"));
+        QCOMPARE(message->text(), QStringLiteral("Restarting…"));
 #endif
     }
 

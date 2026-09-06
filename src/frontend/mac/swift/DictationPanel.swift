@@ -14,6 +14,9 @@ private let pillHeight: CGFloat = 72
 private let minimumPillWidth: CGFloat = 420
 private let previewChromeWidth: CGFloat = 190
 private let screenEdgeMargin: CGFloat = 80
+/// The update and what's-new banners stacked above the pill.
+private let bannerHeight: CGFloat = 36
+private let bannerSpacing: CGFloat = 8
 
 /// Scratch-branch-only E2E seam: every panel callback lands as a JSON line in
 /// SPEECHER_E2E_EVIDENCE_DIR/panel-events.jsonl for the harness to assert on.
@@ -64,6 +67,50 @@ final class DictationPanelState: ObservableObject {
     @Published var level: Float = 0
     @Published var phase = Phase.live
     @Published var problem = ""
+    /// The update banner's message, empty while there is nothing to offer, and
+    /// the label of the button beside it, empty for a passive progress state.
+    @Published var updateMessage = ""
+    @Published var updateAction = ""
+    /// The what's-new banner's message, empty once hidden or dismissed.
+    @Published var whatsNewMessage = ""
+}
+
+/// One banner capsule above the pill, on the pill's own material: a plain
+/// message with an explicitly labelled accent button beside it, so the action
+/// reads as a button rather than asking the user to guess that a colored
+/// capsule is clickable, exactly as on the Qt popup. Passive progress states
+/// pass no label and get no button.
+private struct PanelBanner: View {
+    let message: String
+    var actionLabel = ""
+    var action: () -> Void = {}
+    var dismiss: (() -> Void)? = nil
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(message)
+                .font(.callout)
+                .lineLimit(1)
+            if !actionLabel.isEmpty {
+                Button(actionLabel, action: action)
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+            }
+            if let dismiss {
+                Button(action: dismiss) {
+                    Image(systemName: "xmark")
+                        .imageScale(.small)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.circle)
+                .accessibilityLabel("Dismiss what's new")
+            }
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 5)
+        .frame(height: bannerHeight)
+        .background(.regularMaterial, in: .capsule)
+    }
 }
 
 /// One glass pill. This is the one place in this front end that asks for Liquid
@@ -72,8 +119,29 @@ final class DictationPanelState: ObservableObject {
 struct DictationPanelView: View {
     @ObservedObject var state: DictationPanelState
     let dismiss: () -> Void
+    let installUpdate: () -> Void
+    let openWhatsNew: () -> Void
+    let dismissWhatsNew: () -> Void
 
     var body: some View {
+        VStack(spacing: bannerSpacing) {
+            if !state.updateMessage.isEmpty {
+                PanelBanner(message: state.updateMessage,
+                            actionLabel: state.updateAction,
+                            action: installUpdate)
+            }
+            if !state.whatsNewMessage.isEmpty {
+                PanelBanner(message: state.whatsNewMessage,
+                            actionLabel: "See what's new",
+                            action: openWhatsNew,
+                            dismiss: dismissWhatsNew)
+            }
+            pill
+        }
+        .frame(maxHeight: .infinity, alignment: .bottom)
+    }
+
+    private var pill: some View {
         HStack {
             if finished {
                 // The delivery outcome takes the whole pill, centred as one
@@ -217,6 +285,7 @@ private struct ShimmerText: View {
 @MainActor
 final class SpeecherDictationPanel {
     private let state = DictationPanelState()
+    private let model: AppModel
     private let bridge: SpeecherBridge
     private let panel: NSPanel
     private var frozen = false
@@ -224,11 +293,18 @@ final class SpeecherDictationPanel {
     private(set) var presentedGeneration: UInt64 = 0
     private var levelObserver: AnyCancellable?
     private var screenObserver: AnyCancellable?
+    private var updateObserver: AnyCancellable?
+    private var whatsNewObserver: AnyCancellable?
+    private var whatsNewAutoHide: Timer?
+    /// Opens the settings window on the What's New pane. Set by SpeecherMacUI,
+    /// which owns that window.
+    var openWhatsNew: (() -> Void)?
     /// The panel is 28pt above the bottom of the screen it sits on, which is
     /// where the Qt popup put itself and where the eye expects it.
     private let bottomMargin: CGFloat = 28
 
     init(model: AppModel) {
+        self.model = model
         bridge = model.bridge
         // Non-activating is the whole point, and only an NSPanel accepts that
         // style mask. Borderless because the pill is the window: a titlebar
@@ -247,15 +323,30 @@ final class SpeecherDictationPanel {
         panel.animationBehavior = .utilityWindow
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.contentView = NSHostingView(rootView: DictationPanelView(state: state) { [weak self] in
-            self?.dismiss()
-        })
+        panel.contentView = NSHostingView(rootView: DictationPanelView(
+            state: state,
+            dismiss: { [weak self] in self?.dismiss() },
+            installUpdate: { [weak self] in self?.bridge.installUpdateAndRestart() },
+            openWhatsNew: { [weak self] in self?.openWhatsNew?() },
+            dismissWhatsNew: { [weak self] in
+                self?.setWhatsNewMessage("")
+                self?.bridge.clearPendingWhatsNew()
+            }))
         wire()
         installE2ECaptureSeam()
         // The level arrives through the model, which is the one reader of the
         // bridge's audio callback: two readers of one block would mean the
         // second one silently replaced the first.
         levelObserver = model.$level.sink { [weak self] level in self?.state.level = level }
+        updateObserver = model.$update.sink { [weak self] update in
+            self?.refreshUpdateBanner(update)
+        }
+        // A what's-new offer dismissed from the settings window leaves here too.
+        whatsNewObserver = model.$whatsNewPending.sink { [weak self] pending in
+            if !pending {
+                self?.setWhatsNewMessage("")
+            }
+        }
         screenObserver = NotificationCenter.default
             .publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in
@@ -393,8 +484,73 @@ final class SpeecherDictationPanel {
     /// The panel belongs on the display the user is working on, which on a
     /// multi-display Mac is often not the primary one.
     private func present() {
+        refreshWhatsNewBanner()
         position()
         panel.orderFrontRegardless()
+    }
+
+    /// The update banner's message and button for the state, exactly as the Qt
+    /// popup words them.
+    private func refreshUpdateBanner(_ update: AppModel.UpdateStatus) {
+        switch update.state {
+        case .updateAvailable:
+            // The bare number only: a nightly identifier's "-nightly…" suffix
+            // would stretch the banner across the screen, exactly as on the Qt
+            // popup (and as installedVersionNumber trims for the offer below).
+            // Clicking during a dictation is safe: the restart parks until the
+            // session is idle and the relaunch restores what was on screen.
+            let number = String(update.version.split(separator: "-").first ?? "")
+            setUpdateBanner("Speecher \(number) available", action: "Install and restart")
+        case .downloading:
+            setUpdateBanner("Downloading \(update.percent)%")
+        case .readyToRestart:
+            setUpdateBanner(update.error.isEmpty ? "Update ready" : update.error,
+                            action: "Restart now")
+        case .restartPending:
+            setUpdateBanner("Restarting after this dictation…")
+        case .restarting:
+            setUpdateBanner("Restarting…")
+        case .error:
+            setUpdateBanner(update.error, action: "Try again")
+        default:
+            setUpdateBanner("")
+        }
+    }
+
+    private func setUpdateBanner(_ message: String, action: String = "") {
+        state.updateMessage = message
+        state.updateAction = action
+        syncFrameHeight()
+    }
+
+    /// The offer returns with every showing of the panel and tidies itself away
+    /// six seconds later; only the dismiss button clears the pending state.
+    private func refreshWhatsNewBanner() {
+        setWhatsNewMessage(model.whatsNewPending
+            ? "Speecher \(model.installedVersionNumber) installed"
+            : "")
+        whatsNewAutoHide?.invalidate()
+        guard !state.whatsNewMessage.isEmpty else { return }
+        whatsNewAutoHide = Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async { self?.setWhatsNewMessage("") }
+        }
+    }
+
+    private func setWhatsNewMessage(_ message: String) {
+        state.whatsNewMessage = message
+        syncFrameHeight()
+    }
+
+    /// The window grows upward to make room for the banners: its origin is the
+    /// bottom-left corner, which position() pins above the screen edge.
+    private func syncFrameHeight() {
+        let banners = (state.updateMessage.isEmpty ? 0 : 1)
+            + (state.whatsNewMessage.isEmpty ? 0 : 1)
+        let height = pillHeight + CGFloat(banners) * (bannerHeight + bannerSpacing)
+        guard abs(panel.frame.height - height) >= 1 else { return }
+        var frame = panel.frame
+        frame.size.height = height
+        panel.setFrame(frame, display: true)
     }
 
     private func position() {

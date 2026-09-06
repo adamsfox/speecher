@@ -39,6 +39,7 @@ private:
 
     void wireSessionToPopup();
     void refreshUpdateChip();
+    void refreshWhatsNewChip();
     void watchForFirstFrame(QWidget *window);
 
     ApplicationController *m_controller;

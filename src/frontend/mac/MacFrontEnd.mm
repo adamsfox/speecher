@@ -3,6 +3,7 @@
 #include "app/ApplicationController.h"
 #include "app/UpdateController.h"
 #include "core/SettingsStore.h"
+#include "dictation/DictationSession.h"
 #include "frontend/mac/SpeecherBridge.h"
 
 #import <AppKit/AppKit.h>
@@ -12,6 +13,9 @@
 #import "SpeecherUI-Swift.h"
 
 #include <QApplication>
+#include <QDesktopServices>
+#include <QStringList>
+#include <QUrl>
 namespace speecher {
 
 struct MacFrontEnd::Native {
@@ -40,6 +44,29 @@ MacFrontEnd::MacFrontEnd(ApplicationController *controller)
     // The menu bar extra is the app's front door, so it exists from launch
     // rather than waiting for someone to ask for a window.
     m_native->ui = [[SpeecherMacUI alloc] initWithBridge:m_native->bridge];
+    // What a Sparkle relaunch should put back on screen, captured right before
+    // the process goes away. The tokens are main.cpp's.
+    // The provider outlives this front end on the controller's updater, so it
+    // retains the UI object rather than reaching through the Native struct.
+    SpeecherMacUI *ui = m_native->ui;
+    controller->updates()->setRestoreStateProvider([controller, ui] {
+        QStringList state;
+        const DictationState sessionState = controller->session()->state();
+        if (sessionState != DictationState::Idle && sessionState != DictationState::Error) {
+            state.append(QStringLiteral("listening"));
+        }
+        if (ui.settingsWindowVisible) {
+            state.append(QStringLiteral("settings"));
+        }
+        return state.join(QLatin1Char(','));
+    });
+    QObject::connect(controller->updates(),
+                     &UpdateController::openReleasePageRequested,
+                     controller,
+                     [] {
+                         QDesktopServices::openUrl(QUrl(QStringLiteral(
+                             "https://github.com/firemonster612/speecher/releases")));
+                     });
 }
 
 MacFrontEnd::~MacFrontEnd()

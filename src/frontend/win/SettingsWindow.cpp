@@ -641,7 +641,8 @@ struct SettingsWindow::Native {
                     ? QStringLiteral("Switch to Stable Release %1 (replaces this Nightly Build)")
                           .arg(updates->availableVersion())
                     : QStringLiteral("Speecher %1 is available").arg(updates->availableVersion())));
-            action(QStringLiteral("Update now"), [updates] { updates->updateNow(); });
+            action(QStringLiteral("Install and restart"),
+                   [updates] { updates->installAndRestart(); });
             banner.IsClosable(true);
             bannerCloseAction = [updates] { updates->dismissAvailableVersion(); };
             break;
@@ -758,6 +759,18 @@ bool SettingsWindow::offersWhatsNew(const QString &currentPane, const QString &p
 void SettingsWindow::show()
 {
     m_native->show();
+}
+
+void SettingsWindow::showWhatsNew()
+{
+    m_native->show();
+    m_native->showWhatsNew();
+}
+
+bool SettingsWindow::isVisible() const
+{
+    const HWND handle = m_native->windowHandle();
+    return handle && IsWindowVisible(handle);
 }
 
 bool SettingsWindow::capture(const QString &path)
