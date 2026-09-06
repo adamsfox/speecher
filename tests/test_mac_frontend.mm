@@ -51,14 +51,14 @@ SettingsRowModel *settingsRow(SettingsSchemaModel *schema, NSString *rowId)
     return nil;
 }
 
-// Whether ⌃⌥⇧F9 is unregistered system-wide right now: Carbon's exclusive
+// Whether the given ⌃⌥⇧ function key is unregistered system-wide: Carbon's exclusive
 // option refuses the registration while anyone — including this process's own
 // shortcut binder — holds the combination.
-bool hotKeyComboIsFree()
+bool hotKeyComboIsFree(UInt32 keyCode = kVK_F9)
 {
     const EventHotKeyID identifier{'spct', 99};
     EventHotKeyRef probe = nullptr;
-    const OSStatus status = RegisterEventHotKey(kVK_F9,
+    const OSStatus status = RegisterEventHotKey(keyCode,
                                                 controlKey | optionKey | shiftKey,
                                                 identifier,
                                                 GetApplicationEventTarget(),
@@ -321,8 +321,15 @@ private slots:
 
         [bridge endShortcutRecording];
         QVERIFY(hotKeyComboIsFree());
+        const unichar replacement = NSF10FunctionKey;
+        QVERIFY([bridge bindShortcutWithCharacters:[NSString stringWithCharacters:&replacement length:1]
+                                     modifierFlags:NSEventModifierFlagControl
+                                                   | NSEventModifierFlagOption
+                                                   | NSEventModifierFlagShift] == nil);
+        QVERIFY(hotKeyComboIsFree(kVK_F10));
         [bridge endShortcutRecording];
-        QVERIFY(!hotKeyComboIsFree());
+        QVERIFY(hotKeyComboIsFree());
+        QVERIFY(!hotKeyComboIsFree(kVK_F10));
     }
 
     // Ending a recording that bound a replacement keeps the replacement rather

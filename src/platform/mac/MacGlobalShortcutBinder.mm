@@ -201,6 +201,11 @@ bool MacGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString 
     if (!registerHotKey(shortcut, error)) {
         return false;
     }
+    if (m_suspensionCount > 0) {
+        // Validate conflicts now, but leave keys available to other recorders.
+        m_resumeBinding = true;
+        unregisterHotKey();
+    }
     m_shortcut = shortcut;
     storeShortcut(shortcut);
     return true;
