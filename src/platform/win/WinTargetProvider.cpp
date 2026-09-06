@@ -360,12 +360,8 @@ bool WinTargetProvider::insertText(const Target &target,
 
     m_valueBeforeInsertion = before;
     m_insertionOffset = selection->first;
-    if (currentText(m_native->focused.Get()) != value) {
-        if (error) {
-            *error = QStringLiteral("The focused control did not report the inserted text");
-        }
-        return false;
-    }
+    // SetValue already succeeded. TextDelivery verifies separately; treating
+    // unavailable or delayed readback as rejection could insert the text twice.
     return true;
 }
 
