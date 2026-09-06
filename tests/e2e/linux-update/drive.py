@@ -75,6 +75,15 @@ def descendants(node):
             yield from descendants(child)
 
 
+def showing(node) -> bool:
+    # Hidden widgets stay in the AT-SPI tree with their names, so presence
+    # alone would see a banner that auto-hid.
+    try:
+        return node.get_state_set().contains(Atspi.StateType.SHOWING)
+    except Exception:
+        return True
+
+
 def find_containing(text: str, timeout: float, role: str | None = None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -82,7 +91,11 @@ def find_containing(text: str, timeout: float, role: str | None = None):
         for node in descendants(desktop):
             try:
                 name = node.get_name() or ""
-                if text in name and (role is None or node.get_role_name() == role):
+                if (
+                    text in name
+                    and (role is None or node.get_role_name() == role)
+                    and showing(node)
+                ):
                     return node
             except Exception:
                 pass
