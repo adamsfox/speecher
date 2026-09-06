@@ -7,6 +7,7 @@
 #include "core/LearnedCorrection.h"
 #include "core/SettingsStore.h"
 #include "platform/CorrectionDiff.h"
+#include "platform/mac/MacMediaController.h"
 #include "platform/GlobalShortcutBinder.h"
 #ifdef Q_OS_LINUX
 #include "platform/LinuxDesktopIntegration.h"
@@ -838,6 +839,49 @@ private slots:
             QStringLiteral(".local/share/icons/hicolor/scalable/apps/io.github.firemonster612.speecher.svg"))));
     }
 #endif
+
+    void mediaOperationsStayOrderedAcrossSessions_data()
+    {
+        QTest::addColumn<bool>("pauseStillRunning");
+        QTest::newRow("late pause") << true;
+        QTest::newRow("late resume") << false;
+    }
+
+    void mediaOperationsStayOrderedAcrossSessions()
+    {
+        QFETCH(bool, pauseStillRunning);
+        using Action = MacMediaController::Action;
+        QList<std::pair<Action, MacMediaController::Completion>> pending;
+        bool playing = true;
+        MacMediaController media(
+            [] { return QStringList{QStringLiteral("player")}; },
+            [&](Action action, const QStringList &, MacMediaController::Completion completion) {
+                pending.append({action, std::move(completion)});
+            });
+        const auto complete = [&] {
+            auto [action, completion] = pending.takeFirst();
+            const bool wasPlaying = playing;
+            playing = action == Action::Resume;
+            completion(action == Action::Pause && wasPlaying
+                           ? QStringList{QStringLiteral("player")} : QStringList{});
+        };
+
+        media.pausePlaying();
+        if (!pauseStillRunning) complete();
+        media.resumePaused();
+        media.pausePlaying();
+        QCOMPARE(pending.size(), 1);
+        complete();
+        if (!pending.isEmpty()) complete();
+        QVERIFY(!playing);
+        QVERIFY(pending.isEmpty());
+
+        media.resumePaused();
+        QCOMPARE(pending.size(), 1);
+        complete();
+        QVERIFY(playing);
+        QVERIFY(pending.isEmpty());
+    }
 
     void correctionTrackerSettlesSamplesWithoutRealTimeWaits()
     {

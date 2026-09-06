@@ -24,6 +24,7 @@ public:
 private:
     bool registerHotKey(const QKeySequence &shortcut, QString *error);
     void unregisterHotKey();
+    void refreshKeyboardLayout();
 
     QKeySequence m_shortcut;
     // EventHotKeyRef, EventHandlerRef and EventHandlerUPP, kept opaque so this
