@@ -25,6 +25,15 @@ mkdir -p "$WORK"
 FIXTURE="$WORK/fixture"
 CERTS="$WORK/trust-certs"
 
+# AppImages self-extract into $TMPDIR, so it has to be on disk (a full RAM-backed
+# /tmp truncates a bundled library mid-extraction) yet short: the single-instance
+# IPC puts its Unix socket under $TMPDIR, and a deep path overflows sun_path's
+# 108 bytes. A short dir directly under $HOME satisfies both.
+E2E_TMP_BASE="$HOME/.spe-e2e"
+rm -rf "$E2E_TMP_BASE"
+mkdir -p "$E2E_TMP_BASE/build"
+export TMPDIR="$E2E_TMP_BASE/build"
+
 log() { printf '\n=== %s ===\n' "$*"; }
 
 # --- 1. Two AppImages, one build number apart ------------------------------
@@ -134,10 +143,16 @@ for flow in ${E2E_FLOWS:-popup settings}; do
   mkdir -p "$RUNTIME_DIR"
   chmod 700 "$RUNTIME_DIR"
   export XDG_RUNTIME_DIR="$RUNTIME_DIR"
+  # Short, disk-backed, and shared by the daemon (bound into bwrap) and the
+  # driver CLI so both resolve the IPC socket to the same path.
+  APP_TMPDIR="$E2E_TMP_BASE/$flow"
+  rm -rf "$APP_TMPDIR"
+  mkdir -p "$APP_TMPDIR"
   # A fresh install of the OLD AppImage for this flow, so the swap is real.
   cp "$WORK/old/Speecher.AppImage" "$FLOW_DIR/Speecher.AppImage"
   chmod +x "$FLOW_DIR/Speecher.AppImage"
-  export E2E_FLOW="$flow" E2E_FLOW_DIR="$FLOW_DIR" E2E_RUNTIME_DIR="$RUNTIME_DIR"
+  export E2E_FLOW="$flow" E2E_FLOW_DIR="$FLOW_DIR" E2E_RUNTIME_DIR="$RUNTIME_DIR" \
+         E2E_APP_TMPDIR="$APP_TMPDIR"
   if dbus-run-session -- kwin_wayland --virtual --width 1280 --height 900 \
        --no-lockscreen --no-global-shortcuts \
        --exit-with-session="$HERE/inner.sh" > "$FLOW_DIR/session.log" 2>&1; then

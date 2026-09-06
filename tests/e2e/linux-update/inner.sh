@@ -6,6 +6,10 @@ set -euo pipefail
 
 FLOW_DIR="$E2E_FLOW_DIR"
 APP="$FLOW_DIR/Speecher.AppImage"
+# Short, disk-backed tmp (set up by run.sh) for AppImage extraction and the IPC
+# socket; bound into bwrap below so the daemon and the driver share one path.
+APP_TMPDIR="$E2E_APP_TMPDIR"
+mkdir -p "$APP_TMPDIR"
 
 # Seed settings: setup already done, automatic check on, restart-safe stub
 # dictation, so a "start" opens the popup and stays listening.
@@ -44,6 +48,7 @@ PY
 
 COMMON_ENV=(
   APPIMAGE_EXTRACT_AND_RUN=1
+  TMPDIR="$APP_TMPDIR"
   QT_QPA_PLATFORM=wayland
   QT_ACCESSIBILITY=1
   QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
@@ -70,6 +75,7 @@ bwrap \
   --proc /proc \
   --bind /tmp /tmp \
   --bind "$FLOW_DIR" "$FLOW_DIR" \
+  --bind "$APP_TMPDIR" "$APP_TMPDIR" \
   --ro-bind "$E2E_CERTS" /etc/ssl/certs \
   env "${COMMON_ENV[@]}" "$APP" --daemon \
   > "$FLOW_DIR/app-stdio.log" 2>&1 &
@@ -81,6 +87,7 @@ E2E_FLOW_DIR="$FLOW_DIR" \
 E2E_NEW_VERSION="$E2E_NEW_VERSION" \
 SPEECHER_POPUP_CAPTURE_DIR="$FLOW_DIR/frames" \
 APPIMAGE_EXTRACT_AND_RUN=1 \
+TMPDIR="$APP_TMPDIR" \
 QT_QPA_PLATFORM=wayland \
 XDG_RUNTIME_DIR="$E2E_RUNTIME_DIR" \
 SPEECHER_UPDATE_MANIFEST_URL="https://localhost:$E2E_PORT/update-manifest.json" \
