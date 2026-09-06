@@ -1,6 +1,7 @@
 #include "platform/win/WinTargetProvider.h"
 
 #include "platform/win/WinCorrectionObserver.h"
+#include "output/win/WinPasteDelivery.h"
 
 #include <QEventLoop>
 #include <QFileInfo>
@@ -372,6 +373,10 @@ bool WinTargetProvider::preparePaste(const Target &target)
     if (!stillFocused(target)) {
         return false;
     }
+    WinPasteDelivery::waitForReleasedKeys();
+    if (!stillFocused(target)) {
+        return false;
+    }
     if (!target.secure && m_native->focused) {
         const QString value = currentText(m_native->focused.Get());
         const auto selection = selectionOffsets(m_native->focused.Get());
@@ -387,7 +392,7 @@ bool WinTargetProvider::preparePaste(const Target &target)
 
 bool WinTargetProvider::verifyInsertion(const Target &target, const QString &plainText)
 {
-    if (!m_native->focused || plainText.isEmpty() || target.secure
+    if (!m_native->focused || !m_insertionOffset || plainText.isEmpty() || target.secure
         || !stillFocused(target)) {
         return false;
     }

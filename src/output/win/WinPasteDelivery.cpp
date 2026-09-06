@@ -4,18 +4,42 @@
 
 namespace speecher {
 
+namespace {
+
+bool keysHeld()
+{
+    for (const int key : {VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN, int('V')}) {
+        if (GetAsyncKeyState(key) & 0x8000) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+void WinPasteDelivery::waitForReleasedKeys()
+{
+    const ULONGLONG started = GetTickCount64();
+    while (keysHeld()) {
+        if (GetTickCount64() - started >= 250) {
+            return;
+        }
+        // Do not pump the Qt event loop in the middle of text delivery.
+        Sleep(10);
+    }
+}
+
 bool WinPasteDelivery::paste(PasteMethod method, QString *error)
 {
     const HWND foreground = GetForegroundWindow();
-    // SendInput preserves the existing keyboard state. Held keys must not
-    // turn paste into another shortcut, or be released by our synthetic ups.
-    for (const int key : {VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN, int('V')}) {
-        if (GetAsyncKeyState(key) & 0x8000) {
-            if (error) {
-                *error = QStringLiteral("Release the held keys before pasting");
-            }
-            return false;
+    // A key can be pressed after preparation. Never alter that physical state
+    // or let it turn paste into a different shortcut.
+    if (keysHeld()) {
+        if (error) {
+            *error = QStringLiteral("Release the held keys before pasting");
         }
+        return false;
     }
 
     INPUT input[6]{};
