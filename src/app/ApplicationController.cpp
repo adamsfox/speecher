@@ -435,7 +435,8 @@ void ApplicationController::handleShortcutReleased()
         return;
     }
     m_shortcutStartedSession = false;
-    if (m_shortcutPress.elapsed() > pushToTalkHoldMs) {
+    if ((sessionActive() || m_microphoneStartPending)
+        && m_shortcutPress.elapsed() > pushToTalkHoldMs) {
         stopListening();
     }
 }

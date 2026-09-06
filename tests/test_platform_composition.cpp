@@ -306,6 +306,28 @@ private slots:
         controller.stopListening();
     }
 
+    void shortcutReleasePreservesRecordingError()
+    {
+        const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
+        ApplicationController controller(true, platform);
+        const bool setupCompleted = controller.settings()->setupCompleted();
+        const auto restore = qScopeGuard([&] { controller.settings()->setSetupCompleted(setupCompleted); });
+        controller.settings()->setSetupCompleted(true);
+        emit platform->binder->activated();
+        QVERIFY(platform->microphoneAnswer);
+        platform->microphoneAnswer(true);
+        QCOMPARE(controller.session()->state(), DictationState::Starting);
+        auto *audio = controller.findChild<AudioInput *>();
+        QVERIFY(audio);
+        emit audio->failed(QStringLiteral("Test microphone disconnected"));
+        QCOMPARE(controller.session()->state(), DictationState::Error);
+        QSignalSpy hidden(controller.session(), &DictationSession::popupHideRequested);
+        QTest::qSleep(410);
+        emit platform->binder->deactivated();
+        QCOMPARE(controller.session()->state(), DictationState::Error);
+        QVERIFY(hidden.isEmpty());
+    }
+
     void stopCancelsPendingMicrophoneStart()
     {
         const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
