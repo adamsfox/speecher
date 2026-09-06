@@ -533,6 +533,10 @@ LRESULT CALLBACK DictationPanel::Native::windowProc(HWND window,
         auto *native = reinterpret_cast<Native *>(GetWindowLongPtrW(window, GWLP_USERDATA));
         if (native) {
             native->refresh();
+            native->resize(native->width);
+            if (IsWindowVisible(window)) {
+                native->reposition();
+            }
             return 0;
         }
     }
