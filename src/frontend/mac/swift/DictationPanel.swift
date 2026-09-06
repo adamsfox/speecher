@@ -74,8 +74,11 @@ final class DictationPanelState: ObservableObject {
     @Published var whatsNewChip = ""
 }
 
-/// One small capsule above the pill: a line of text that is a button, and on
-/// the what's-new chip a dismiss beside it.
+/// One small capsule above the pill. Clickable states are a prominent accent
+/// capsule so the chip unmistakably reads as a button; passive progress states
+/// fall back to the pill's own material, status rather than action. The
+/// what's-new dismiss is a matching ✕ button beside the capsule, as on the Qt
+/// popup.
 private struct PanelChip: View {
     let text: String
     let enabled: Bool
@@ -84,25 +87,35 @@ private struct PanelChip: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Button(action: action) {
+            if enabled {
+                Button(action: action) {
+                    Text(text)
+                        .font(.callout)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .controlSize(.large)
+            } else {
                 Text(text)
                     .font(.callout)
                     .lineLimit(1)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .frame(height: chipHeight)
+                    .background(.regularMaterial, in: .capsule)
             }
-            .buttonStyle(.plain)
-            .disabled(!enabled)
             if let dismiss {
                 Button(action: dismiss) {
                     Image(systemName: "xmark")
                         .imageScale(.small)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.circle)
                 .accessibilityLabel("Dismiss what's new")
             }
         }
-        .padding(.horizontal, 14)
         .frame(height: chipHeight)
-        .background(.regularMaterial, in: .capsule)
     }
 }
 
@@ -490,7 +503,11 @@ final class SpeecherDictationPanel {
         let canAct = ["idle", "error"].contains(status.lowercased())
         switch update.state {
         case .updateAvailable:
-            setUpdateChip("Speecher \(update.version) available — install and restart",
+            // The bare number only: a nightly identifier's "-nightly…" suffix
+            // would stretch the chip across the screen, exactly as on the Qt
+            // popup (and as installedVersionNumber trims for the offer below).
+            let number = String(update.version.split(separator: "-").first ?? "")
+            setUpdateChip("Speecher \(number) available — install and restart",
                           enabled: true)
         case .downloading:
             setUpdateChip("Downloading \(update.percent)%", enabled: false)
