@@ -29,8 +29,12 @@ log() { printf '\n=== %s ===\n' "$*"; }
 
 # --- 1. Two AppImages, one build number apart ------------------------------
 build_appimage() {
-  local tag="$1" outdir="$WORK/$tag"
-  if [[ "${1:-}" == "" ]]; then return; fi
+  local tag="$1"
+  local outdir="$WORK/$tag"
+  if [[ -x "$outdir/Speecher.AppImage" && -n "${E2E_KEEP_BUILDS:-}" ]]; then
+    log "reusing existing $tag AppImage"
+    return
+  fi
   log "building $tag AppImage"
   rm -rf "$outdir"
   mkdir -p "$outdir"
@@ -38,7 +42,7 @@ build_appimage() {
   SPEECHER_APPDIR="$WORK/appdir-$tag" \
   SPEECHER_OUTPUT_DIR="$outdir" \
   SPEECHER_BUILD_TYPE=Release \
-  SPEECHER_APPIMAGE_CMAKE_EXTRA="-DSPEECHER_E2E_HOOKS=ON -DSPEECHER_WITH_KDE=OFF" \
+  SPEECHER_APPIMAGE_CMAKE_EXTRA="-DSPEECHER_E2E_HOOKS=ON -DSPEECHER_WITH_KDE=OFF -DSPEECHER_RELEASE_BUILD=OFF" \
     bash "$ROOT_DIR/packaging/build-appimage.sh" > "$outdir/build.log" 2>&1
   mv "$outdir"/Speecher*x86_64.AppImage "$outdir/Speecher.AppImage"
   chmod +x "$outdir/Speecher.AppImage"
@@ -53,11 +57,12 @@ if [[ "${1:-}" != "--reuse-build" ]]; then
   git -C "$ROOT_DIR" worktree remove --force "$NEW_WT" 2>/dev/null || true
   git -C "$ROOT_DIR" worktree add --detach "$NEW_WT" HEAD >/dev/null
   git -C "$NEW_WT" commit --allow-empty -m "e2e: advance build number" >/dev/null
+  mkdir -p "$WORK/new"
   SPEECHER_BUILD_DIR="$WORK/build-new" \
   SPEECHER_APPDIR="$WORK/appdir-new" \
   SPEECHER_OUTPUT_DIR="$WORK/new" \
   SPEECHER_BUILD_TYPE=Release \
-  SPEECHER_APPIMAGE_CMAKE_EXTRA="-DSPEECHER_E2E_HOOKS=ON -DSPEECHER_WITH_KDE=OFF" \
+  SPEECHER_APPIMAGE_CMAKE_EXTRA="-DSPEECHER_E2E_HOOKS=ON -DSPEECHER_WITH_KDE=OFF -DSPEECHER_RELEASE_BUILD=OFF" \
     bash "$NEW_WT/packaging/build-appimage.sh" > "$WORK/new/build.log" 2>&1
   mv "$WORK"/new/Speecher*x86_64.AppImage "$WORK/new/Speecher.AppImage"
   chmod +x "$WORK/new/Speecher.AppImage"
@@ -70,6 +75,8 @@ log "OLD: $OLD_VERSION"
 log "NEW: $NEW_VERSION"
 NEW_BUILD="$(sed -E 's/.*build ([0-9]+).*/\1/' <<<"$NEW_VERSION")"
 NEW_SHORT="$(sed -E 's/speecher ([^ ]+).*/\1/' <<<"$NEW_VERSION")"
+export E2E_OLD_SHORT="$(sed -E 's/speecher ([^ ]+).*/\1/' <<<"$OLD_VERSION")"
+export E2E_OLD_BUILD="$(sed -E 's/.*build ([0-9]+).*/\1/' <<<"$OLD_VERSION")"
 
 # --- 2. Fixture: TLS cert + manifest pointing at the NEW AppImage ----------
 log "building fixture"
@@ -115,16 +122,22 @@ export E2E_WORK="$WORK"
 export E2E_HERE="$HERE"
 
 overall=0
-for flow in popup settings; do
+for flow in ${E2E_FLOWS:-popup settings}; do
   log "flow: $flow"
   FLOW_DIR="$WORK/flow-$flow"
   rm -rf "$FLOW_DIR"
-  mkdir -p "$FLOW_DIR"/{config,data,cache,runtime,frames,grabs}
-  chmod 700 "$FLOW_DIR/runtime"
+  mkdir -p "$FLOW_DIR"/{config,data,cache,frames,grabs}
+  # A Wayland/IPC socket path over 108 bytes overflows sun_path, so the runtime
+  # dir has to be short. kwin (here) and the app (inner.sh) must share it.
+  RUNTIME_DIR="/tmp/spe-e2e-$flow"
+  rm -rf "$RUNTIME_DIR"
+  mkdir -p "$RUNTIME_DIR"
+  chmod 700 "$RUNTIME_DIR"
+  export XDG_RUNTIME_DIR="$RUNTIME_DIR"
   # A fresh install of the OLD AppImage for this flow, so the swap is real.
   cp "$WORK/old/Speecher.AppImage" "$FLOW_DIR/Speecher.AppImage"
   chmod +x "$FLOW_DIR/Speecher.AppImage"
-  export E2E_FLOW="$flow" E2E_FLOW_DIR="$FLOW_DIR"
+  export E2E_FLOW="$flow" E2E_FLOW_DIR="$FLOW_DIR" E2E_RUNTIME_DIR="$RUNTIME_DIR"
   if dbus-run-session -- kwin_wayland --virtual --width 1280 --height 900 \
        --no-lockscreen --no-global-shortcuts \
        --exit-with-session="$HERE/inner.sh" > "$FLOW_DIR/session.log" 2>&1; then

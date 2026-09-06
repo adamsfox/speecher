@@ -123,11 +123,6 @@ public:
     {
         return frontEnd.m_popup;
     }
-
-    static void refreshWhatsNewChip(QtFrontEnd &frontEnd)
-    {
-        frontEnd.refreshWhatsNewChip();
-    }
 };
 
 } // namespace speecher
@@ -626,8 +621,8 @@ private slots:
         QVERIFY(!row->isHidden());
         QVERIFY(chip->text().contains(QStringLiteral("see what's new")));
 
-        // Auto-hide tidies the popup but keeps the offer pending for the next
-        // one; only the dismiss button drops it.
+        // Auto-hide tidies the popup but keeps the offer pending; only the
+        // dismiss button drops it.
         popup->showPopup(1);
         QVERIFY(timer->isActive());
         QCOMPARE(timer->interval(), 6000);
@@ -639,8 +634,19 @@ private slots:
         QVERIFY(!controller.pendingWhatsNewVersion().isEmpty());
         popup->hide();
 
-        QtFrontEndTestAccess::refreshWhatsNewChip(frontEnd);
+        // The offer returns on the next popup, through the real show path
+        // rather than a hand-called refresh.
+        QMetaObject::invokeMethod(controller.session(),
+                                  "popupShowRequested",
+                                  Qt::DirectConnection,
+                                  Q_ARG(quint64, 2));
         QVERIFY(!row->isHidden());
+
+        // Clicking the chip asks to open the What's New page.
+        QSignalSpy whatsNewSpy(popup, &TranscriberPopup::whatsNewRequested);
+        chip->click();
+        QCOMPARE(whatsNewSpy.count(), 1);
+
         auto *dismiss = popup->findChild<QToolButton *>(QStringLiteral("whatsNewDismiss"));
         QVERIFY(dismiss);
         dismiss->click();

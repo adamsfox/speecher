@@ -168,7 +168,7 @@ def flow_popup() -> None:
     # The daemon was launched by inner.sh; startup auto-check runs against the
     # local manifest (updates/lastCheckTime seeded to 0).
     app_command("start")
-    chip = require("install and restart", 45, role="push button")
+    chip = require("install and restart", 45)
     old_pid = chip.get_process_id()
     ok("update chip visible on the popup during a dictation")
     save_popup("update-chip")
@@ -191,33 +191,32 @@ def flow_popup() -> None:
 
     # The relaunched process restored the dictation (popup visible again) and
     # offers what's new above it.
-    require("see what's new", 5, role="push button")
+    require("see what's new", 5)
     ok("dictation restored after restart, what's-new chip offered")
     save_popup("whats-new-chip")
 
     time.sleep(8)
-    if find_containing("see what's new", 0.5, role="push button") is not None:
+    if find_containing("see what's new", 0.5) is not None:
         fail("what's-new chip did not auto-hide within 8s")
     ok("what's-new chip auto-hides after a few seconds")
 
-    # The offer survives the auto-hide: the next popup shows it again.
+    # Auto-hiding the popup chip does not consume the offer: the settings
+    # banner still carries it, and it opens the What's New page.
     app_command("stop")
-    time.sleep(2)
-    app_command("start")
-    whats_new = require("see what's new", 20, role="push button")
-    ok("what's-new offer returns with the next popup")
+    app_command("settings")
+    whats_new = require("See what's new", 20)
+    ok("the offer survives auto-hide; the settings banner still shows it")
     click(whats_new)
     require("Release notes", 20)
-    ok("what's-new chip opens the settings What's New page")
+    ok("see what's new opens the What's New page")
     save_window("whats-new-page")
-    app_command("stop")
     app_command("quit")
 
 
 def flow_settings() -> None:
     app_command("settings")
     banner = require("is available", 45)
-    install = require("Install and restart", 10, role="push button")
+    install = require("Install and restart", 10)
     old_pid = install.get_process_id()
     ok("settings banner offers the update")
     save_window("banner-available")

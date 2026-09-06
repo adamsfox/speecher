@@ -29,6 +29,8 @@ autoCheck=true
 autoInstall=false
 channel=stable
 lastCheckTime=0
+lastRunVersion=$E2E_OLD_SHORT
+lastRunBuildNumber=$E2E_OLD_BUILD
 INI
 
 # A short silent WAV that WavFileAudioInput loops as room tone; the stub
@@ -56,7 +58,7 @@ COMMON_ENV=(
   XDG_CONFIG_HOME="$FLOW_DIR/config"
   XDG_DATA_HOME="$FLOW_DIR/data"
   XDG_CACHE_HOME="$FLOW_DIR/cache"
-  XDG_RUNTIME_DIR="$FLOW_DIR/runtime"
+  XDG_RUNTIME_DIR="$E2E_RUNTIME_DIR"
 )
 
 sleep 1
@@ -80,7 +82,7 @@ E2E_NEW_VERSION="$E2E_NEW_VERSION" \
 SPEECHER_POPUP_CAPTURE_DIR="$FLOW_DIR/frames" \
 APPIMAGE_EXTRACT_AND_RUN=1 \
 QT_QPA_PLATFORM=wayland \
-XDG_RUNTIME_DIR="$FLOW_DIR/runtime" \
+XDG_RUNTIME_DIR="$E2E_RUNTIME_DIR" \
 SPEECHER_UPDATE_MANIFEST_URL="https://localhost:$E2E_PORT/update-manifest.json" \
 SSL_CERT_FILE="$E2E_FIXTURE/cert.pem" \
 SPEECHER_AUDIO_WAV="$FLOW_DIR/mic.wav" \

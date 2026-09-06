@@ -24,6 +24,7 @@
 #include "platform/GlobalShortcutBinder.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QTimer>
 #ifdef Q_OS_MACOS
 #include <QPermissions>
@@ -560,13 +561,13 @@ void ApplicationController::handleIpcCommand(const QString &command,
         SingleInstanceIpc::writeResponse(socket, response());
     } else if (command == QStringLiteral("grab")) {
         // Screenshot seam for end-to-end runs: saves the main window into
-        // SPEECHER_GRAB_DIR, numbered so a flow can grab several states.
+        // SPEECHER_GRAB_DIR. The timestamp keeps a restarted process from
+        // overwriting a frame the pre-restart process saved.
         const QString grabDir = qEnvironmentVariable("SPEECHER_GRAB_DIR");
-        static int grabNumber = 0;
         const bool saved = !grabDir.isEmpty()
             && grabMainWindow(QStringLiteral("%1/window-%2.png")
                                   .arg(grabDir)
-                                  .arg(++grabNumber, 2, 10, QLatin1Char('0')));
+                                  .arg(QDateTime::currentMSecsSinceEpoch()));
         SingleInstanceIpc::writeResponse(socket, response(saved));
     } else if (command == QStringLiteral("status")) {
         SingleInstanceIpc::writeResponse(socket, response());

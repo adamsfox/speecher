@@ -60,6 +60,13 @@ QtFrontEnd::QtFrontEnd(ApplicationController *controller, QObject *parent)
             &DictationSession::stateChanged,
             this,
             &QtFrontEnd::refreshUpdateChip);
+    // Each popup re-derives the What's New chip: the offer auto-hides per
+    // appearance but returns on the next dictation until it is dismissed, the
+    // same as the mac and Windows panels.
+    connect(controller->session(),
+            &DictationSession::popupShowRequested,
+            this,
+            &QtFrontEnd::refreshWhatsNewChip);
     refreshUpdateChip();
     refreshWhatsNewChip();
 
@@ -84,6 +91,9 @@ QtFrontEnd::QtFrontEnd(ApplicationController *controller, QObject *parent)
 
 QtFrontEnd::~QtFrontEnd()
 {
+    // The updater outlives the front end, so drop the provider that reaches
+    // back into this object and its windows.
+    m_controller->updates()->setRestoreStateProvider({});
     delete m_popup;
 }
 
