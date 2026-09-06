@@ -24,31 +24,6 @@ using namespace winrt::Microsoft::UI::Xaml;
 using namespace winrt::Microsoft::UI::Xaml::Controls;
 using winrt::Windows::System::VirtualKey;
 
-// The Qt key a Windows virtual key stands for. Qt's enum uses the unshifted
-// character for every printable key the binder accepts, so the binder's own
-// table stays the only list of what Windows can register.
-int qtKeyForVirtualKey(int virtualKey)
-{
-    if (virtualKey >= VK_F1 && virtualKey <= VK_F24) {
-        return Qt::Key_F1 + (virtualKey - VK_F1);
-    }
-    switch (virtualKey) {
-    case VK_SPACE:
-        return Qt::Key_Space;
-    case VK_RETURN:
-        return Qt::Key_Return;
-    case VK_TAB:
-        return Qt::Key_Tab;
-    default:
-        break;
-    }
-    const UINT character = MapVirtualKeyW(static_cast<UINT>(virtualKey), MAPVK_VK_TO_CHAR);
-    if (character == 0) {
-        return 0;
-    }
-    return QChar(static_cast<char16_t>(character & 0xFFFF)).toUpper().unicode();
-}
-
 bool isModifierKey(VirtualKey key)
 {
     switch (key) {
@@ -69,32 +44,14 @@ bool isModifierKey(VirtualKey key)
     }
 }
 
-Qt::KeyboardModifiers heldModifiers()
-{
-    Qt::KeyboardModifiers modifiers;
-    if (GetKeyState(VK_CONTROL) & 0x8000) {
-        modifiers |= Qt::ControlModifier;
-    }
-    if (GetKeyState(VK_MENU) & 0x8000) {
-        modifiers |= Qt::AltModifier;
-    }
-    if (GetKeyState(VK_SHIFT) & 0x8000) {
-        modifiers |= Qt::ShiftModifier;
-    }
-    if ((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) {
-        modifiers |= Qt::MetaModifier;
-    }
-    return modifiers;
-}
-
 void bind(PaneHost &host, const VirtualKey key)
 {
-    const int qtKey = qtKeyForVirtualKey(static_cast<int>(key));
+    const int qtKey = ShortcutRecorder::qtKeyForVirtualKey(static_cast<int>(key));
     if (qtKey == 0) {
         host.shortcutProblem = QStringLiteral("That key cannot be part of a shortcut.");
         return;
     }
-    const Qt::KeyboardModifiers modifiers = heldModifiers();
+    const Qt::KeyboardModifiers modifiers = ShortcutRecorder::heldModifiers();
     // A shortcut with no modifier would swallow the key everywhere on the
     // desktop, including in whatever the dictation is going into.
     if (modifiers == Qt::NoModifier) {
@@ -113,6 +70,65 @@ void bind(PaneHost &host, const VirtualKey key)
 }
 
 } // namespace
+
+// The Qt key a Windows virtual key stands for. Qt's enum uses the unshifted
+// character for every printable key the binder accepts, so the binder's own
+// mapping stays the only list of what Windows can register.
+int ShortcutRecorder::qtKeyForVirtualKey(int virtualKey)
+{
+    if (virtualKey >= VK_F1 && virtualKey <= VK_F24) {
+        return Qt::Key_F1 + (virtualKey - VK_F1);
+    }
+    switch (virtualKey) {
+    case VK_SPACE:
+        return Qt::Key_Space;
+    case VK_RETURN:
+        return Qt::Key_Return;
+    case VK_TAB:
+        return Qt::Key_Tab;
+    default:
+        break;
+    }
+    const UINT character = MapVirtualKeyW(static_cast<UINT>(virtualKey), MAPVK_VK_TO_CHAR);
+    if ((character & 0xFFFF) < 0x20) {
+        return 0;
+    }
+    return QChar(static_cast<char16_t>(character & 0xFFFF)).toUpper().unicode();
+}
+
+Qt::KeyboardModifiers ShortcutRecorder::heldModifiers()
+{
+    Qt::KeyboardModifiers modifiers;
+    if (GetKeyState(VK_CONTROL) & 0x8000) {
+        modifiers |= Qt::ControlModifier;
+    }
+    if (GetKeyState(VK_MENU) & 0x8000) {
+        modifiers |= Qt::AltModifier;
+    }
+    if (GetKeyState(VK_SHIFT) & 0x8000) {
+        modifiers |= Qt::ShiftModifier;
+    }
+    if ((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) {
+        modifiers |= Qt::MetaModifier;
+    }
+    return modifiers;
+}
+
+void ShortcutRecorder::setRecording(PaneHost &host, bool recording)
+{
+    if (host.shortcutRecording == recording || !host.controller) {
+        return;
+    }
+    host.shortcutRecording = recording;
+    if (recording) {
+        host.controller->suspendGlobalShortcut();
+        return;
+    }
+    const QString error = host.controller->resumeGlobalShortcut();
+    if (!error.isEmpty()) {
+        host.shortcutProblem = error;
+    }
+}
 
 void ShortcutRecorder::appendPane(const StackPanel &column, PaneHost &host)
 {
@@ -135,17 +151,24 @@ void ShortcutRecorder::appendPane(const StackPanel &column, PaneHost &host)
     recorder.MinWidth(120);
     recorder.IsEnabled(host.controller->globalShortcutsSupported());
     recorder.Click([&host](const auto &, const auto &) {
-        host.shortcutRecording = !host.shortcutRecording;
         host.shortcutProblem.clear();
+        setRecording(host, !host.shortcutRecording);
         host.refresh();
     });
+    // The pane is rebuilt to arm the recorder; without focus in the rebuilt
+    // subtree the PreviewKeyDown below would never see a key.
+    if (host.shortcutRecording) {
+        recorder.Loaded([](const IInspectable &sender, const auto &) {
+            sender.as<Button>().Focus(FocusState::Programmatic);
+        });
+    }
 
     Button reset;
     reset.Content(box_value(L"Reset to Ctrl+Alt+D"));
     reset.IsEnabled(host.controller->globalShortcutsSupported());
     reset.Click([&host](const auto &, const auto &) {
         QString error;
-        host.shortcutRecording = false;
+        setRecording(host, false);
         if (host.controller->setGlobalShortcut(WinGlobalShortcutBinder::defaultShortcut(), &error)) {
             host.shortcutProblem.clear();
         } else {
@@ -202,7 +225,7 @@ void ShortcutRecorder::appendPane(const StackPanel &column, PaneHost &host)
             return;
         }
         args.Handled(true);
-        host.shortcutRecording = false;
+        setRecording(host, false);
         if (args.Key() != VirtualKey::Escape) {
             bind(host, args.Key());
         }

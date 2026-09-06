@@ -65,6 +65,9 @@ private slots:
             QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_D),
             QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space),
             QKeySequence(Qt::ALT | Qt::Key_F5),
+            // Punctuation maps through the active layout; comma sits on
+            // VK_OEM_COMMA on effectively every layout.
+            QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_Comma),
         };
         for (const QKeySequence &shortcut : shortcuts) {
             QString error;
@@ -76,12 +79,43 @@ private slots:
         }
     }
 
-    void keyboardBreakReleasesPressedShortcut()
+    void suspendReleasesHotkeyUntilLastResume()
+    {
+        USEROBJECTFLAGS station{};
+        if (!GetUserObjectInformationW(GetProcessWindowStation(), UOI_FLAGS,
+                                        &station, sizeof(station), nullptr)
+            || !(station.dwFlags & WSF_VISIBLE)) {
+            QSKIP("Global Shortcut registration requires an interactive window station");
+        }
+        WinGlobalShortcutBinder shortcut;
+        QString error;
+        QVERIFY2(shortcut.setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F23), &error),
+                 qPrintable(error));
+        QVERIFY(shortcut.m_hotKeyId != 0);
+
+        shortcut.suspend();
+        shortcut.suspend();
+        QCOMPARE(shortcut.m_hotKeyId, 0);
+
+        // A rebind while suspended validates but leaves the keys available.
+        QVERIFY2(shortcut.setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F24), &error),
+                 qPrintable(error));
+        QCOMPARE(shortcut.m_hotKeyId, 0);
+
+        QCOMPARE(shortcut.resume(), QString());
+        QCOMPARE(shortcut.m_hotKeyId, 0);
+        QCOMPARE(shortcut.resume(), QString());
+        QVERIFY(shortcut.m_hotKeyId != 0);
+        QCOMPARE(shortcut.shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F24));
+    }
+
+    void keyboardBreakReleasesSuspendedShortcutOnce()
     {
         WinGlobalShortcutBinder shortcut;
         QSignalSpy deactivated(&shortcut, &GlobalShortcutBinder::deactivated);
-        shortcut.m_virtualKey = 'D';
+        shortcut.m_pressedKey = 'D';
         shortcut.m_pressed = true;
+        shortcut.suspend();
 
         RAWINPUT input{};
         input.header.dwType = RIM_TYPEKEYBOARD;
@@ -90,6 +124,9 @@ private slots:
         shortcut.handleRawInput(input);
 
         QCOMPARE(deactivated.count(), 1);
+        shortcut.handleRawInput(input);
+        QCOMPARE(deactivated.count(), 1);
+        QCOMPARE(shortcut.resume(), QString());
     }
 
     void qtClipboardSnapshotRestoresFormatsWithoutAManifest()

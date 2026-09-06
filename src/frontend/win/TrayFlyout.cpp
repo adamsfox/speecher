@@ -36,6 +36,8 @@ using namespace Microsoft::UI::Xaml::Controls;
 using namespace Microsoft::UI::Xaml::Hosting;
 using namespace Microsoft::UI::Xaml::Media;
 
+// DIPs, as the XAML content measures them; show() scales by the target
+// monitor's DPI before sizing the HWND and the island.
 constexpr int flyoutWidth = 300;
 constexpr int flyoutHeight = 280;
 constexpr auto windowClassName = L"SpeecherTrayFlyout";
@@ -208,6 +210,7 @@ struct TrayFlyout::Native {
 
         source.Content(root);
         source.SystemBackdrop(DesktopAcrylicBackdrop());
+        content = root;
         refresh();
     }
 
@@ -244,15 +247,26 @@ struct TrayFlyout::Native {
     void show(const RECT &iconRect)
     {
         ensureWindow();
+        // The XAML tree outlives a theme change in Settings; the captured
+        // RequestedTheme has to follow it on the next showing.
+        content.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
         RECT anchor = iconRect;
+        // Land on the anchor's monitor first, while still hidden, so the
+        // window's DPI is that monitor's before the DIP constants are scaled.
+        SetWindowPos(window, HWND_TOPMOST, anchor.left, anchor.top, 0, 0,
+                     SWP_NOSIZE | SWP_NOACTIVATE);
+        const double scale = GetDpiForWindow(window) / 96.0;
+        const int width = int(flyoutWidth * scale + 0.5);
+        const int height = int(flyoutHeight * scale + 0.5);
         HMONITOR monitorHandle = MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST);
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(monitorHandle, &monitor);
-        int x = anchor.left + (anchor.right - anchor.left - flyoutWidth) / 2;
-        int y = anchor.top - flyoutHeight - 8;
-        x = std::clamp(x, int(monitor.rcWork.left), int(monitor.rcWork.right) - flyoutWidth);
-        y = std::clamp(y, int(monitor.rcWork.top), int(monitor.rcWork.bottom) - flyoutHeight);
-        SetWindowPos(window, HWND_TOPMOST, x, y, flyoutWidth, flyoutHeight,
+        int x = anchor.left + (anchor.right - anchor.left - width) / 2;
+        int y = anchor.top - height - int(8 * scale + 0.5);
+        x = std::clamp(x, int(monitor.rcWork.left), int(monitor.rcWork.right) - width);
+        y = std::clamp(y, int(monitor.rcWork.top), int(monitor.rcWork.bottom) - height);
+        source.SiteBridge().MoveAndResize({0, 0, width, height});
+        SetWindowPos(window, HWND_TOPMOST, x, y, width, height,
                      SWP_SHOWWINDOW);
         SetForegroundWindow(window);
     }
@@ -268,6 +282,7 @@ struct TrayFlyout::Native {
     TrayFlyout *flyout;
     HWND window = nullptr;
     DesktopWindowXamlSource source{nullptr};
+    StackPanel content{nullptr};
     FontIcon statusGlyph{nullptr};
     TextBlock statusText{nullptr};
     ProgressBar level{nullptr};

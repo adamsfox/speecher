@@ -26,9 +26,9 @@ public:
     void show();
 
     // Saves a picture of the window for --grab. SPEECHER_GRAB_PAGE names a
-    // pane id (general, dictation, shortcut, text, delivery, apps, vocabulary,
-    // accounts, whatsNew), optionally with a SelectorBar index ("vocabulary:1"),
-    // to show before the grab.
+    // schema page id (general, audio, refinement, output, vocabulary,
+    // corrections, bindings, providers, whatsNew) or the shortcut pane, to
+    // show before the grab. A ":index" suffix is tolerated and ignored.
     bool capture(const QString &path);
 
     // What Action rows run. The window handles whatsNew itself and forwards
