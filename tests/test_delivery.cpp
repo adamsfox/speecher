@@ -1004,7 +1004,9 @@ private slots:
         const DeliveryResult result = delivery.deliver(
             settings, makeDeliveryContent(QStringLiteral("dictated text"), OutputFormat::PlainText), target);
 
+        QVERIFY(result.ok);
         QCOMPARE(result.receipt, DeliveryReceipt::AcceptedByTarget);
+        QCOMPARE(result.message, QStringLiteral("Accepted by Target"));
         QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("new user copy"));
     }
 
