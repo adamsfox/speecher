@@ -64,12 +64,14 @@ QString pauseScript(const QStringList &players)
     for (const QString &player : players) {
         source += QStringLiteral(
                       "try\n"
+                      "if application id \"%1\" is running then\n"
                       "tell application id \"%1\"\n"
                       "if (player state as string) is \"playing\" then\n"
                       "pause\n"
                       "set end of my pausedPlayers to \"%1\"\n"
                       "end if\n"
                       "end tell\n"
+                      "end if\n"
                       "on error\n"
                       "set pauseFailed to true\n"
                       "end try\n")
