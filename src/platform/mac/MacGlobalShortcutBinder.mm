@@ -195,7 +195,6 @@ bool MacGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString 
 
 void MacGlobalShortcutBinder::refreshKeyboardLayout()
 {
-    unregisterHotKey();
     bind();
 }
 
@@ -205,6 +204,8 @@ void MacGlobalShortcutBinder::unregisterHotKey()
         UnregisterEventHotKey(static_cast<EventHotKeyRef>(m_hotKey));
         m_hotKey = nullptr;
     }
+    m_registeredKeyCode = 0;
+    m_registeredModifiers = 0;
 }
 
 bool MacGlobalShortcutBinder::registerHotKey(const QKeySequence &shortcut, QString *error)
@@ -244,9 +245,9 @@ bool MacGlobalShortcutBinder::registerHotKey(const QKeySequence &shortcut, QStri
         m_eventHandlerUpp = reinterpret_cast<void *>(upp);
     }
 
-    // Carbon refuses a second registration of the same combination, and the
-    // registration already in place is that one.
-    if (m_hotKey && shortcut == m_shortcut) {
+    // Layout changes can move an unchanged logical shortcut to another key.
+    // Carbon only rejects duplicate hardware key/modifier registrations.
+    if (m_hotKey && keyCode == m_registeredKeyCode && modifiers == m_registeredModifiers) {
         return true;
     }
 
@@ -264,6 +265,8 @@ bool MacGlobalShortcutBinder::registerHotKey(const QKeySequence &shortcut, QStri
     // user with no working shortcut whenever the new combination was taken.
     unregisterHotKey();
     m_hotKey = hotKey;
+    m_registeredKeyCode = keyCode;
+    m_registeredModifiers = modifiers;
     return true;
 }
 

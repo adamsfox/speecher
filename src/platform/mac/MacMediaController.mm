@@ -82,18 +82,22 @@ QString pauseScript(const QStringList &players)
 
 QString resumeScript(const QStringList &players)
 {
-    QString source;
+    QString source = QStringLiteral("set pausedPlayers to {}\n");
     for (const QString &player : players) {
         source += QStringLiteral(
                       "try\n"
                       "if application id \"%1\" is running then\n"
-                      "tell application id \"%1\" to play\n"
+                      "tell application id \"%1\"\n"
+                      "if (player state as string) is \"paused\" then play\n"
+                      "end tell\n"
                       "end if\n"
                       "on error\n"
-                      "set resumeFailed to true\n"
+                      "set end of my pausedPlayers to \"%1\"\n"
                       "end try\n")
                       .arg(player);
     }
+    source += QStringLiteral(
+        "set AppleScript's text item delimiters to linefeed\nreturn my pausedPlayers as text");
     return source;
 }
 
@@ -110,8 +114,9 @@ MacMediaController::MacMediaController(QObject *parent)
           },
           [this](Action action, const QStringList &players, Completion completion) {
               runAppleScript(this, action == Action::Pause ? pauseScript(players) : resumeScript(players),
-                             [completion = std::move(completion)](bool ok, const QString &output) {
-                  completion(ok ? output.split(QLatin1Char('\n'), Qt::SkipEmptyParts) : QStringList{});
+                             [action, players, completion = std::move(completion)](bool ok, const QString &output) {
+                  completion(ok ? output.split(QLatin1Char('\n'), Qt::SkipEmptyParts)
+                                : action == Action::Resume ? players : QStringList{});
               });
           }, parent)
 {

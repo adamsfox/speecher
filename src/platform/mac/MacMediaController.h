@@ -20,6 +20,8 @@ class MacMediaController : public MediaController {
 
 public:
     enum class Action { Pause, Resume };
+    // Pause returns newly paused players; Resume returns players still owned
+    // because playback failed. A quit player no longer needs resuming.
     using Completion = std::function<void(const QStringList &paused)>;
     using ScriptRunner = std::function<void(Action, const QStringList &, Completion)>;
 

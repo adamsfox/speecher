@@ -38,10 +38,10 @@ void MacMediaController::applyRequestedState()
                 if (!m_pausedPlayers.contains(player)) m_pausedPlayers << player;
             }
         } else {
-            m_pausedPlayers.clear();
+            m_pausedPlayers = paused;
         }
-        // Only reconcile a change of intent. Retrying an unchanged pause would
-        // spin forever when all players were already paused or access was denied.
+        // Only reconcile a change of intent. Failed operations wait for a new
+        // explicit request rather than spinning on denied access.
         if (m_pauseRequested != (action == Action::Pause)) applyRequestedState();
     });
 }

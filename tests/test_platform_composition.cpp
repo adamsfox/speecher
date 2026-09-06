@@ -840,6 +840,33 @@ private slots:
     }
 #endif
 
+    void failedMediaResumeRetainsOwnershipForRetry()
+    {
+        using Action = MacMediaController::Action;
+        QList<Action> actions;
+        QList<QStringList> requestedPlayers;
+        MacMediaController::Completion complete;
+        MacMediaController media(
+            [] { return QStringList{QStringLiteral("player")}; },
+            [&](Action action, const QStringList &players, MacMediaController::Completion completion) {
+                actions << action;
+                requestedPlayers << players;
+                complete = std::move(completion);
+            });
+        media.pausePlaying();
+        complete({QStringLiteral("player")});
+        media.resumePaused();
+        complete({QStringLiteral("player")});
+        QCOMPARE(actions.size(), 2); // Failed resume does not spin.
+        media.resumePaused();
+        QCOMPARE(actions.size(), 3);
+        QCOMPARE(actions.last(), Action::Resume);
+        QCOMPARE(requestedPlayers.last(), QStringList{QStringLiteral("player")});
+        complete({});
+        media.resumePaused();
+        QCOMPARE(actions.size(), 3); // Successful resume relinquishes ownership.
+    }
+
     void mediaOperationsStayOrderedAcrossSessions_data()
     {
         QTest::addColumn<bool>("pauseStillRunning");
