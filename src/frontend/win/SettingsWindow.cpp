@@ -5,6 +5,7 @@
 #include "core/SettingsStore.h"
 #include "frontend/win/SettingsModel.h"
 #include "frontend/win/SettingsPage.h"
+#include "frontend/win/ShortcutRecorder.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -13,6 +14,8 @@
 #include <QImage>
 #include <QTimer>
 #include <QUrl>
+
+#include <algorithm>
 
 #include <windows.h>
 #include <microsoft.ui.xaml.window.h>
@@ -178,7 +181,12 @@ struct SettingsWindow::Native {
 
     ~Native()
     {
+        // The Closed token is revoked before Close(), so windowClosed() never
+        // runs on this path; quitting with the window open must still save its
+        // geometry and give a suspended hotkey back.
         if (window) {
+            saveGeometry();
+            ShortcutRecorder::setRecording(host, false);
             window.Closed(closedToken);
             window.Close();
         }
@@ -337,7 +345,7 @@ struct SettingsWindow::Native {
         saveGeometry();
         // The editors hold XAML trees of the window that is going away.
         host.editors.clear();
-        host.shortcutRecording = false;
+        ShortcutRecorder::setRecording(host, false);
         window = nullptr;
         root = nullptr;
         titleBar = nullptr;
@@ -349,17 +357,39 @@ struct SettingsWindow::Native {
 
     void restoreGeometry()
     {
-        const QStringList parts = controller->settings()->raw()
-                                      .value(kGeometrySetting)
+        auto appWindow = window.AppWindow();
+        const UINT dpi = GetDpiForWindow(windowHandle());
+        const auto position = appWindow.Position();
+        POINT origin{position.X, position.Y};
+        int width = int(1100 * dpi / 96.0);
+        int height = int(760 * dpi / 96.0);
+        const QStringList parts = controller->settings()->raw().value(kGeometrySetting)
                                       .toString()
                                       .split(QLatin1Char(','));
-        auto appWindow = window.AppWindow();
-        if (parts.size() == 4) {
-            appWindow.MoveAndResize({parts.at(0).toInt(), parts.at(1).toInt(),
-                                     parts.at(2).toInt(), parts.at(3).toInt()});
+        if (parts.size() == 4 && parts.at(2).toInt() > 0 && parts.at(3).toInt() > 0) {
+            origin = {parts.at(0).toInt(), parts.at(1).toInt()};
+            width = parts.at(2).toInt();
+            height = parts.at(3).toInt();
+        }
+
+        MONITORINFO monitor{sizeof(monitor)};
+        if (!GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTONEAREST), &monitor)) {
             return;
         }
-        appWindow.Resize({1100, 760});
+        const RECT area = monitor.rcWork;
+        const int availableWidth = area.right - area.left;
+        const int availableHeight = area.bottom - area.top;
+        // A partial intersection can still leave the titlebar off-screen.
+        // Bound the entire window, including the scaled default on small screens.
+        width = std::clamp(width,
+                           std::min(GetSystemMetricsForDpi(SM_CXMINTRACK, dpi), availableWidth),
+                           availableWidth);
+        height = std::clamp(height,
+                            std::min(GetSystemMetricsForDpi(SM_CYMINTRACK, dpi), availableHeight),
+                            availableHeight);
+        const int x = std::clamp(int(origin.x), int(area.left), int(area.right) - width);
+        const int y = std::clamp(int(origin.y), int(area.top), int(area.bottom) - height);
+        appWindow.MoveAndResize({x, y, width, height});
     }
 
     void saveGeometry()
@@ -441,6 +471,11 @@ struct SettingsWindow::Native {
 
     void selectPane(const QString &id)
     {
+        // Leaving the shortcut pane ends a recording; the suspended hotkey
+        // must come back and the pane's key handler is going away.
+        if (id != kShortcutPane) {
+            ShortcutRecorder::setRecording(host, false);
+        }
         currentPane = id;
         controller->settings()->raw().setValue(kPaneSetting, id);
         if (titleBar) {

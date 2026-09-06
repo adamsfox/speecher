@@ -40,7 +40,9 @@ using namespace Microsoft::UI::Xaml::Controls;
 using namespace Microsoft::UI::Xaml::Hosting;
 using namespace Microsoft::UI::Xaml::Media;
 
-constexpr int minimumWidth = 300;
+// The panel's layout constants are DIPs, as the XAML content measures them;
+// every HWND move and resize scales them by the window's DPI.
+constexpr int panelWidth = 420;
 constexpr int panelHeight = 52;
 constexpr int previewChromeWidth = 190;
 constexpr int screenEdgeMargin = 80;
@@ -197,11 +199,6 @@ struct DictationPanel::Native : QObject {
         return DefWindowProcW(window, message, wParam, lParam);
     }
 
-    double scale() const
-    {
-        return GetDpiForWindow(window) / 96.0;
-    }
-
     void ensureWindow()
     {
         if (window) {
@@ -215,7 +212,7 @@ struct DictationPanel::Native : QObject {
         window = CreateWindowExW(
             WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             windowClassName, L"Speecher dictation", WS_POPUP,
-            0, 0, minimumWidth, panelHeight, nullptr, nullptr,
+            0, 0, panelWidth, panelHeight, nullptr, nullptr,
             windowClass.hInstance, this);
 
         const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
@@ -273,8 +270,9 @@ struct DictationPanel::Native : QObject {
         text.VerticalAlignment(VerticalAlignment::Center);
         text.TextTrimming(TextTrimming::CharacterEllipsis);
         text.MaxLines(1);
-        text.Width(240);
+        text.Width(panelWidth - previewChromeWidth);
         row.Children().Append(text);
+        probe = TextBlock();
 
         level = ProgressBar();
         level.Width(96);
@@ -313,7 +311,7 @@ struct DictationPanel::Native : QObject {
         root.Children().Append(chrome);
         source.Content(root);
         source.SystemBackdrop(DesktopAcrylicBackdrop());
-        resize(minimumWidth);
+        resize(panelWidth);
     }
 
     void show(quint64 generation)
@@ -325,7 +323,9 @@ struct DictationPanel::Native : QObject {
         completed = false;
         phase = Phase::Live;
         pendingGeneration = generation;
+        pillWidth = panelWidth;
         ensureWindow();
+        applyTheme();
         whatsNewHidden = false;
         refresh();
         reposition();
@@ -347,6 +347,7 @@ struct DictationPanel::Native : QObject {
         problem = message;
         pendingGeneration = 0;
         ensureWindow();
+        applyTheme();
         whatsNewHidden = false;
         refresh();
         reposition();
@@ -362,6 +363,15 @@ struct DictationPanel::Native : QObject {
         setShimmer(false);
         if (window) {
             ShowWindow(window, SW_HIDE);
+        }
+    }
+
+    // The window and its XAML tree outlive a theme change in Settings; the
+    // captured RequestedTheme has to follow it on the next showing.
+    void applyTheme()
+    {
+        if (root) {
+            root.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
         }
     }
 
@@ -477,20 +487,28 @@ struct DictationPanel::Native : QObject {
             : preview.isEmpty()       ? status
                                       : preview;
 
+        // The pill hugs the one line of type like the mac panel: the width
+        // follows the measured text between the 420 floor and the screen
+        // edge, word by word, while a status line or the delivered message
+        // leaves the width where the last preview put it.
         POINT pointer{};
         GetCursorPos(&pointer);
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
         const int maximumWidth = std::max(
-            minimumWidth, int((monitor.rcWork.right - monitor.rcWork.left) / scale()) - screenEdgeMargin);
-        const int wantedWidth = std::clamp(
-            minimumWidth + std::max(0, int(shown.size()) - 32) * 7,
-            minimumWidth, maximumWidth);
-        const int textWidth = wantedWidth - previewChromeWidth;
-        const int maximumCharacters = std::max(20, textWidth / 7);
+            panelWidth,
+            int((monitor.rcWork.right - monitor.rcWork.left) / scale()) - screenEdgeMargin);
+        const int maximumCharacters = std::max(20, (maximumWidth - previewChromeWidth) / 7);
         if (!hasProblem && shown.size() > maximumCharacters) {
             shown = QString::fromUtf16(u"\u2026") + shown.right(maximumCharacters - 1);
         }
+        const bool sizesToText = hasProblem || (!finished && !waiting && !preview.isEmpty());
+        int wantedWidth = std::clamp(pillWidth, panelWidth, maximumWidth);
+        if (sizesToText) {
+            wantedWidth = std::clamp(measuredTextWidth(shown) + previewChromeWidth,
+                                     panelWidth, maximumWidth);
+        }
+        const int textWidth = wantedWidth - previewChromeWidth;
         text.Text(hstring(shown.toStdWString()));
         if (finished) {
             text.ClearValue(FrameworkElement::WidthProperty());
@@ -520,7 +538,8 @@ struct DictationPanel::Native : QObject {
             QStringLiteral("Speecher %1 installed — see what's new")
                 .arg(updates->currentVersion().section(QLatin1Char('-'), 0, 0)).toStdWString())));
         whatsNewRow.Visibility(showWhatsNew ? Visibility::Visible : Visibility::Collapsed);
-        chrome.Width(wantedWidth);
+        pillWidth = wantedWidth;
+        chrome.Width(pillWidth);
         root.Measure({float(maximumWidth), std::numeric_limits<float>::infinity()});
         height = int(std::ceil(root.DesiredSize().Height));
         resize(std::max(wantedWidth, int(std::ceil(root.DesiredSize().Width))));
@@ -529,12 +548,33 @@ struct DictationPanel::Native : QObject {
         }
     }
 
+    double scale() const
+    {
+        return window ? GetDpiForWindow(window) / 96.0 : 1.0;
+    }
+
+    int px(int dip) const
+    {
+        return int(std::ceil(dip * scale()));
+    }
+
+    // Desired width of the line in the pill's font, the way the mac panel
+    // measures its NSString. A detached TextBlock measures fine; if XAML
+    // ever hands back nothing, the 7px-per-character estimate stands in.
+    int measuredTextWidth(const QString &value)
+    {
+        probe.Text(hstring(value.toStdWString()));
+        constexpr float unbounded = std::numeric_limits<float>::infinity();
+        probe.Measure({unbounded, unbounded});
+        const int measured = int(std::ceil(probe.DesiredSize().Width));
+        return measured > 0 ? measured + 2 : int(value.size()) * 7;
+    }
+
     void resize(int newWidth)
     {
         width = newWidth;
         if (source) {
-            source.SiteBridge().MoveAndResize(
-                {0, 0, int(std::ceil(width * scale())), int(std::ceil(height * scale()))});
+            source.SiteBridge().MoveAndResize({0, 0, px(width), px(height)});
         }
     }
 
@@ -547,11 +587,11 @@ struct DictationPanel::Native : QObject {
         GetCursorPos(&pointer);
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
-        const int pixelWidth = int(std::ceil(width * scale()));
-        const int pixelHeight = int(std::ceil(height * scale()));
+        const int pixelWidth = px(width);
+        const int pixelHeight = px(height);
         const int x = monitor.rcWork.left
             + (monitor.rcWork.right - monitor.rcWork.left - pixelWidth) / 2;
-        const int y = monitor.rcWork.bottom - pixelHeight - int(bottomMargin * scale());
+        const int y = monitor.rcWork.bottom - pixelHeight - px(bottomMargin);
         SetWindowPos(window, HWND_TOPMOST, x, y, pixelWidth, pixelHeight,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
@@ -571,13 +611,15 @@ struct DictationPanel::Native : QObject {
     int height = panelHeight;
     FontIcon glyph{nullptr};
     TextBlock text{nullptr};
+    TextBlock probe{nullptr};
     ProgressBar level{nullptr};
     ProgressRing ring{nullptr};
     Button dismiss{nullptr};
     QString status;
     QString preview;
     QString problem;
-    int width = minimumWidth;
+    int width = panelWidth;
+    int pillWidth = panelWidth;
     quint64 pendingGeneration = 0;
     quint64 presentedGeneration = 0;
     StackPanel row{nullptr};

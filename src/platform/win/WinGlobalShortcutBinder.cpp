@@ -14,7 +14,7 @@ constexpr int firstHotKeyId = 0x5350;
 constexpr int secondHotKeyId = 0x5351;
 constexpr auto messageWindowClass = L"SpeecherShortcutRawInput";
 
-const QHash<int, quint32> &virtualKeys()
+const QHash<int, quint32> &fixedVirtualKeys()
 {
     static const QHash<int, quint32> keys{
         {Qt::Key_Space, VK_SPACE},
@@ -22,17 +22,6 @@ const QHash<int, quint32> &virtualKeys()
         {Qt::Key_Enter, VK_RETURN},
         {Qt::Key_Escape, VK_ESCAPE},
         {Qt::Key_Tab, VK_TAB},
-        {Qt::Key_Minus, VK_OEM_MINUS},
-        {Qt::Key_Equal, VK_OEM_PLUS},
-        {Qt::Key_BracketLeft, VK_OEM_4},
-        {Qt::Key_BracketRight, VK_OEM_6},
-        {Qt::Key_Backslash, VK_OEM_5},
-        {Qt::Key_Semicolon, VK_OEM_1},
-        {Qt::Key_Apostrophe, VK_OEM_7},
-        {Qt::Key_Comma, VK_OEM_COMMA},
-        {Qt::Key_Period, VK_OEM_PERIOD},
-        {Qt::Key_Slash, VK_OEM_2},
-        {Qt::Key_QuoteLeft, VK_OEM_3},
     };
     return keys;
 }
@@ -48,7 +37,17 @@ quint32 virtualKeyForQtKey(int key)
     if (key >= Qt::Key_F1 && key <= Qt::Key_F24) {
         return VK_F1 + quint32(key - Qt::Key_F1);
     }
-    return virtualKeys().value(key);
+    if (const quint32 fixed = fixedVirtualKeys().value(key)) {
+        return fixed;
+    }
+    // Punctuation sits on different virtual keys per layout (German + is US
+    // =), and the recorders map through the active layout. Qt names printable
+    // keys by their unshifted character, so ask the layout for that character.
+    if (key < 0x20 || key > 0xFFFF) {
+        return 0;
+    }
+    const SHORT scan = VkKeyScanW(wchar_t(key));
+    return scan == -1 ? 0 : quint32(scan & 0xFF);
 }
 
 int qtKeyForVirtualKey(quint32 key)
@@ -62,12 +61,16 @@ int qtKeyForVirtualKey(quint32 key)
     if (key >= VK_F1 && key <= VK_F24) {
         return Qt::Key_F1 + int(key - VK_F1);
     }
-    for (auto it = virtualKeys().cbegin(); it != virtualKeys().cend(); ++it) {
+    for (auto it = fixedVirtualKeys().cbegin(); it != fixedVirtualKeys().cend(); ++it) {
         if (it.value() == key) {
             return it.key();
         }
     }
-    return Qt::Key_unknown;
+    const UINT character = MapVirtualKeyW(key, MAPVK_VK_TO_CHAR);
+    if ((character & 0xFFFF) < 0x20) {
+        return Qt::Key_unknown;
+    }
+    return QChar(char16_t(character & 0xFFFF)).toUpper().unicode();
 }
 
 QKeySequence savedShortcut()
@@ -124,6 +127,10 @@ QString WinGlobalShortcutBinder::unsupportedReason() const
 
 void WinGlobalShortcutBinder::bind()
 {
+    if (m_suspensionCount > 0) {
+        m_resumeBinding = true;
+        return;
+    }
     QString error;
     if (!registerShortcut(m_shortcut, &error)) {
         qWarning().noquote() << "Could not register the Global Shortcut:" << error;
@@ -140,10 +147,39 @@ bool WinGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString 
     if (!registerShortcut(shortcut, error)) {
         return false;
     }
+    if (m_suspensionCount > 0) {
+        // Validate conflicts now, but leave keys available to other recorders.
+        m_resumeBinding = true;
+        unregisterShortcut();
+    }
     m_shortcut = shortcut;
     storeShortcut(shortcut);
     emit bindingChanged();
     return true;
+}
+
+// A RegisterHotKey chord is consumed system-wide and never arrives as an app
+// key event, so recording it (or any replacement) needs the registration gone.
+void WinGlobalShortcutBinder::suspend()
+{
+    if (m_suspensionCount++ > 0) {
+        return;
+    }
+    m_resumeBinding = m_hotKeyId != 0;
+    unregisterShortcut();
+}
+
+QString WinGlobalShortcutBinder::resume()
+{
+    if (m_suspensionCount == 0 || --m_suspensionCount > 0) {
+        return {};
+    }
+    QString error;
+    if (m_resumeBinding) {
+        m_resumeBinding = false;
+        registerShortcut(m_shortcut, &error);
+    }
+    return error;
 }
 
 std::optional<WinGlobalShortcutBinder::NativeHotKey>
@@ -231,6 +267,7 @@ bool WinGlobalShortcutBinder::nativeEventFilter(const QByteArray &eventType,
     if (nativeMessage->message == WM_HOTKEY && int(nativeMessage->wParam) == m_hotKeyId) {
         qInfo() << "Global Shortcut pressed";
         m_pressed = true;
+        m_pressedKey = HIWORD(nativeMessage->lParam);
         emit activated();
     }
     return false;
@@ -266,7 +303,6 @@ bool WinGlobalShortcutBinder::registerShortcut(const QKeySequence &shortcut, QSt
 
     unregisterShortcut();
     m_hotKeyId = newId;
-    m_virtualKey = hotKey->virtualKey;
     return true;
 }
 
@@ -276,7 +312,8 @@ void WinGlobalShortcutBinder::unregisterShortcut()
         UnregisterHotKey(nullptr, m_hotKeyId);
         m_hotKeyId = 0;
     }
-    m_pressed = false;
+    // Raw input remains registered so an outstanding press still receives
+    // its release while recording a replacement shortcut.
 }
 
 bool WinGlobalShortcutBinder::ensureMessageWindow(QString *error)
@@ -344,7 +381,7 @@ void WinGlobalShortcutBinder::handleRawInput(const RAWINPUT &input)
 {
     if (input.header.dwType != RIM_TYPEKEYBOARD
         || !(input.data.keyboard.Flags & RI_KEY_BREAK)
-        || input.data.keyboard.VKey != m_virtualKey
+        || input.data.keyboard.VKey != m_pressedKey
         || !m_pressed) {
         return;
     }

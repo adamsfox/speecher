@@ -63,6 +63,9 @@ public slots:
 private:
     std::shared_ptr<const SingleInstancePlatform> m_platform;
     QLocalServer m_server;
+#ifdef Q_OS_WIN
+    void *m_instanceGuard = nullptr;
+#endif
     QHash<QLocalSocket *, QByteArray> m_requestBuffers;
     // Sockets currently inside their own command handling. A command can pump
     // the message loop (XAML islands on Windows do), so we hold off deleting a

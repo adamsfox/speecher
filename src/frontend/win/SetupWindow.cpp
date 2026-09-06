@@ -6,6 +6,7 @@
 #include "core/SettingsStore.h"
 #include "dictation/DictationPorts.h"
 #include "frontend/win/SettingsPage.h"
+#include "frontend/win/ShortcutRecorder.h"
 #include "platform/GlobalShortcutBinder.h"
 #include "platform/win/WinGlobalShortcutBinder.h"
 #include "providers/ProviderRegistry.h"
@@ -27,6 +28,7 @@
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #pragma pop_macro("GetCurrentTime")
 
+#include <QDebug>
 #include <QKeySequence>
 #include <QThread>
 #include <QTimer>
@@ -183,6 +185,7 @@ struct SetupWindow::Native {
         window.ExtendsContentIntoTitleBar(true);
         window.Closed([this](const auto &, const auto &) {
             microphone->stop();
+            resumeShortcut();
             window = nullptr;
             content = nullptr;
         });
@@ -266,11 +269,19 @@ struct SetupWindow::Native {
         GetCursorPos(&pointer);
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
+        // Land on the cursor's monitor first so the window's DPI is that
+        // monitor's; setupWidth/Height are DIPs and SetWindowPos wants
+        // physical pixels.
+        SetWindowPos(handle, nullptr, monitor.rcWork.left, monitor.rcWork.top, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        const double scale = GetDpiForWindow(handle) / 96.0;
+        const int width = int(setupWidth * scale + 0.5);
+        const int height = int(setupHeight * scale + 0.5);
         const int x = monitor.rcWork.left
-            + (monitor.rcWork.right - monitor.rcWork.left - setupWidth) / 2;
+            + (monitor.rcWork.right - monitor.rcWork.left - width) / 2;
         const int y = monitor.rcWork.top
-            + (monitor.rcWork.bottom - monitor.rcWork.top - setupHeight) / 2;
-        SetWindowPos(handle, nullptr, x, y, setupWidth, setupHeight,
+            + (monitor.rcWork.bottom - monitor.rcWork.top - height) / 2;
+        SetWindowPos(handle, nullptr, x, y, width, height,
                      SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
@@ -298,6 +309,13 @@ struct SetupWindow::Native {
         shortcutStatus = nullptr;
         ++transcriptionCheckGeneration;
         pageIndex = index;
+        // The recorder page needs the bound chord delivered as a key event,
+        // which RegisterHotKey would otherwise consume system-wide.
+        if (index == shortcutPage) {
+            suspendShortcut();
+        } else {
+            resumeShortcut();
+        }
         content.Children().Clear();
         switch (index) {
         case 0: showWelcome(); break;
@@ -601,20 +619,23 @@ struct SetupWindow::Native {
         shortcutStatus = textBlock(QStringLiteral("The default is Ctrl+Alt+D."));
         recorder.KeyDown([this, recorder](const auto &, const Input::KeyRoutedEventArgs &event) {
             const int virtualKey = static_cast<int>(event.Key());
-            if (virtualKey < '0' || (virtualKey > '9' && virtualKey < 'A') || virtualKey > 'Z') {
+            if (virtualKey == VK_ESCAPE) {
+                event.Handled(true);
                 return;
             }
-            Qt::KeyboardModifiers modifiers;
-            if (GetKeyState(VK_CONTROL) < 0) modifiers |= Qt::ControlModifier;
-            if (GetKeyState(VK_MENU) < 0) modifiers |= Qt::AltModifier;
-            if (GetKeyState(VK_SHIFT) < 0) modifiers |= Qt::ShiftModifier;
-            if (GetKeyState(VK_LWIN) < 0 || GetKeyState(VK_RWIN) < 0) modifiers |= Qt::MetaModifier;
+            // The settings recorder's mapping, so both accept the same keys —
+            // F-keys, Space, and the active layout's punctuation included.
+            const int qtKey = win::ShortcutRecorder::qtKeyForVirtualKey(virtualKey);
+            if (qtKey == 0) {
+                return;
+            }
+            const Qt::KeyboardModifiers modifiers = win::ShortcutRecorder::heldModifiers();
             if (modifiers == Qt::NoModifier) {
                 shortcutStatus.Text(L"Add Ctrl, Alt, Shift, or the Windows key.");
                 event.Handled(true);
                 return;
             }
-            const QKeySequence sequence(QKeyCombination(modifiers, static_cast<Qt::Key>(virtualKey)));
+            const QKeySequence sequence(QKeyCombination(modifiers, static_cast<Qt::Key>(qtKey)));
             QString error;
             if (!controller->setGlobalShortcut(sequence, &error)) {
                 shortcutStatus.Text(hstring(QStringLiteral("Could not register the shortcut: %1")
@@ -653,6 +674,33 @@ struct SetupWindow::Native {
         panel.Children().Append(textBlock(QStringLiteral(
             "Speecher stays in the notification area. Open its microphone icon for status, your latest transcript, and settings.")));
         content.Children().Append(panel);
+    }
+
+    void suspendShortcut()
+    {
+        if (shortcutSuspended) {
+            return;
+        }
+        shortcutSuspended = true;
+        controller->suspendGlobalShortcut();
+    }
+
+    void resumeShortcut()
+    {
+        if (!shortcutSuspended) {
+            return;
+        }
+        shortcutSuspended = false;
+        const QString error = controller->resumeGlobalShortcut();
+        if (error.isEmpty()) {
+            return;
+        }
+        if (shortcutStatus) {
+            shortcutStatus.Text(hstring(QStringLiteral("Could not register the shortcut: %1")
+                                            .arg(error).toStdWString()));
+        } else {
+            qWarning().noquote() << "Could not restore the Global Shortcut:" << error;
+        }
     }
 
     void complete(bool skipped)
@@ -695,6 +743,7 @@ struct SetupWindow::Native {
     int pageIndex = 0;
     bool launchAtLogin;
     bool singlePage = false;
+    bool shortcutSuspended = false;
 };
 
 SetupWindow::SetupWindow(ApplicationController *controller,
