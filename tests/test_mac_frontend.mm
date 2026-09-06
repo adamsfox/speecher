@@ -334,6 +334,18 @@ private slots:
 
     // Ending a recording that bound a replacement keeps the replacement rather
     // than restoring the suspended combination over it.
+    void shortcutCleanupAfterControllerDestruction()
+    {
+        SpeecherBridge *bridge;
+        {
+            ApplicationController controller(false);
+            bridge = [[SpeecherBridge alloc] initWithController:&controller];
+            [bridge beginShortcutRecording];
+        }
+        // The recorder's queued cleanup may run after controller teardown.
+        [bridge endShortcutRecording];
+    }
+
     void endingARecordingKeepsAShortcutBoundDuringIt()
     {
         ApplicationController controller(false);
