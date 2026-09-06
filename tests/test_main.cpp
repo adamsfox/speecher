@@ -10,6 +10,11 @@
 #include "core/SettingsStore.h"
 #endif
 
+#ifdef Q_OS_WIN
+#include <QUuid>
+#include <windows.h>
+#endif
+
 #ifdef SPEECHER_WITH_WINUI
 #include "frontend/win/WinUiHost.h"
 #include <winrt/base.h>
@@ -35,6 +40,29 @@ int main(int argc, char **argv)
         winUiHost = std::make_unique<speecher::WinUiHost>();
     } catch (const winrt::hresult_error &error) {
         qCritical() << "WinUI test host failed:" << QString::fromWCharArray(error.message().c_str());
+        return 1;
+    }
+#endif
+#ifdef Q_OS_WIN
+    // Bootstrap WinUI against the real profile first. Redirect later registry
+    // access, including native Startup Apps writes, for this test process only.
+    const std::wstring testRegistryPath =
+        (QStringLiteral("Software\\SpeecherTests-")
+         + QUuid::createUuid().toString(QUuid::Id128)).toStdWString();
+    HKEY testRegistry = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, testRegistryPath.c_str(), 0, nullptr,
+                        REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &testRegistry,
+                        nullptr) != ERROR_SUCCESS) {
+        qCritical() << "Could not create isolated Windows test registry";
+        return 1;
+    }
+    const auto registryCleanup = qScopeGuard([&] {
+        RegOverridePredefKey(HKEY_CURRENT_USER, nullptr);
+        RegCloseKey(testRegistry);
+        RegDeleteTreeW(HKEY_CURRENT_USER, testRegistryPath.c_str());
+    });
+    if (RegOverridePredefKey(HKEY_CURRENT_USER, testRegistry) != ERROR_SUCCESS) {
+        qCritical() << "Could not isolate Windows test registry";
         return 1;
     }
 #endif

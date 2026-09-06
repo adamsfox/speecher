@@ -10,6 +10,12 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QUuid>
+#ifdef Q_OS_WIN
+#include <QScopeGuard>
+#include <QSemaphore>
+#include <QThread>
+#include <functional>
+#endif
 
 using namespace speecher;
 
@@ -29,8 +35,14 @@ public:
 
     QStringList ipcConnectCandidates() const override
     {
+#ifdef Q_OS_WIN
+        if (beforeCandidates) beforeCandidates();
+#endif
         return m_candidates;
     }
+#ifdef Q_OS_WIN
+    std::function<void()> beforeCandidates;
+#endif
 
     QString detachedExecutablePath() const override
     {
@@ -72,6 +84,48 @@ class SingleInstanceIpcTests : public QObject {
     Q_OBJECT
 
 private slots:
+#ifdef Q_OS_WIN
+    void simultaneousStartupElectsOneOwner()
+    {
+        const QString name = uniqueIpcName();
+        auto firstPlatform = std::make_shared<FakeSingleInstancePlatform>(name);
+        auto secondPlatform = std::make_shared<FakeSingleInstancePlatform>(name);
+        QSemaphore firstChecked, continueFirst, firstDone, secondDone, exitThreads;
+        bool firstListening = false;
+        bool secondListening = false;
+        firstPlatform->beforeCandidates = [&] {
+            // Stop between the connection probe and creation of the pipe.
+            firstChecked.release();
+            continueFirst.acquire();
+        };
+        std::unique_ptr<QThread> first(QThread::create([&] {
+            SingleInstanceIpc ipc(firstPlatform);
+            firstListening = ipc.listen();
+            firstDone.release();
+            exitThreads.acquire();
+        }));
+        std::unique_ptr<QThread> second(QThread::create([&] {
+            SingleInstanceIpc ipc(secondPlatform);
+            secondListening = ipc.listen();
+            secondDone.release();
+            exitThreads.acquire();
+        }));
+        const auto cleanup = qScopeGuard([&] {
+            continueFirst.release();
+            exitThreads.release(2);
+            first->wait();
+            second->wait();
+        });
+        first->start();
+        QVERIFY(firstChecked.tryAcquire(1, 5000));
+        second->start();
+        QVERIFY(secondDone.tryAcquire(1, 5000));
+        continueFirst.release();
+        QVERIFY(firstDone.tryAcquire(1, 5000));
+        QCOMPARE(int(firstListening) + int(secondListening), 1);
+    }
+#endif
+
     void singleInstanceIpcDoesNotStealLiveSocket()
     {
         const QString name = uniqueIpcName();

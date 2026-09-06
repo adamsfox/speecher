@@ -16,6 +16,7 @@
 #include <QDir>
 #include <QProcess>
 #include <QPermissions>
+#include <QTimer>
 #include <QUrl>
 
 #import <ApplicationServices/ApplicationServices.h>
@@ -30,6 +31,44 @@
 
 namespace speecher {
 namespace {
+
+#ifdef SPEECHER_E2E_HOOKS
+// E2E-build-only stub: alternating levels so the waveform moves, and
+// silent chunks so the session believes audio is flowing.
+class E2EAudioInput final : public AudioInput {
+public:
+    explicit E2EAudioInput(QObject *parent)
+        : AudioInput(parent)
+    {
+        m_timer.setInterval(100);
+        connect(&m_timer, &QTimer::timeout, this, [this] {
+            emit audioChunk(QByteArray(3200, '\0'));
+            emit levelChanged(m_highLevel ? 0.65f : 0.12f);
+            m_highLevel = !m_highLevel;
+        });
+    }
+
+    bool start(QString *) override
+    {
+        m_active = true;
+        m_timer.start();
+        return true;
+    }
+
+    void stop() override
+    {
+        m_timer.stop();
+        m_active = false;
+    }
+
+    bool isActive() const override { return m_active; }
+
+private:
+    QTimer m_timer;
+    bool m_active = false;
+    bool m_highLevel = false;
+};
+#endif
 
 constexpr auto accessibilityPaneUrl =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
@@ -132,6 +171,12 @@ QList<AudioInputDeviceInfo> MacComposition::availableAudioInputDevices() const
 
 AudioInput *MacComposition::createAudioInput(SettingsStore *settings, QObject *parent) const
 {
+#ifdef SPEECHER_E2E_HOOKS
+    if (qEnvironmentVariableIntValue("SPEECHER_E2E_STUB") == 1
+        && qEnvironmentVariableIntValue("SPEECHER_E2E_REAL_AUDIO") != 1) {
+        return new E2EAudioInput(parent);
+    }
+#endif
     auto *input = new QtAudioInput(settings->audioCaptureSettings(), parent);
     QObject::connect(settings,
                      &SettingsStore::audioCaptureSettingsChanged,

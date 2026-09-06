@@ -103,6 +103,25 @@ StackPanel settingRow(const QString &label, const Control &control)
     return row;
 }
 
+void showProviderStats(const StackPanel &panel, const QList<ProviderDescriptor> &providers,
+                       const QString &id)
+{
+    panel.Children().Clear();
+    for (const ProviderDescriptor &provider : providers) {
+        if (provider.id != id) {
+            continue;
+        }
+        for (const ProviderStat &stat : provider.stats) {
+            TextBlock row = textBlock(stat.label + QStringLiteral(": ") + stat.value);
+            row.FontSize(12);
+            row.Opacity(0.72);
+            panel.Children().Append(row);
+        }
+        break;
+    }
+    panel.Visibility(panel.Children().Size() ? Visibility::Visible : Visibility::Collapsed);
+}
+
 QList<QPair<QString, QString>> profileOptions()
 {
     return {{QStringLiteral("work"), QStringLiteral("Work")},
@@ -334,10 +353,12 @@ struct SetupWindow::Native {
             options.append({provider.id, provider.label});
         }
         ComboBox provider = combo(options, controller->settings()->speechProvider());
+        StackPanel stats;
+        stats.Spacing(4);
         TextBlock status = textBlock(QString(), true);
         Button check;
         check.Content(box_value(L"Check again"));
-        const auto runCheck = [this, provider, status, options] {
+        const auto runCheck = [this, provider, status, options, stats] {
             const quint64 generation = ++transcriptionCheckGeneration;
             const int index = provider.SelectedIndex();
             if (index < 0 || index >= options.size()) {
@@ -345,6 +366,7 @@ struct SetupWindow::Native {
                 return;
             }
             const QString id = options.at(index).first;
+            showProviderStats(stats, controller->providerRegistry()->speechProviders(), id);
             controller->settings()->setSpeechProvider(id);
             SpeechTranscriber *transcriber = controller->providerRegistry()->speechProvider(id);
             if (!transcriber) {
@@ -391,6 +413,7 @@ struct SetupWindow::Native {
         provider.SelectionChanged([runCheck](const auto &, const auto &) { runCheck(); });
         check.Click([runCheck](const auto &, const auto &) { runCheck(); });
         panel.Children().Append(settingRow(QStringLiteral("Transcription service"), provider));
+        panel.Children().Append(stats);
         panel.Children().Append(status);
         panel.Children().Append(check);
         content.Children().Append(panel);
@@ -488,10 +511,13 @@ struct SetupWindow::Native {
         }
         options.append({QStringLiteral("none"), QStringLiteral("None")});
         ComboBox provider = combo(options, controller->settings()->refinementProvider());
+        StackPanel stats;
+        stats.Spacing(4);
         CheckBox fast;
         fast.Content(box_value(L"Fast mode"));
-        const auto refreshFast = [this, provider, fast, options] {
+        const auto refreshFast = [this, provider, fast, options, stats] {
             const QString id = options.at(provider.SelectedIndex()).first;
+            showProviderStats(stats, controller->providerRegistry()->refinementProviders(), id);
             fast.Visibility(id == QStringLiteral("openai") || id == QStringLiteral("anthropic")
                                 ? Visibility::Visible : Visibility::Collapsed);
             if (id == QStringLiteral("openai")) {
@@ -514,6 +540,7 @@ struct SetupWindow::Native {
             }
         });
         panel.Children().Append(settingRow(QStringLiteral("Provider"), provider));
+        panel.Children().Append(stats);
         panel.Children().Append(fast);
         content.Children().Append(panel);
         refreshFast();

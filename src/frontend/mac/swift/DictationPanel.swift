@@ -15,6 +15,33 @@ private let minimumPillWidth: CGFloat = 420
 private let previewChromeWidth: CGFloat = 190
 private let screenEdgeMargin: CGFloat = 80
 
+/// Scratch-branch-only E2E seam: every panel callback lands as a JSON line in
+/// SPEECHER_E2E_EVIDENCE_DIR/panel-events.jsonl for the harness to assert on.
+private enum E2EPanelEvidence {
+    static func record(_ event: String, _ value: String = "") {
+        guard let path = ProcessInfo.processInfo.environment["SPEECHER_E2E_EVIDENCE_DIR"],
+              !path.isEmpty else { return }
+        let directory = URL(fileURLWithPath: path, isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory,
+                                                 withIntermediateDirectories: true)
+        let object: [String: Any] = [
+            "ts": Int64(Date().timeIntervalSince1970 * 1000),
+            "event": event,
+            "value": value,
+        ]
+        guard var data = try? JSONSerialization.data(withJSONObject: object) else { return }
+        data.append(0x0a)
+        let url = directory.appendingPathComponent("panel-events.jsonl")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        guard let file = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? file.close() }
+        try? file.seekToEnd()
+        try? file.write(contentsOf: data)
+    }
+}
+
 private struct DictationPanelGlass: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -28,10 +55,14 @@ private struct DictationPanelGlass: ViewModifier {
 
 @MainActor
 final class DictationPanelState: ObservableObject {
+    /// After the mic stops the panel walks Transcribing then Refining; the live
+    /// speech preview only belongs to `live`, exactly as on the Qt popup.
+    enum Phase { case live, transcribing, refining }
+
     @Published var status = ""
     @Published var preview = ""
     @Published var level: Float = 0
-    @Published var refining = false
+    @Published var phase = Phase.live
     @Published var problem = ""
 }
 
@@ -53,6 +84,16 @@ struct DictationPanelView: View {
                     .font(.body)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity)
+            } else if state.problem.isEmpty, let waiting = waitingLabel {
+                // The provider is finalising or the refiner has not streamed a
+                // word yet: a shimmering label where the preview was, and no
+                // trailing control — the sweep already says work is under way,
+                // and the mic-level Gauge would be a meter over a closed mic.
+                Image(systemName: symbol)
+                    .imageScale(.large)
+                    .accessibilityLabel(phaseLabel)
+                ShimmerText(text: waiting)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Image(systemName: symbol)
                     .imageScale(.large)
@@ -71,9 +112,10 @@ struct DictationPanelView: View {
                     .truncationMode(state.problem.isEmpty ? .head : .tail)
                 if !state.problem.isEmpty {
                     Button("Dismiss", action: dismiss)
-                } else if state.refining {
-                    // A spinner, because refinement has no measurable end, and no
-                    // label because it appeared when the work started.
+                } else if state.phase == .refining {
+                    // A spinner beside the streamed text, because refinement has
+                    // no measurable end, and no label because it appeared when
+                    // the work started.
                     ProgressView().controlSize(.small)
                 } else {
                     Gauge(value: Double(min(max(state.level, 0), 1))) { EmptyView() }
@@ -121,6 +163,55 @@ struct DictationPanelView: View {
 
     /// The phase in words, for the screen reader that can't see the symbol.
     private var phaseLabel: String { phase.label }
+
+    /// The shimmer's label while there is nothing to show where the preview
+    /// goes: the provider is still turning audio into words, or the refiner
+    /// has not streamed any yet.
+    private var waitingLabel: String? {
+        switch state.phase {
+        case .transcribing: return "Transcribing…"
+        case .refining: return state.preview.isEmpty ? "Refining…" : nil
+        case .live: return nil
+        }
+    }
+}
+
+/// Dimmed text with a looping highlight sweep, this panel's version of the Qt
+/// popup's status shimmer. Driven by TimelineView rather than a repeating
+/// SwiftUI animation so every rendered frame carries the sweep's position.
+private struct ShimmerText: View {
+    let text: String
+    private let loop: TimeInterval = 1.5
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let progress = context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: loop) / loop
+            Text(text)
+                .font(.body)
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .overlay(
+                    Text(text)
+                        .font(.body)
+                        .lineLimit(1)
+                        .mask(alignment: .leading) {
+                            GeometryReader { geometry in
+                                let width = geometry.size.width
+                                LinearGradient(stops: [.init(color: .clear, location: 0),
+                                                       .init(color: .white, location: 0.5),
+                                                       .init(color: .clear, location: 1)],
+                                               startPoint: .leading,
+                                               endPoint: .trailing)
+                                    .frame(width: width / 2)
+                                    // From fully off the leading edge to fully
+                                    // off the trailing one, then around again.
+                                    .offset(x: width * 1.5 * progress - width / 2)
+                            }
+                        }
+                )
+        }
+    }
 }
 
 @MainActor
@@ -129,6 +220,7 @@ final class SpeecherDictationPanel {
     private let bridge: SpeecherBridge
     private let panel: NSPanel
     private var frozen = false
+    private var e2eFrameIndex = 0
     private(set) var presentedGeneration: UInt64 = 0
     private var levelObserver: AnyCancellable?
     private var screenObserver: AnyCancellable?
@@ -159,6 +251,7 @@ final class SpeecherDictationPanel {
             self?.dismiss()
         })
         wire()
+        installE2ECaptureSeam()
         // The level arrives through the model, which is the one reader of the
         // bridge's audio callback: two readers of one block would mean the
         // second one silently replaced the first.
@@ -172,10 +265,38 @@ final class SpeecherDictationPanel {
     }
 
     private func wire() {
-        bridge.popupStatusChanged = { [weak self] status in self?.state.status = status }
+        bridge.popupStatusChanged = { [weak self] status in
+            guard let self else { return }
+            E2EPanelEvidence.record("status", status)
+            state.status = status
+            // The mic is closed but the provider is still finalising, so the
+            // shimmer takes the line and the stale speech preview goes away.
+            if status == "Stopping" {
+                state.phase = .transcribing
+                state.preview = ""
+            }
+        }
         bridge.popupPreviewChanged = { [weak self] preview in self?.setPreview(preview) }
-        bridge.popupFrozenChanged = { [weak self] frozen in self?.frozen = frozen }
-        bridge.popupRefiningChanged = { [weak self] refining in self?.state.refining = refining }
+        bridge.popupFrozenChanged = { [weak self] frozen in
+            guard let self else { return }
+            self.frozen = frozen
+            if !frozen { state.phase = .live }
+        }
+        bridge.popupRefiningChanged = { [weak self] refining in
+            guard let self else { return }
+            E2EPanelEvidence.record("refining", refining ? "true" : "false")
+            if refining {
+                state.phase = .refining
+                state.preview = ""
+            } else {
+                state.phase = .live
+            }
+        }
+        bridge.popupRefinementPreviewChanged = { [weak self] preview in
+            guard let self, state.phase == .refining else { return }
+            E2EPanelEvidence.record("refinement-preview", preview)
+            applyPreview(preview)
+        }
         bridge.popupOAuthRefreshRequested = { [weak self] in
             self?.state.status = "Refreshing sign-in…"
             self?.state.preview = "Refreshing sign-in…"
@@ -210,6 +331,7 @@ final class SpeecherDictationPanel {
         // state for the next show to flash.
         state.preview = ""
         state.problem = problem
+        state.phase = .live
         present()
     }
 
@@ -223,7 +345,13 @@ final class SpeecherDictationPanel {
     var level: NSWindow.Level { panel.level }
 
     private func setPreview(_ preview: String) {
-        guard !frozen else { return }
+        guard !frozen, state.phase == .live else { return }
+        applyPreview(preview)
+    }
+
+    /// The one line of type and the pill's width around it, shared by the live
+    /// speech preview and the streamed refinement text.
+    private func applyPreview(_ preview: String) {
         state.preview = preview
         let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         let textWidth = (preview as NSString).size(withAttributes: [.font: font]).width
@@ -237,6 +365,29 @@ final class SpeecherDictationPanel {
         frame.origin.x -= (width - frame.width) / 2
         frame.size.width = width
         panel.setFrame(frame, display: true)
+    }
+
+    /// Scratch-branch-only E2E seam: with SPEECHER_E2E_PANEL_CAPTURE_DIR set,
+    /// the visible panel's backing store lands there ten times a second as
+    /// numbered PNGs, which needs no screen-recording grant on a CI runner.
+    private func installE2ECaptureSeam() {
+        guard let dir = ProcessInfo.processInfo.environment["SPEECHER_E2E_PANEL_CAPTURE_DIR"],
+              !dir.isEmpty else { return }
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async { self?.captureE2EFrame(into: dir) }
+        }
+    }
+
+    private func captureE2EFrame(into dir: String) {
+        guard panel.isVisible,
+              let view = panel.contentView,
+              let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else { return }
+        e2eFrameIndex += 1
+        let path = String(format: "%@/frame-%06d.png", dir, e2eFrameIndex)
+        try? png.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
     /// The panel belongs on the display the user is working on, which on a

@@ -21,11 +21,14 @@
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
+#include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #pragma pop_macro("GetCurrentTime")
 
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace speecher {
 namespace {
@@ -38,7 +41,7 @@ using namespace Microsoft::UI::Xaml::Media;
 
 // The panel's layout constants are DIPs, as the XAML content measures them;
 // every HWND move and resize scales them by the window's DPI.
-constexpr int minimumWidth = 300;
+constexpr int panelWidth = 420;
 constexpr int panelHeight = 52;
 constexpr int previewChromeWidth = 190;
 constexpr int screenEdgeMargin = 80;
@@ -70,6 +73,8 @@ QString phaseGlyph(const QString &status, bool problem)
 } // namespace
 
 struct DictationPanel::Native : QObject {
+    enum class Phase { Live, Transcribing, Refining };
+
     Native(ApplicationController *owner, DictationPanel *q)
         : QObject(q)
         , controller(owner)
@@ -78,6 +83,14 @@ struct DictationPanel::Native : QObject {
         DictationSession *session = controller->session();
         connect(session, &DictationSession::previewDisplayChanged, this,
                 [this](const QString &text) { setPreview(text); });
+        connect(session, &DictationSession::popupRefinementPreviewChanged, this,
+                [this](const QString &value) {
+                    if (phase != Phase::Refining) {
+                        return;
+                    }
+                    preview = value.simplified();
+                    refresh();
+                });
         connect(session, &DictationSession::audioLevelChanged, this,
                 [this](float value) { setLevel(value); });
         connect(session, &DictationSession::popupStatusChanged, this,
@@ -86,7 +99,15 @@ struct DictationPanel::Native : QObject {
                 [this](quint64 value) { show(value); });
         connect(session, &DictationSession::popupHideRequested, this, &Native::hide);
         connect(session, &DictationSession::popupFrozenChanged, this,
-                [this](bool value) { frozen = value; });
+                [this](bool value) {
+                    frozen = value;
+                    // Unfreezing at session start returns to the live phase,
+                    // like the Qt and mac panels, so a preview clear emitted
+                    // before show() is never dropped by a stale phase.
+                    if (!value) {
+                        phase = Phase::Live;
+                    }
+                });
         connect(session, &DictationSession::popupRefiningChanged, this,
                 [this](bool value) { setRefining(value); });
         connect(session, &DictationSession::popupOAuthRefreshRequested, this, [this] {
@@ -129,7 +150,7 @@ struct DictationPanel::Native : QObject {
         window = CreateWindowExW(
             WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             windowClassName, L"Speecher dictation", WS_POPUP,
-            0, 0, minimumWidth, panelHeight, nullptr, nullptr,
+            0, 0, panelWidth, panelHeight, nullptr, nullptr,
             windowClass.hInstance, nullptr);
         SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
@@ -156,8 +177,9 @@ struct DictationPanel::Native : QObject {
         text.VerticalAlignment(VerticalAlignment::Center);
         text.TextTrimming(TextTrimming::CharacterEllipsis);
         text.MaxLines(1);
-        text.Width(240);
+        text.Width(panelWidth - previewChromeWidth);
         row.Children().Append(text);
+        probe = TextBlock();
 
         level = ProgressBar();
         level.Width(96);
@@ -195,7 +217,7 @@ struct DictationPanel::Native : QObject {
         });
         source.Content(chrome);
         source.SystemBackdrop(DesktopAcrylicBackdrop());
-        resize(minimumWidth);
+        resize(panelWidth);
     }
 
     void show(quint64 generation)
@@ -205,9 +227,13 @@ struct DictationPanel::Native : QObject {
         // preview can be dropped by the frozen guard, so clear here too.
         preview.clear();
         completed = false;
+        phase = Phase::Live;
         pendingGeneration = generation;
         ensureWindow();
         applyTheme();
+        // Each dictation starts back at the floor, like the mac panel's
+        // empty-preview reset, instead of inheriting the last one's width.
+        resize(panelWidth);
         refresh();
         reposition();
         ShowWindow(window, SW_SHOWNOACTIVATE);
@@ -233,6 +259,7 @@ struct DictationPanel::Native : QObject {
 
     void hide()
     {
+        setShimmer(false);
         if (window) {
             ShowWindow(window, SW_HIDE);
         }
@@ -257,12 +284,16 @@ struct DictationPanel::Native : QObject {
     void setStatus(const QString &value)
     {
         status = value;
+        if (value.compare(QStringLiteral("stopping"), Qt::CaseInsensitive) == 0) {
+            phase = Phase::Transcribing;
+            preview.clear();
+        }
         refresh();
     }
 
     void setPreview(const QString &value)
     {
-        if (frozen) {
+        if (phase != Phase::Live || frozen) {
             return;
         }
         preview = value.simplified();
@@ -278,7 +309,57 @@ struct DictationPanel::Native : QObject {
     void setRefining(bool value)
     {
         refining = value;
+        if (value) {
+            phase = Phase::Refining;
+            preview.clear();
+        }
         refresh();
+    }
+
+    void setShimmer(bool active)
+    {
+        if (active == shimmering) {
+            return;
+        }
+        shimmering = active;
+        if (!active) {
+            shimmer.Stop();
+            text.Foreground(normalForeground);
+            return;
+        }
+        using namespace Microsoft::UI::Xaml::Media::Animation;
+        normalForeground = text.Foreground();
+        // High-contrast themes can hand out a non-solid foreground brush.
+        const auto solid = normalForeground.try_as<SolidColorBrush>();
+        const auto color = solid ? solid.Color()
+                                 : winrt::Windows::UI::Color{255, 128, 128, 128};
+        LinearGradientBrush brush;
+        brush.StartPoint({0, 0});
+        brush.EndPoint({1, 0});
+        shimmer = Storyboard();
+        shimmer.RepeatBehavior(RepeatBehaviorHelper::Forever());
+        for (int index = 0; index < 3; ++index) {
+            GradientStop stop;
+            auto shade = color;
+            if (index != 1) {
+                shade.A = static_cast<uint8_t>(color.A * 0.45);
+            }
+            stop.Color(shade);
+            const double start = -0.5 + index * 0.25;
+            stop.Offset(start);
+            brush.GradientStops().Append(stop);
+            DoubleAnimation sweep;
+            sweep.From(start);
+            sweep.To(start + 1.5);
+            sweep.Duration(DurationHelper::FromTimeSpan(std::chrono::milliseconds(1500)));
+            // Gradient stops require dependent animation in WinUI's XAML renderer.
+            sweep.EnableDependentAnimation(true);
+            Storyboard::SetTarget(sweep, stop);
+            Storyboard::SetTargetProperty(sweep, L"Offset");
+            shimmer.Children().Append(sweep);
+        }
+        text.Foreground(brush);
+        shimmer.Begin();
     }
 
     void refresh()
@@ -294,26 +375,39 @@ struct DictationPanel::Native : QObject {
                                  ? QString::fromUtf16(u"\uE8A9")
                                  : phaseGlyph(status, hasProblem))
                                 .toStdWString()));
+        const bool waiting = !hasProblem && !finished
+            && (phase == Phase::Transcribing || (refining && preview.isEmpty()));
+        setShimmer(waiting);
         QString shown = hasProblem ? problem
             : finished                ? status
+            : waiting                 ? (phase == Phase::Transcribing
+                                             ? QStringLiteral("Transcribing…")
+                                             : QStringLiteral("Refining…"))
             : preview.isEmpty()       ? status
                                       : preview;
 
+        // The pill hugs the one line of type like the mac panel: the width
+        // follows the measured text between the 420 floor and the screen
+        // edge, word by word, while a status line or the delivered message
+        // leaves the width where the last preview put it.
         POINT pointer{};
         GetCursorPos(&pointer);
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
         const int maximumWidth = std::max(
-            minimumWidth,
+            panelWidth,
             int((monitor.rcWork.right - monitor.rcWork.left) / scale()) - screenEdgeMargin);
-        const int wantedWidth = std::clamp(
-            minimumWidth + std::max(0, int(shown.size()) - 32) * 7,
-            minimumWidth, maximumWidth);
-        const int textWidth = wantedWidth - previewChromeWidth;
-        const int maximumCharacters = std::max(20, textWidth / 7);
+        const int maximumCharacters = std::max(20, (maximumWidth - previewChromeWidth) / 7);
         if (!hasProblem && shown.size() > maximumCharacters) {
             shown = QString::fromUtf16(u"\u2026") + shown.right(maximumCharacters - 1);
         }
+        const bool sizesToText = hasProblem || (!finished && !waiting && !preview.isEmpty());
+        int wantedWidth = width;
+        if (sizesToText) {
+            wantedWidth = std::clamp(measuredTextWidth(shown) + previewChromeWidth,
+                                     panelWidth, maximumWidth);
+        }
+        const int textWidth = wantedWidth - previewChromeWidth;
         text.Text(hstring(shown.toStdWString()));
         if (finished) {
             text.ClearValue(FrameworkElement::WidthProperty());
@@ -322,16 +416,18 @@ struct DictationPanel::Native : QObject {
             text.Width(textWidth);
             row.HorizontalAlignment(HorizontalAlignment::Left);
         }
-        level.Visibility(!hasProblem && !refining
+        level.Visibility(!hasProblem && !finished && phase == Phase::Live
                                  && status.compare(QStringLiteral("listening"), Qt::CaseInsensitive) == 0
                              ? Visibility::Visible
                              : Visibility::Collapsed);
-        ring.Visibility(!hasProblem && refining ? Visibility::Visible
+        ring.Visibility(!hasProblem && !finished && refining ? Visibility::Visible
                                                  : Visibility::Collapsed);
         dismiss.Visibility(hasProblem ? Visibility::Visible : Visibility::Collapsed);
-        resize(wantedWidth);
-        if (IsWindowVisible(window)) {
-            reposition();
+        if (wantedWidth != width) {
+            resize(wantedWidth);
+            if (IsWindowVisible(window)) {
+                reposition();
+            }
         }
     }
 
@@ -343,6 +439,18 @@ struct DictationPanel::Native : QObject {
     int px(int dip) const
     {
         return int(dip * scale() + 0.5);
+    }
+
+    // Desired width of the line in the pill's font, the way the mac panel
+    // measures its NSString. A detached TextBlock measures fine; if XAML
+    // ever hands back nothing, the 7px-per-character estimate stands in.
+    int measuredTextWidth(const QString &value)
+    {
+        probe.Text(hstring(value.toStdWString()));
+        constexpr float unbounded = std::numeric_limits<float>::infinity();
+        probe.Measure({unbounded, unbounded});
+        const int measured = int(std::ceil(probe.DesiredSize().Width));
+        return measured > 0 ? measured + 2 : int(value.size()) * 7;
     }
 
     void resize(int newWidth)
@@ -378,16 +486,21 @@ struct DictationPanel::Native : QObject {
     Border chrome{nullptr};
     FontIcon glyph{nullptr};
     TextBlock text{nullptr};
+    TextBlock probe{nullptr};
     ProgressBar level{nullptr};
     ProgressRing ring{nullptr};
     Button dismiss{nullptr};
     QString status;
     QString preview;
     QString problem;
-    int width = minimumWidth;
+    int width = panelWidth;
     quint64 pendingGeneration = 0;
     quint64 presentedGeneration = 0;
     StackPanel row{nullptr};
+    Phase phase = Phase::Live;
+    Brush normalForeground{nullptr};
+    Microsoft::UI::Xaml::Media::Animation::Storyboard shimmer{nullptr};
+    bool shimmering = false;
     bool frozen = false;
     bool completed = false;
     bool refining = false;

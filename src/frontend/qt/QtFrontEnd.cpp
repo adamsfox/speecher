@@ -11,6 +11,7 @@
 
 #include <QApplication>
 #include <QTabWidget>
+#include <QTimer>
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QEvent>
@@ -41,6 +42,24 @@ QtFrontEnd::QtFrontEnd(ApplicationController *controller, QObject *parent)
             this,
             &QtFrontEnd::refreshUpdateChip);
     refreshUpdateChip();
+
+    // SPEECHER_POPUP_CAPTURE_DIR: capture seam mirroring the mac setup
+    // assistant's; saves numbered frames of the dictation popup while it is
+    // visible so a headless end-to-end run can be assembled into a video.
+    const QString captureDir = qEnvironmentVariable("SPEECHER_POPUP_CAPTURE_DIR");
+    if (!captureDir.isEmpty()) {
+        auto *capture = new QTimer(this);
+        capture->setInterval(66);
+        connect(capture, &QTimer::timeout, this, [this, captureDir] {
+            static int frame = 0;
+            if (m_popup->isVisible()) {
+                m_popup->grab().save(QStringLiteral("%1/frame-%2.png")
+                                         .arg(captureDir)
+                                         .arg(++frame, 6, 10, QLatin1Char('0')));
+            }
+        });
+        capture->start();
+    }
 }
 
 QtFrontEnd::~QtFrontEnd()
@@ -95,6 +114,35 @@ bool QtFrontEnd::captureMainWindow(const QString &path)
         QStringLiteral("general"), QStringLiteral("audio"), QStringLiteral("output"),
         QStringLiteral("auth"), QStringLiteral("refinement"), QStringLiteral("vocabulary")};
     const QStringList request = qEnvironmentVariable("SPEECHER_GRAB_PAGE").toLower().split(u':');
+    // "setup" or "setup:<page title>" grabs the setup assistant instead,
+    // advanced to the first page whose title matches (e.g. "setup:refinement").
+    if (request.first() == QStringLiteral("setup")) {
+        auto *assistant = new SetupAssistant(m_controller);
+        const QStringList titles = assistant->pageTitles();
+        const QString wanted = request.value(1);
+        int target = 0;
+        if (!wanted.isEmpty()) {
+            // Resolve the page before walking: stepping past a typoed title
+            // would fire every page's side effects and grab the last page.
+            for (target = 0; target < titles.size(); ++target) {
+                if (titles.at(target).toLower() == wanted) {
+                    break;
+                }
+            }
+            if (target == titles.size()) {
+                assistant->deleteLater();
+                return false;
+            }
+        }
+        assistant->show();
+        for (int i = 0; i < target; ++i) {
+            assistant->next();
+        }
+        QCoreApplication::processEvents();
+        const bool saved = assistant->grab().save(path);
+        assistant->deleteLater();
+        return saved;
+    }
     const int page = pageNames.indexOf(request.first());
     // SPEECHER_GRAB_SIZE=WxH resizes the window first.
     const QStringList size = qEnvironmentVariable("SPEECHER_GRAB_SIZE").split(u'x');
@@ -183,6 +231,7 @@ void QtFrontEnd::wireSessionToPopup()
     connect(session, &DictationSession::popupHideRequested, m_popup, &TranscriberPopup::hide);
     connect(session, &DictationSession::popupFrozenChanged, m_popup, &TranscriberPopup::setFrozen);
     connect(session, &DictationSession::popupRefiningChanged, m_popup, &TranscriberPopup::setRefining);
+    connect(session, &DictationSession::popupRefinementPreviewChanged, m_popup, &TranscriberPopup::setRefinementPreview);
     connect(session, &DictationSession::popupOAuthRefreshRequested, m_popup, &TranscriberPopup::showOAuthRefreshIndicator);
     connect(session, &DictationSession::popupListeningIndicatorRequested, m_popup, &TranscriberPopup::showListeningIndicator);
     connect(session, &DictationSession::popupMessageRequested, m_popup, &TranscriberPopup::showMessage);
