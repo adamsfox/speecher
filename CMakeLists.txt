@@ -386,6 +386,8 @@ set(SPEECHER_PLATFORM_MAC_SOURCES
   src/output/mac/MacPasteDelivery.mm
   src/platform/mac/MacCorrectionObserver.mm
   src/platform/mac/MacGlobalShortcutBinder.mm
+  src/platform/mac/MacKeyCode.mm
+  src/platform/mac/MacMediaController.cpp
   src/platform/mac/MacMediaController.mm
   src/platform/mac/MacPopupPositioner.mm
   src/platform/mac/MacScreenshotContextProvider.mm
@@ -396,6 +398,7 @@ set(SPEECHER_PLATFORM_MAC_HEADERS
   src/output/mac/MacPasteDelivery.h
   src/platform/mac/MacCorrectionObserver.h
   src/platform/mac/MacGlobalShortcutBinder.h
+  src/platform/mac/MacKeyCode.h
   src/platform/mac/MacMediaController.h
   src/platform/mac/MacPopupPositioner.h
   src/platform/mac/MacScreenshotContextProvider.h
@@ -1136,6 +1139,12 @@ if(SPEECHER_BUILD_TESTS)
   endif()
   if(APPLE)
     qt_import_plugins(speecher_tests INCLUDE Qt6::QDarwinMicrophonePermissionPlugin)
+  endif()
+  if(NOT APPLE)
+    target_sources(speecher_tests PRIVATE
+      src/platform/mac/MacMediaController.cpp
+      src/platform/mac/MacMediaController.h
+    )
   endif()
   target_include_directories(speecher_tests PRIVATE src)
   target_compile_definitions(speecher_tests PRIVATE

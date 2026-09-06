@@ -608,6 +608,37 @@ private slots:
         QVERIFY(!rich.html->contains(QStringLiteral("<b>Hello</b>")));
     }
 
+    void keyboardPastePreparesTargetBeforeSendingInput()
+    {
+        class TargetWithBaseline final : public TargetProvider {
+        public:
+            Target capture(const QList<AppRecognitionRule> &) override { return {}; }
+            bool stillFocused(const Target &) override { return true; }
+            bool preparePaste(const Target &) override { prepared = true; return true; }
+            bool prepared = false;
+        } targetProvider;
+        class PasteBackend final : public DeliveryBackend {
+        public:
+            explicit PasteBackend(bool &prepared) : prepared(prepared) {}
+            bool deliver(const DeliveryContent &, bool *, QString *) override
+            {
+                return prepared;
+            }
+            bool &prepared;
+        };
+        TextDelivery delivery([&](const QString &, const OutputSettings &, PasteMethod) {
+            return std::make_unique<PasteBackend>(targetProvider.prepared);
+        }, &targetProvider);
+        OutputSettings settings;
+        settings.method = virtualKeyboardMethod();
+        settings.ydotoolEnabled = true;
+        Target target;
+        target.applicationId = QStringLiteral("editor");
+        const auto result = delivery.deliver(
+            settings, makeDeliveryContent(QStringLiteral("hello"), OutputFormat::PlainText), target);
+        QCOMPARE(result.receipt, DeliveryReceipt::InputSent);
+    }
+
     void outputAutomaticFallbackOrder()
     {
         QApplication::clipboard()->setText(QStringLiteral("previous clipboard"));
