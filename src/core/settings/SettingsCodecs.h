@@ -57,6 +57,7 @@ public:
     bool autoInstallUpdates() const; void setAutoInstallUpdates(bool value);
     int updateCheckIntervalMinutes() const; void setUpdateCheckIntervalMinutes(int value);
     QString updatesRestoreState() const; void setUpdatesRestoreState(const QString &value);
+    qint64 updatesRestoreStateTime() const;
     qint64 updatesLastCheckTime() const; void setUpdatesLastCheckTime(qint64 value);
     QString updatesDismissedVersion() const; void setUpdatesDismissedVersion(const QString &value);
     QString updatesLastRunVersion() const; void setUpdatesLastRunVersion(const QString &value);

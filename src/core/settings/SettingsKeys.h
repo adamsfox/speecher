@@ -63,6 +63,7 @@ inline const QString UpdatesAutoCheck = QStringLiteral("updates/autoCheck");
 inline const QString UpdatesAutoInstall = QStringLiteral("updates/autoInstall");
 inline const QString UpdatesCheckIntervalMinutes = QStringLiteral("updates/checkIntervalMinutes");
 inline const QString UpdatesRestoreState = QStringLiteral("updates/restoreState");
+inline const QString UpdatesRestoreStateTime = QStringLiteral("updates/restoreStateTime");
 inline const QString UpdatesLastCheckTime = QStringLiteral("updates/lastCheckTime");
 inline const QString UpdatesDismissedVersion = QStringLiteral("updates/dismissedVersion");
 inline const QString UpdatesLastRunVersion = QStringLiteral("updates/lastRunVersion");

@@ -561,6 +561,14 @@ private slots:
         updater.installAndRestart();
         QCOMPARE(updater.restartCount, 1);
         QCOMPARE(context.settings.updatesRestoreState(), QStringLiteral("settings"));
+        // The write is stamped so a relaunch can tell a fresh token from one a
+        // failed restart left behind.
+        QVERIFY(context.settings.updatesRestoreStateTime() > 0);
+        // Clearing the token drops its timestamp too, so an empty snapshot on a
+        // retry can't leave a stale one behind.
+        context.settings.setUpdatesRestoreState({});
+        QVERIFY(context.settings.updatesRestoreState().isEmpty());
+        QCOMPARE(context.settings.updatesRestoreStateTime(), qint64(0));
 
         // A restart deferred to the end of a dictation restores what the user
         // was doing when they asked, not the idle state the restart waited for.

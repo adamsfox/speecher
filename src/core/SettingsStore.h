@@ -124,6 +124,7 @@ public:
     using SettingsCodecs::updateChannel;
     using SettingsCodecs::updateCheckIntervalMinutes;
     using SettingsCodecs::updatesRestoreState;
+    using SettingsCodecs::updatesRestoreStateTime;
     using SettingsCodecs::setUpdatesRestoreState;
     using SettingsCodecs::updatesDismissedVersion;
     using SettingsCodecs::updatesLastRunVersion;

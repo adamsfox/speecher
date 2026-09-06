@@ -287,10 +287,15 @@ int main(int argc, char **argv)
             QTimer::singleShot(0, &controller, &ApplicationController::showSettings);
         }
         // An update restart records what was on screen; the relaunched process
-        // puts it back. Read-and-clear so a normal launch never replays it.
+        // puts it back. Read-and-clear so a normal launch never replays it, and
+        // only honor a token young enough to be from an actual relaunch: a
+        // failed restart that leaves the app running must not seed a dictation
+        // into some later ordinary launch.
         const QString restore = controller.settings()->updatesRestoreState();
-        if (!restore.isEmpty()) {
-            controller.settings()->setUpdatesRestoreState({});
+        const qint64 restoreAge = QDateTime::currentMSecsSinceEpoch()
+            - controller.settings()->updatesRestoreStateTime();
+        controller.settings()->setUpdatesRestoreState({});
+        if (!restore.isEmpty() && restoreAge >= 0 && restoreAge < 120000) {
             if (restore.contains(QStringLiteral("settings"))) {
                 QTimer::singleShot(0, &controller, &ApplicationController::showSettings);
             }

@@ -9,6 +9,7 @@
 #include "core/settings/CorrectionSettingsCodec.h"
 #include "core/settings/VocabularySettingsCodec.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -803,9 +804,17 @@ void SettingsCodecs::setUpdatesRestoreState(const QString &value)
 {
     if (value.isEmpty()) {
         m_settings.remove(SettingsKeys::UpdatesRestoreState);
+        m_settings.remove(SettingsKeys::UpdatesRestoreStateTime);
     } else {
         m_settings.setValue(SettingsKeys::UpdatesRestoreState, value);
+        m_settings.setValue(SettingsKeys::UpdatesRestoreStateTime,
+                            QDateTime::currentMSecsSinceEpoch());
     }
+}
+
+qint64 SettingsCodecs::updatesRestoreStateTime() const
+{
+    return value(SettingsKeys::UpdatesRestoreStateTime, 0).toLongLong();
 }
 
 qint64 SettingsCodecs::updatesLastCheckTime() const
