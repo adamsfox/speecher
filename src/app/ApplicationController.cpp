@@ -15,6 +15,9 @@
 #include "dictation/DictationSession.h"
 #include "providers/AnthropicTranscriptRefiner.h"
 #include "providers/ClaudeSpeechTranscriber.h"
+#ifdef SPEECHER_E2E_HOOKS
+#include "providers/E2EProviders.h"
+#endif
 #include "providers/CodexSpeechTranscriber.h"
 #include "providers/OpenAiTranscriptRefiner.h"
 #include "providers/ProviderRegistry.h"
@@ -405,6 +408,13 @@ void ApplicationController::showSetupAssistant(SetupAssistantPage page)
 // session start has to wait for the answer instead of capturing silence.
 void ApplicationController::startWithMicrophone(std::function<void()> start)
 {
+#ifdef SPEECHER_E2E_HOOKS
+    // E2E-build-only hook: stub runs have no microphone to ask about.
+    if (qEnvironmentVariableIntValue("SPEECHER_E2E_SKIP_MIC_GATE") == 1) {
+        start();
+        return;
+    }
+#endif
     if (m_microphoneStartPending) {
         return;
     }
@@ -578,27 +588,77 @@ bool ApplicationController::ensureSetupCompleted()
     return false;
 }
 
+// Model names and speeds here follow the September 2026 defaults; the speed
+// and quality lines come from measured runs of the real refinement request
+// (see .scratch/provider-stats/FINDINGS.md for the method and numbers).
+static QVector<ProviderStat> refinementProviderStats(const QString &id)
+{
+    if (id == QStringLiteral("openai")) {
+        return {{QStringLiteral("Default model"), QStringLiteral("gpt-5.6-luna")},
+                {QStringLiteral("Speed"), QStringLiteral("About 3 seconds per dictation")},
+                {QStringLiteral("Efficiency"), QStringLiteral("No reasoning pass; time varies run to run")},
+                {QStringLiteral("Quality"), QStringLiteral("Excellent cleanup; applies spoken corrections reliably")}};
+    }
+    if (id == QStringLiteral("anthropic")) {
+        return {{QStringLiteral("Default model"), QStringLiteral("Claude Sonnet 4.6")},
+                {QStringLiteral("Speed"), QStringLiteral("About 2 seconds per dictation")},
+                {QStringLiteral("Efficiency"), QStringLiteral("Light reasoning; very consistent finish times")},
+                {QStringLiteral("Quality"), QStringLiteral("Excellent cleanup; can leave a spoken correction in")}};
+    }
+    return {};
+}
+
 void ApplicationController::registerProviders()
 {
+#ifdef SPEECHER_E2E_HOOKS
+    // E2E-build-only hook: deterministic stub providers for the headless
+    // dictation-panel flow runs. Never compiled into distributed builds.
+    if (qEnvironmentVariableIntValue("SPEECHER_E2E_STUB") == 1) {
+        m_providers->registerSpeechProvider(
+            {QStringLiteral("e2e-stub"), QStringLiteral("E2E stub"), QString()},
+            createE2ESpeechTranscriber);
+        m_providers->registerRefinementProvider(
+            {QStringLiteral("e2e-stub"), QStringLiteral("E2E stub"), QString()},
+            createE2ETranscriptRefiner);
+    }
+#endif
     m_providers->registerSpeechProvider(
         {QStringLiteral("claude"),
          QStringLiteral("Claude Voice"),
-         QStringLiteral("Sign in with Claude Code. If needed, run claude and use /login, then check again.")},
+         QStringLiteral("Sign in with Claude Code. If needed, run claude and use /login, then check again."),
+         false,
+         QStringLiteral("Deepgram Nova 3: words appear live as you speak. "
+                        "About 60 languages, automatic punctuation and numerals."),
+         {{QStringLiteral("Engine"), QStringLiteral("Deepgram Nova 3")},
+          {QStringLiteral("Languages"), QStringLiteral("About 60")},
+          {QStringLiteral("Speed"), QStringLiteral("Live stream; words appear as you speak")},
+          {QStringLiteral("Accuracy"), QStringLiteral("Strong, holds up in noisy rooms")},
+          {QStringLiteral("Formatting"), QStringLiteral("Automatic punctuation, capitals, numerals")}}},
         [](QObject *parent) {
             return new ClaudeSpeechTranscriber(parent);
         });
     m_providers->registerSpeechProvider(
         {QStringLiteral("codex"),
          QStringLiteral("ChatGPT Codex"),
-         QStringLiteral("Sign in with ChatGPT using the ChatGPT app or Codex CLI, then check again.")},
+         QStringLiteral("Sign in with ChatGPT using the ChatGPT app or Codex CLI, then check again."),
+         false,
+         QStringLiteral("GPT Live Transcribe: very accurate; text arrives a phrase "
+                        "at a time after short pauses. Around 100 languages."),
+         {{QStringLiteral("Engine"), QStringLiteral("GPT Live Transcribe")},
+          {QStringLiteral("Languages"), QStringLiteral("Around 100")},
+          {QStringLiteral("Speed"), QStringLiteral("A phrase at a time, after a short pause")},
+          {QStringLiteral("Accuracy"), QStringLiteral("Excellent, even with accents and noise")},
+          {QStringLiteral("Formatting"), QStringLiteral("Natural punctuation and phrasing")}}},
         [](QObject *parent) {
             return new CodexSpeechTranscriber(parent);
         });
     m_providers->registerRefinementProvider(
-        {QStringLiteral("openai"), QStringLiteral("OpenAI"), QString(), true},
+        {QStringLiteral("openai"), QStringLiteral("OpenAI"), QString(), true,
+         QString(), refinementProviderStats(QStringLiteral("openai"))},
         [this](QObject *parent) { return new OpenAiTranscriptRefiner(m_secrets, parent); });
     m_providers->registerRefinementProvider(
-        {QStringLiteral("anthropic"), QStringLiteral("Anthropic"), QString(), true},
+        {QStringLiteral("anthropic"), QStringLiteral("Anthropic"), QString(), true,
+         QString(), refinementProviderStats(QStringLiteral("anthropic"))},
         [](QObject *parent) { return new AnthropicTranscriptRefiner(parent); });
 }
 

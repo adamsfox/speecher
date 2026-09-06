@@ -103,6 +103,9 @@ final class SetupFlowModel: ObservableObject {
     /// settings window here.
     var onFinished: () -> Void = {}
     var closeWindow: () -> Void = {}
+    /// E2E capture seam only: called from the step content's onAppear, so a
+    /// snapshot can never precede the destination step's view existing.
+    var stepRendered: ((Int) -> Void)?
 
     @Published var step = 0
 
@@ -407,6 +410,10 @@ struct SetupAssistantView: View {
             .padding(.bottom, 4)
             content(step)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                // onAppear must sit inside the .id boundary or it keeps the
+                // outer wrapper's identity and only ever fires once.
+                .onAppear { flow.stepRendered?(flow.step) }
+                .id(flow.step)
             Divider()
             controls
         }
@@ -463,6 +470,20 @@ private struct WelcomeStep: View {
     }
 }
 
+/// The registry's facts about a provider, as small secondary label/value rows
+/// under the picker that chooses it.
+private struct ProviderStatsRows: View {
+    let stats: [[String]]
+
+    var body: some View {
+        ForEach(stats, id: \.first) { stat in
+            LabeledContent(stat[0]) { Text(stat[1]) }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 private struct TranscriptionStep: View {
     @ObservedObject var flow: SetupFlowModel
     @ObservedObject var model: AppModel
@@ -473,6 +494,7 @@ private struct TranscriptionStep: View {
                 if let row = model.row("speechProvider") {
                     RowView(row: row, model: model)
                 }
+                ProviderStatsRows(stats: model.bridge.stats(forSpeechProvider: flow.providerId))
                 if !flow.providerStatus.isEmpty {
                     Text(flow.providerStatus)
                         .foregroundStyle(flow.providerReady ? AnyShapeStyle(.green)
@@ -608,12 +630,16 @@ private struct RefinementStep: View {
         // separates these onto per-provider panes, so the schema does not gate
         // them on the chosen provider itself.
         let provider = RowView.text(model.row("refinementProvider")?.value)
-        let rowIds = ["refinementProvider"]
-            + (provider == "openai" ? ["openAiFastMode"] : [])
+        let fastModeIds = (provider == "openai" ? ["openAiFastMode"] : [])
             + (provider == "anthropic" ? ["anthropicFastMode"] : [])
         Form {
             Section {
-                ForEach(model.rows(matching: rowIds), id: \.rowId) { row in
+                if let row = model.row("refinementProvider") {
+                    RowView(row: row, model: model)
+                }
+                // None has no facts worth a block, so choosing it hides them.
+                ProviderStatsRows(stats: model.bridge.stats(forRefinementProvider: provider))
+                ForEach(model.rows(matching: fastModeIds), id: \.rowId) { row in
                     RowView(row: row, model: model)
                 }
             }
@@ -699,7 +725,6 @@ final class SpeecherSetupAssistant: NSObject, NSWindowDelegate {
     private let flow: SetupFlowModel
     private let window: NSWindow
     private let onClosed: () -> Void
-    private var stepObserver: AnyCancellable?
 
     init(model: AppModel, onFinished: @escaping () -> Void, onClosed: @escaping () -> Void) {
         flow = SetupFlowModel(model: model)
@@ -753,23 +778,28 @@ final class SpeecherSetupAssistant: NSObject, NSWindowDelegate {
     /// as a PNG there, named by its position and id. The window's backing store
     /// needs no screen-recording grant, which a CI runner does not have.
     private func installCaptureSeam() {
-        guard stepObserver == nil,
+        guard flow.stepRendered == nil,
               let dir = ProcessInfo.processInfo.environment["SPEECHER_E2E_SETUP_CAPTURE_DIR"],
               !dir.isEmpty else { return }
-        let capture = { [weak self] (step: Int) in
+        // Driven by the step content's onAppear rather than $step: the model
+        // publishes before SwiftUI renders, and a slow main-thread check (for
+        // example the transcription step's Keychain read) can hold the commit
+        // past any fixed delay, snapshotting the previous page under the new
+        // step's name. onAppear cannot fire before the view exists; the short
+        // settle lets the window finish drawing it.
+        flow.stepRendered = { [weak self] (step: Int) in
             guard let self else { return }
             let id = flow.steps[step].id
-            // @Published fires before SwiftUI renders. Two queued main-thread
-            // blocks can still capture the previous page, especially while
-            // the microphone starts. Give the renderer time to commit first.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 guard self.flow.step == step else { return }
                 self.window.contentView?.layoutSubtreeIfNeeded()
                 self.window.displayIfNeeded()
                 self.capture(toPath: "\(dir)/step-\(step + 1)-\(id).png")
             }
         }
-        stepObserver = flow.$step.sink { capture($0) }
+        // The first step rendered before this seam installed, so its onAppear
+        // has already fired; capture it now. Later duplicates just overwrite.
+        flow.stepRendered?(flow.step)
     }
 
     private func capture(toPath path: String) {
