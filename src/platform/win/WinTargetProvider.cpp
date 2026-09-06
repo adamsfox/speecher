@@ -1,6 +1,7 @@
 #include "platform/win/WinTargetProvider.h"
 
 #include "platform/win/WinCorrectionObserver.h"
+#include "output/win/WinPasteDelivery.h"
 
 #include <QEventLoop>
 #include <QFileInfo>
@@ -360,24 +361,47 @@ bool WinTargetProvider::insertText(const Target &target,
 
     m_valueBeforeInsertion = before;
     m_insertionOffset = selection->first;
-    if (currentText(m_native->focused.Get()) != value) {
-        if (error) {
-            *error = QStringLiteral("The focused control did not report the inserted text");
-        }
+    // SetValue already succeeded. TextDelivery verifies separately; treating
+    // unavailable or delayed readback as rejection could insert the text twice.
+    return true;
+}
+
+bool WinTargetProvider::preparePaste(const Target &target)
+{
+    m_valueBeforeInsertion.reset();
+    m_insertionOffset.reset();
+    if (!stillFocused(target)) {
         return false;
     }
-    return true;
+    WinPasteDelivery::waitForReleasedKeys();
+    if (!stillFocused(target)) {
+        return false;
+    }
+    if (!target.secure && m_native->focused) {
+        const QString value = currentText(m_native->focused.Get());
+        const auto selection = selectionOffsets(m_native->focused.Get());
+        if (selection && selection->first >= 0
+            && selection->second >= selection->first
+            && selection->second <= value.size()) {
+            m_valueBeforeInsertion = value;
+            m_insertionOffset = selection->first;
+        }
+    }
+    return stillFocused(target);
 }
 
 bool WinTargetProvider::verifyInsertion(const Target &target, const QString &plainText)
 {
-    if (!m_native->focused || plainText.isEmpty() || target.secure
+    if (!m_native->focused || !m_insertionOffset || plainText.isEmpty() || target.secure
         || !stillFocused(target)) {
         return false;
     }
     for (int attempt = 0; attempt < insertionVerificationAttempts; ++attempt) {
         if (attempt > 0) {
             spinEventLoop(insertionVerificationPauseMs);
+        }
+        if (!stillFocused(target)) {
+            return false;
         }
         const QString value = currentText(m_native->focused.Get());
         const bool changed = !m_valueBeforeInsertion || value != *m_valueBeforeInsertion;
