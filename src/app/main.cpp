@@ -286,6 +286,18 @@ int main(int argc, char **argv)
         if (decision.showSettings) {
             QTimer::singleShot(0, &controller, &ApplicationController::showSettings);
         }
+        // An update restart records what was on screen; the relaunched process
+        // puts it back. Read-and-clear so a normal launch never replays it.
+        const QString restore = controller.settings()->updatesRestoreState();
+        if (!restore.isEmpty()) {
+            controller.settings()->setUpdatesRestoreState({});
+            if (restore.contains(QStringLiteral("settings"))) {
+                QTimer::singleShot(0, &controller, &ApplicationController::showSettings);
+            }
+            if (restore.contains(QStringLiteral("listening"))) {
+                QTimer::singleShot(0, &controller, &ApplicationController::startListening);
+            }
+        }
         if (!daemon || !decision.grabPath.isEmpty()) {
             controller.showMainWindow();
         }

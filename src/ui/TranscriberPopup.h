@@ -12,6 +12,8 @@ class QPushButton;
 class QPropertyAnimation;
 class QPaintEvent;
 class QResizeEvent;
+class QTimer;
+class QToolButton;
 class QVBoxLayout;
 
 namespace speecher {
@@ -40,11 +42,14 @@ public slots:
     void showErrorMessage(const QString &message);
     void showPopup(quint64 generation);
     void setUpdateChip(const QString &text, bool visible, bool enabled);
+    void setWhatsNewChip(const QString &text, bool visible);
 
 signals:
     void errorDismissed();
     void popupPresented(quint64 generation);
     void updateRequested();
+    void whatsNewRequested();
+    void whatsNewDismissed();
 
 protected:
     void changeEvent(QEvent *event) override;
@@ -69,6 +74,10 @@ private:
     QPropertyAnimation *m_errorDismissAnimation = nullptr;
     WaveformWidget *m_waveform = nullptr;
     QPushButton *m_updateChip = nullptr;
+    QWidget *m_whatsNewRow = nullptr;
+    QPushButton *m_whatsNewChip = nullptr;
+    QToolButton *m_whatsNewDismiss = nullptr;
+    QTimer *m_whatsNewAutoHide = nullptr;
     PopupPositioner *m_positioner = nullptr;
     QtPopupSurface m_surface{this};
     quint64 m_pendingPresentationGeneration = 0;

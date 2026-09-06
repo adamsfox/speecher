@@ -31,6 +31,7 @@ public:
 public slots:
     void checkForUpdates(UpdateChannel channel) override;
     void updateNow() override;
+    void installAndRestart() override;
     void dismissAvailableVersion() override;
 
 private:

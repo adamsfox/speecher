@@ -606,7 +606,8 @@ struct SettingsWindow::Native {
                     ? QStringLiteral("Switch to Stable Release %1 (replaces this Nightly Build)")
                           .arg(updates->availableVersion())
                     : QStringLiteral("Speecher %1 is available").arg(updates->availableVersion())));
-            action(QStringLiteral("Update now"), [updates] { updates->updateNow(); });
+            action(QStringLiteral("Install and restart"),
+                   [updates] { updates->installAndRestart(); });
             banner.IsClosable(true);
             bannerCloseAction = [updates] { updates->dismissAvailableVersion(); };
             break;

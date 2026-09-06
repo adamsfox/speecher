@@ -117,6 +117,7 @@ struct UpdateSettings {
     UpdateChannel channel = UpdateChannel::Stable;
     bool autoCheck = true;
     bool autoInstall = false;
+    int checkIntervalMinutes = 30;
 };
 
 struct AppSettings {

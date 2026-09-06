@@ -32,7 +32,26 @@ QtFrontEnd::QtFrontEnd(ApplicationController *controller, QObject *parent)
             this,
             &QtFrontEnd::refreshUpdateChip);
     connect(m_popup, &TranscriberPopup::updateRequested,
-            controller->updates(), &UpdateController::updateNow);
+            controller->updates(), &UpdateController::installAndRestart);
+    connect(controller, &ApplicationController::whatsNewChanged,
+            this, &QtFrontEnd::refreshWhatsNewChip);
+    connect(m_popup, &TranscriberPopup::whatsNewRequested, this, [this] {
+        showMainWindow();
+        m_appWindow->showWhatsNew();
+    });
+    connect(m_popup, &TranscriberPopup::whatsNewDismissed,
+            controller, &ApplicationController::clearPendingWhatsNew);
+    controller->updates()->setRestoreStateProvider([this, controller] {
+        QStringList state;
+        const DictationState sessionState = controller->session()->state();
+        if (sessionState != DictationState::Idle && sessionState != DictationState::Error) {
+            state.append(QStringLiteral("listening"));
+        }
+        if (m_appWindow && m_appWindow->isVisible()) {
+            state.append(QStringLiteral("settings"));
+        }
+        return state.join(QLatin1Char(','));
+    });
     connect(controller->updates(), &UpdateController::openReleasePageRequested, this, [] {
         QDesktopServices::openUrl(
             QUrl(QStringLiteral("https://github.com/firemonster612/speecher/releases")));
@@ -42,6 +61,7 @@ QtFrontEnd::QtFrontEnd(ApplicationController *controller, QObject *parent)
             this,
             &QtFrontEnd::refreshUpdateChip);
     refreshUpdateChip();
+    refreshWhatsNewChip();
 
     // SPEECHER_POPUP_CAPTURE_DIR: capture seam mirroring the mac setup
     // assistant's; saves numbered frames of the dictation popup while it is
@@ -149,6 +169,10 @@ bool QtFrontEnd::captureMainWindow(const QString &path)
     if (size.size() == 2) {
         m_appWindow->resize(size.at(0).toInt(), size.at(1).toInt());
     }
+    if (request.first() == QStringLiteral("whatsnew")) {
+        m_appWindow->showWhatsNew();
+        QCoreApplication::processEvents();
+    }
     if (page >= 0) {
         m_appWindow->navigateToSettings(static_cast<AppPageId>(page));
         if (request.size() > 1) {
@@ -251,18 +275,24 @@ void QtFrontEnd::refreshUpdateChip()
         || sessionState == DictationState::Error;
     switch (updates->state()) {
     case UpdateController::State::UpdateAvailable:
-        m_popup->setUpdateChip(QStringLiteral("Update available"), true, canAct);
+        m_popup->setUpdateChip(
+            QStringLiteral("Speecher %1 available — install and restart")
+                .arg(updates->availableVersion()),
+            true,
+            true);
         break;
     case UpdateController::State::Downloading:
         m_popup->setUpdateChip(
             QStringLiteral("Downloading %1%").arg(updates->downloadPercent()), true, false);
         break;
     case UpdateController::State::ReadyToRestart:
+        // Clicking during a dictation is safe: the restart parks until the
+        // session is idle and the relaunch restores what was on screen.
         m_popup->setUpdateChip(updates->errorMessage().isEmpty()
                                    ? QStringLiteral("Restart to finish updating")
                                    : updates->errorMessage(),
                                true,
-                               canAct);
+                               true);
         break;
     case UpdateController::State::RestartPending:
         m_popup->setUpdateChip(
@@ -285,6 +315,18 @@ void QtFrontEnd::refreshUpdateChip()
         m_popup->setUpdateChip({}, false, false);
         break;
     }
+}
+
+void QtFrontEnd::refreshWhatsNewChip()
+{
+    if (m_controller->pendingWhatsNewVersion().isEmpty()) {
+        m_popup->setWhatsNewChip({}, false);
+        return;
+    }
+    m_popup->setWhatsNewChip(
+        QStringLiteral("Speecher %1 installed — see what's new")
+            .arg(m_controller->updates()->currentVersion().section(QLatin1Char('-'), 0, 0)),
+        true);
 }
 
 } // namespace speecher

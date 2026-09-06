@@ -150,6 +150,7 @@ void MacSparkleUpdater::checkForUpdates(UpdateChannel channel)
 }
 
 void MacSparkleUpdater::updateNow() {}
+void MacSparkleUpdater::installAndRestart() { updateNow(); }
 void MacSparkleUpdater::dismissAvailableVersion() {}
 
 void MacSparkleUpdater::applySettings()
@@ -160,6 +161,7 @@ void MacSparkleUpdater::applySettings()
     SPUUpdater *updater = m_native->controller.updater;
     updater.automaticallyChecksForUpdates = m_settings->autoCheckUpdates();
     updater.automaticallyDownloadsUpdates = m_settings->autoInstallUpdates();
+    updater.updateCheckInterval = m_settings->updateCheckIntervalMinutes() * 60;
 }
 
 } // namespace speecher

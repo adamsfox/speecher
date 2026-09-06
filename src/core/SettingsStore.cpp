@@ -88,6 +88,7 @@ void SettingsStore::applySnapshot(const AppSettings &draft)
     setUpdateChannel(draft.updates.channel);
     setAutoCheckUpdates(draft.updates.autoCheck);
     setAutoInstallUpdates(draft.updates.autoInstall);
+    setUpdateCheckIntervalMinutes(draft.updates.checkIntervalMinutes);
     setVocabularyEntries(draft.vocabulary);
     setLearnedCorrections(draft.learnedCorrections);
     setCorrectionLearningEnabled(draft.correctionLearningEnabled);
@@ -217,6 +218,15 @@ void SettingsStore::setAutoInstallUpdates(bool value)
         return;
     }
     SettingsCodecs::setAutoInstallUpdates(value);
+    emit updateSettingsChanged();
+}
+
+void SettingsStore::setUpdateCheckIntervalMinutes(int value)
+{
+    if (updateCheckIntervalMinutes() == value) {
+        return;
+    }
+    SettingsCodecs::setUpdateCheckIntervalMinutes(value);
     emit updateSettingsChanged();
 }
 

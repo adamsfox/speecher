@@ -559,7 +559,7 @@ void AppWindow::buildSidebarShell()
         if (m_showingWhatsNewBanner) {
             showWhatsNew();
         } else {
-            m_controller->updates()->updateNow();
+            m_controller->updates()->installAndRestart();
         }
     });
     connect(m_updateLater, &QPushButton::clicked, this, [this] {
@@ -714,7 +714,7 @@ void AppWindow::refreshUpdateBanner()
                                               .arg(updates->availableVersion())
                                         : QStringLiteral("Speecher %1 is available")
                                               .arg(updates->availableVersion()));
-        m_updateAction->setText(QStringLiteral("Update now"));
+        m_updateAction->setText(QStringLiteral("Install and restart"));
         m_updateDismiss->show();
         break;
     case UpdateController::State::Downloading:

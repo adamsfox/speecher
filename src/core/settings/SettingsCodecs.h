@@ -55,6 +55,8 @@ public:
     UpdateChannel updateChannel() const; void setUpdateChannel(UpdateChannel value);
     bool autoCheckUpdates() const; void setAutoCheckUpdates(bool value);
     bool autoInstallUpdates() const; void setAutoInstallUpdates(bool value);
+    int updateCheckIntervalMinutes() const; void setUpdateCheckIntervalMinutes(int value);
+    QString updatesRestoreState() const; void setUpdatesRestoreState(const QString &value);
     qint64 updatesLastCheckTime() const; void setUpdatesLastCheckTime(qint64 value);
     QString updatesDismissedVersion() const; void setUpdatesDismissedVersion(const QString &value);
     QString updatesLastRunVersion() const; void setUpdatesLastRunVersion(const QString &value);

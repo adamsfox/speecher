@@ -8,6 +8,7 @@
 #include <QEasingCurve>
 #include <QFrame>
 #include <QEvent>
+#include <QHBoxLayout>
 #include <QFontMetrics>
 #include <QPalette>
 #include <QPaintEvent>
@@ -15,7 +16,9 @@
 #include <QPushButton>
 #include <QPropertyAnimation>
 #include <QResizeEvent>
+#include <QStyle>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <QPainter>
@@ -154,6 +157,41 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
         emit errorDismissed();
     });
 
+    m_whatsNewRow = new QWidget(this);
+    m_whatsNewRow->setObjectName(QStringLiteral("whatsNewRow"));
+    auto *whatsNewLayout = new QHBoxLayout(m_whatsNewRow);
+    whatsNewLayout->setContentsMargins(0, 0, 0, 0);
+    whatsNewLayout->setSpacing(0);
+    m_whatsNewChip = new QPushButton(m_whatsNewRow);
+    m_whatsNewChip->setObjectName(QStringLiteral("whatsNewChip"));
+    m_whatsNewChip->setFlat(true);
+    m_whatsNewChip->setFocusPolicy(Qt::NoFocus);
+    m_whatsNewDismiss = new QToolButton(m_whatsNewRow);
+    m_whatsNewDismiss->setObjectName(QStringLiteral("whatsNewDismiss"));
+    m_whatsNewDismiss->setAutoRaise(true);
+    m_whatsNewDismiss->setFocusPolicy(Qt::NoFocus);
+    m_whatsNewDismiss->setIcon(style()->standardIcon(QStyle::SP_TitleBarCloseButton));
+    m_whatsNewDismiss->setToolTip(QStringLiteral("Dismiss"));
+    m_whatsNewDismiss->setAccessibleName(QStringLiteral("Dismiss what's new"));
+    whatsNewLayout->addWidget(m_whatsNewChip);
+    whatsNewLayout->addWidget(m_whatsNewDismiss);
+    m_whatsNewRow->hide();
+    connect(m_whatsNewChip, &QPushButton::clicked, this, &TranscriberPopup::whatsNewRequested);
+    connect(m_whatsNewDismiss, &QToolButton::clicked, this, [this] {
+        setWhatsNewChip({}, false);
+        emit whatsNewDismissed();
+    });
+    m_whatsNewAutoHide = new QTimer(this);
+    m_whatsNewAutoHide->setObjectName(QStringLiteral("whatsNewAutoHide"));
+    m_whatsNewAutoHide->setSingleShot(true);
+    m_whatsNewAutoHide->setInterval(6000);
+    // Auto-hide only tidies this popup; the offer stays pending and returns
+    // with the next popup, unlike the dismiss button.
+    connect(m_whatsNewAutoHide, &QTimer::timeout, this, [this] {
+        setWhatsNewChip({}, false);
+    });
+    m_layout->addWidget(m_whatsNewRow, 0, Qt::AlignHCenter);
+
     m_updateChip->setObjectName(QStringLiteral("updateChip"));
     m_updateChip->setFlat(true);
     m_updateChip->setFocusPolicy(Qt::NoFocus);
@@ -173,7 +211,12 @@ QSize TranscriberPopup::sizeHint() const
     const int updateHeight = m_updateChip->isHidden()
         ? 0
         : m_updateChip->sizeHint().height() + spacing;
-    return QSize(620, 110 + updateHeight);
+    // configurePopup asks for the hint from the constructor, before the
+    // What's New row exists.
+    const int whatsNewHeight = !m_whatsNewRow || m_whatsNewRow->isHidden()
+        ? 0
+        : m_whatsNewRow->sizeHint().height() + spacing;
+    return QSize(620, 110 + updateHeight + whatsNewHeight);
 }
 
 void TranscriberPopup::setStatus(const QString &status)
@@ -348,6 +391,28 @@ void TranscriberPopup::showPopup(quint64 generation)
     show();
     raise();
     update();
+    if (!m_whatsNewRow->isHidden()) {
+        m_whatsNewAutoHide->start();
+    }
+}
+
+void TranscriberPopup::setWhatsNewChip(const QString &text, bool visible)
+{
+    const bool visibilityChanged = m_whatsNewRow->isHidden() == visible;
+    m_whatsNewChip->setText(text);
+    m_whatsNewRow->setVisible(visible);
+    if (visible && isVisible()) {
+        m_whatsNewAutoHide->start();
+    } else if (!visible) {
+        m_whatsNewAutoHide->stop();
+    }
+    if (!visibilityChanged) {
+        return;
+    }
+    adjustSize();
+    if (isVisible()) {
+        m_positioner->positionBottomCenter(m_surface);
+    }
 }
 
 void TranscriberPopup::setUpdateChip(const QString &text, bool visible, bool enabled)

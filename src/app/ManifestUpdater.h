@@ -65,6 +65,7 @@ public:
 public slots:
     void checkForUpdates(UpdateChannel channel) override;
     void updateNow() override;
+    void installAndRestart() override;
     void dismissAvailableVersion() override;
 
 protected:
@@ -86,6 +87,7 @@ private:
                                     bool automaticCheck);
     void beginCheck(UpdateChannel channel, bool automaticCheck);
     void updateSettingsChanged();
+    int baseCheckIntervalMs() const;
     QUrl manifestUrl(UpdateChannel channel) const;
     void finishCheck(QNetworkReply *reply);
     void recordAutomaticCheckFailure();
@@ -94,6 +96,7 @@ private:
     void finishDownload(QNetworkReply *reply);
     void clearDownload();
     void restartNow();
+    void writeRestoreState();
 
     SettingsStore *m_settings;
     DictationSession *m_session;
@@ -107,9 +110,11 @@ private:
     QString m_downloadDescription;
     QString m_downloadError;
     QString m_dismissedVersion;
+    QString m_pendingRestoreState;
     UpdateChannel m_checkChannel;
     UpdateChannel m_selectedChannel;
     bool m_automaticCheck = false;
+    bool m_restartWhenReady = false;
     bool m_manualInstallRequired = false;
     int m_automaticCheckFailures = 0;
     State m_state = State::Idle;
