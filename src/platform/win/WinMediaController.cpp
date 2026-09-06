@@ -6,8 +6,8 @@
 #include <winrt/Windows.Media.Control.h>
 #include <winrt/base.h>
 
-#include <atomic>
-#include <mutex>
+#include <algorithm>
+#include <utility>
 #include <vector>
 
 namespace speecher {
@@ -15,75 +15,73 @@ namespace speecher {
 using MediaSession = winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSession;
 using PlaybackStatus = winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionPlaybackStatus;
 
+// Called on the controller's STA; WinRT awaits resume in that apartment.
+// The shared state outlives the QObject while an operation is pending.
 struct WinMediaState {
-    std::atomic<quint64> generation{0};
-    std::atomic<bool> pauseDesired{false};
-    std::mutex mutex;
+    quint64 generation = 0;
+    bool pauseDesired = false;
+    bool running = false;
     std::vector<MediaSession> paused;
 };
 
 namespace {
 
-void keepPaused(const std::shared_ptr<WinMediaState> &state,
-                const std::vector<MediaSession> &sessions,
-                size_t first = 0)
+winrt::fire_and_forget applyRequestedState(std::shared_ptr<WinMediaState> state)
 {
-    const std::lock_guard lock(state->mutex);
-    state->paused.insert(state->paused.end(), sessions.begin() + first, sessions.end());
-}
-
-winrt::fire_and_forget resumeSessions(std::shared_ptr<WinMediaState> state,
-                                      quint64 generation,
-                                      std::vector<MediaSession> sessions)
-{
-    try {
-        for (size_t index = 0; index < sessions.size(); ++index) {
-            if (state->pauseDesired.load()) {
-                keepPaused(state, sessions, index);
-                co_return;
-            }
-            co_await sessions[index].TryPlayAsync();
-            if (state->pauseDesired.load()) {
-                if (co_await sessions[index].TryPauseAsync()) {
-                    keepPaused(state, sessions, index);
-                } else {
-                    keepPaused(state, sessions, index + 1);
+    if (state->running) {
+        co_return;
+    }
+    state->running = true;
+    quint64 generation;
+    do {
+        generation = state->generation;
+        if (state->pauseDesired) {
+            try {
+                const auto manager = co_await winrt::Windows::Media::Control::
+                    GlobalSystemMediaTransportControlsSessionManager::RequestAsync();
+                for (const MediaSession &session : manager.GetSessions()) {
+                    if (!state->pauseDesired) {
+                        break;
+                    }
+                    try {
+                        if (session.GetPlaybackInfo().PlaybackStatus() == PlaybackStatus::Playing
+                            && co_await session.TryPauseAsync()
+                            && std::find(state->paused.begin(), state->paused.end(), session)
+                                == state->paused.end()) {
+                            state->paused.push_back(session);
+                        }
+                    } catch (const winrt::hresult_error &error) {
+                        qWarning() << "media pause failed:"
+                                   << QString::fromWCharArray(error.message().c_str());
+                    }
                 }
-                co_return;
+            } catch (const winrt::hresult_error &error) {
+                qWarning() << "media sessions unavailable:"
+                           << QString::fromWCharArray(error.message().c_str());
+            }
+        } else {
+            // Keep failed and unattempted players owned. A later request may
+            // retry them; one closed player must not strand the others.
+            const auto sessions = std::exchange(state->paused, {});
+            for (const MediaSession &session : sessions) {
+                bool resumed = false;
+                if (!state->pauseDesired) {
+                    try {
+                        resumed = co_await session.TryPlayAsync();
+                    } catch (const winrt::hresult_error &error) {
+                        qWarning() << "media resume failed:"
+                                   << QString::fromWCharArray(error.message().c_str());
+                    }
+                }
+                if (!resumed) {
+                    state->paused.push_back(session);
+                }
             }
         }
-        if (state->generation.load() == generation) {
-            qInfo() << "media resumed sessions=" << sessions.size();
-        }
-    } catch (const winrt::hresult_error &error) {
-        qWarning() << "media resume failed:" << QString::fromWCharArray(error.message().c_str());
-    }
-}
-
-winrt::fire_and_forget pauseSessions(std::shared_ptr<WinMediaState> state,
-                                     quint64 generation)
-{
-    std::vector<MediaSession> paused;
-    try {
-        const auto manager = co_await winrt::Windows::Media::Control::
-            GlobalSystemMediaTransportControlsSessionManager::RequestAsync();
-        for (const MediaSession &session : manager.GetSessions()) {
-            if (session.GetPlaybackInfo().PlaybackStatus() == PlaybackStatus::Playing
-                && co_await session.TryPauseAsync()) {
-                paused.push_back(session);
-            }
-        }
-        if (!state->pauseDesired.load()) {
-            resumeSessions(state, generation, std::move(paused));
-            co_return;
-        }
-        keepPaused(state, paused);
-        if (state->generation.load() == generation) {
-            qInfo() << "media paused sessions=" << paused.size();
-        }
-    } catch (const winrt::hresult_error &error) {
-        qWarning() << "media pause failed:" << QString::fromWCharArray(error.message().c_str());
-    }
+        // Reconcile requests that arrived during an await, but do not spin
+        // on a failed operation when the requested state has not changed.
+    } while (state->generation != generation);
+    state->running = false;
 }
 
 } // namespace
@@ -96,33 +94,21 @@ WinMediaController::WinMediaController(QObject *parent)
 
 WinMediaController::~WinMediaController()
 {
-    m_native->pauseDesired = false;
-    ++m_native->generation;
+    resumePaused();
 }
 
 void WinMediaController::pausePlaying()
 {
     m_native->pauseDesired = true;
-    const quint64 generation = ++m_native->generation;
-    {
-        const std::lock_guard lock(m_native->mutex);
-        m_native->paused.clear();
-    }
-    pauseSessions(m_native, generation);
+    ++m_native->generation;
+    applyRequestedState(m_native);
 }
 
 void WinMediaController::resumePaused()
 {
     m_native->pauseDesired = false;
-    const quint64 generation = ++m_native->generation;
-    std::vector<MediaSession> sessions;
-    {
-        const std::lock_guard lock(m_native->mutex);
-        sessions = std::move(m_native->paused);
-    }
-    if (!sessions.empty()) {
-        resumeSessions(m_native, generation, std::move(sessions));
-    }
+    ++m_native->generation;
+    applyRequestedState(m_native);
 }
 
 } // namespace speecher

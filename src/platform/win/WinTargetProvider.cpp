@@ -369,6 +369,26 @@ bool WinTargetProvider::insertText(const Target &target,
     return true;
 }
 
+bool WinTargetProvider::preparePaste(const Target &target)
+{
+    m_valueBeforeInsertion.reset();
+    m_insertionOffset.reset();
+    if (!stillFocused(target)) {
+        return false;
+    }
+    if (!target.secure && m_native->focused) {
+        const QString value = currentText(m_native->focused.Get());
+        const auto selection = selectionOffsets(m_native->focused.Get());
+        if (selection && selection->first >= 0
+            && selection->second >= selection->first
+            && selection->second <= value.size()) {
+            m_valueBeforeInsertion = value;
+            m_insertionOffset = selection->first;
+        }
+    }
+    return stillFocused(target);
+}
+
 bool WinTargetProvider::verifyInsertion(const Target &target, const QString &plainText)
 {
     if (!m_native->focused || plainText.isEmpty() || target.secure
@@ -378,6 +398,9 @@ bool WinTargetProvider::verifyInsertion(const Target &target, const QString &pla
     for (int attempt = 0; attempt < insertionVerificationAttempts; ++attempt) {
         if (attempt > 0) {
             spinEventLoop(insertionVerificationPauseMs);
+        }
+        if (!stillFocused(target)) {
+            return false;
         }
         const QString value = currentText(m_native->focused.Get());
         const bool changed = !m_valueBeforeInsertion || value != *m_valueBeforeInsertion;

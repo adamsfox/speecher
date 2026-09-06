@@ -151,7 +151,6 @@ void WinCorrectionObserver::observe(void *automation,
 
 void WinCorrectionObserver::valueChanged()
 {
-    sample();
     if (m_tracker.active()) {
         m_settle.start(correctionSettleMs);
     }
@@ -160,7 +159,11 @@ void WinCorrectionObserver::valueChanged()
 void WinCorrectionObserver::sample()
 {
     if (m_tracker.active() && m_native->element) {
-        m_tracker.sample(elementText(m_native->element.Get()));
+        const QString value = elementText(m_native->element.Get());
+        // No change notification arrived during the settle interval. Supply
+        // the two consistent readings normally established by polling.
+        m_tracker.sample(value);
+        m_tracker.sample(value);
     }
 }
 
