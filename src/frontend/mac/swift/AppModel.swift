@@ -277,7 +277,7 @@ final class AppModel: ObservableObject {
     }
 
     func endShortcutRecording() {
-        bridge.endShortcutRecording()
+        shortcutProblem = bridge.endShortcutRecording() ?? ""
     }
 
     func bindShortcut(characters: String, modifierFlags: NSEvent.ModifierFlags) {

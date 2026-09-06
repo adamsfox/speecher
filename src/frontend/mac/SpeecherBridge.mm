@@ -1008,12 +1008,14 @@ Qt::KeyboardModifiers qtModifiersForFlags(NSUInteger flags)
 
 - (void)beginShortcutRecording
 {
-    _state->controller->suspendGlobalShortcut();
+    if (_state->controller) _state->controller->suspendGlobalShortcut();
 }
 
-- (void)endShortcutRecording
+- (NSString *)endShortcutRecording
 {
-    if (_state->controller) _state->controller->resumeGlobalShortcut();
+    if (!_state->controller) return nil;
+    const QString error = _state->controller->resumeGlobalShortcut();
+    return error.isEmpty() ? nil : error.toNSString();
 }
 
 - (void)dealloc

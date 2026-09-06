@@ -39,7 +39,7 @@ public:
     // the registration here and takes it back on resume; the default binders
     // deliver key events regardless and keep nothing to let go of.
     virtual void suspend() {}
-    virtual void resume() {}
+    virtual QString resume() { return {}; }
     // Forgets the registration the desktop keeps for Speecher, where the
     // desktop keeps one. Portal shortcuts live with the session and need no
     // removal; the default says so.

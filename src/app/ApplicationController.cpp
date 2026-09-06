@@ -355,9 +355,9 @@ void ApplicationController::suspendGlobalShortcut()
     m_shortcutBinder->suspend();
 }
 
-void ApplicationController::resumeGlobalShortcut()
+QString ApplicationController::resumeGlobalShortcut()
 {
-    m_shortcutBinder->resume();
+    return m_shortcutBinder->resume();
 }
 
 void ApplicationController::registerGlobalShortcut()

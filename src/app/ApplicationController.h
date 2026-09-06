@@ -71,7 +71,7 @@ public:
     bool setGlobalShortcut(const QKeySequence &shortcut, QString *error = nullptr);
     // Lets a shortcut recorder see the bound combination as a key event.
     void suspendGlobalShortcut();
-    void resumeGlobalShortcut();
+    QString resumeGlobalShortcut();
     void registerGlobalShortcut();
     // Forgets the desktop's registration of the shortcut, where it keeps one.
     bool removeGlobalShortcutRegistration(QString *error = nullptr);

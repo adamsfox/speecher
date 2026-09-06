@@ -21,7 +21,7 @@ public:
     QKeySequence shortcut() const override;
     bool setShortcut(const QKeySequence &shortcut, QString *error = nullptr) override;
     void suspend() override;
-    void resume() override;
+    QString resume() override;
 
 private:
     bool registerHotKey(const QKeySequence &shortcut, QString *error);

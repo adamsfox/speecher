@@ -19,6 +19,7 @@
 #include <QDeadlineTimer>
 #include <QApplication>
 #include <QFile>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 
 using namespace speecher;
@@ -332,8 +333,6 @@ private slots:
         QVERIFY(!hotKeyComboIsFree(kVK_F10));
     }
 
-    // Ending a recording that bound a replacement keeps the replacement rather
-    // than restoring the suspended combination over it.
     void shortcutCleanupAfterControllerDestruction()
     {
         SpeecherBridge *bridge;
@@ -342,10 +341,13 @@ private slots:
             bridge = [[SpeecherBridge alloc] initWithController:&controller];
             [bridge beginShortcutRecording];
         }
-        // The recorder's queued cleanup may run after controller teardown.
-        [bridge endShortcutRecording];
+        // Recorder callbacks may arrive after controller teardown.
+        [bridge beginShortcutRecording];
+        QVERIFY([bridge endShortcutRecording] == nil);
     }
 
+    // Ending a recording that bound a replacement keeps the replacement rather
+    // than restoring the suspended combination over it.
     void endingARecordingKeepsAShortcutBoundDuringIt()
     {
         ApplicationController controller(false);
@@ -362,6 +364,25 @@ private slots:
         QCOMPARE(controller.globalShortcut(),
                  QKeySequence(Qt::META | Qt::ALT | Qt::Key_G));
         QVERIFY(hotKeyComboIsFree());
+    }
+
+    void endingShortcutRecordingReportsRegistrationConflict()
+    {
+        ApplicationController controller(false);
+        SpeecherBridge *bridge = [[SpeecherBridge alloc] initWithController:&controller];
+        QVERIFY(controller.setGlobalShortcut(
+            QKeySequence(Qt::META | Qt::ALT | Qt::SHIFT | Qt::Key_F9)));
+        [bridge beginShortcutRecording];
+        EventHotKeyRef competingHotKey = nullptr;
+        const auto cleanup = qScopeGuard([&] {
+            if (competingHotKey) UnregisterEventHotKey(competingHotKey);
+        });
+        const EventHotKeyID identifier{'spct', 100};
+        QCOMPARE(RegisterEventHotKey(kVK_F9, controlKey | optionKey | shiftKey,
+                                     identifier, GetApplicationEventTarget(),
+                                     kEventHotKeyExclusive, &competingHotKey), OSStatus(noErr));
+        NSString *error = [bridge endShortcutRecording];
+        QVERIFY(error.length > 0);
     }
 
     void whatsNewOfferFollowsPendingUpgradeState()

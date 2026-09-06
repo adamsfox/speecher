@@ -229,7 +229,7 @@ typedef NS_ENUM(NSInteger, SpeecherPaneLayout) {
 // dictation instead of re-recording it. Recording therefore lets go of the
 // registration first; ending it restores the bound sequence.
 - (void)beginShortcutRecording;
-- (void)endShortcutRecording;
+- (nullable NSString *)endShortcutRecording;
 
 @property (nonatomic, readonly) BOOL accessibilitySupported;
 @property (nonatomic, readonly) BOOL accessibilityEnabled;

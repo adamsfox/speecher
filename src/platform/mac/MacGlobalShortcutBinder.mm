@@ -211,13 +211,15 @@ void MacGlobalShortcutBinder::suspend()
     unregisterHotKey();
 }
 
-void MacGlobalShortcutBinder::resume()
+QString MacGlobalShortcutBinder::resume()
 {
-    if (m_suspensionCount == 0 || --m_suspensionCount > 0) return;
+    if (m_suspensionCount == 0 || --m_suspensionCount > 0) return {};
+    QString error;
     if (m_resumeBinding) {
         m_resumeBinding = false;
-        bind();
+        registerHotKey(m_shortcut, &error);
     }
+    return error;
 }
 
 void MacGlobalShortcutBinder::refreshKeyboardLayout()

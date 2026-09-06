@@ -4,6 +4,10 @@
 #include <QDebug>
 #include <QScopeGuard>
 #include <QStandardPaths>
+#ifdef Q_OS_MACOS
+#include <QSettings>
+#include <QTemporaryDir>
+#endif
 
 #ifdef SPEECHER_WITH_WINUI
 #include "frontend/win/WinUiHost.h"
@@ -12,6 +16,18 @@
 
 int main(int argc, char **argv)
 {
+#ifdef Q_OS_MACOS
+    // Test mode alone does not redirect macOS CFPreferences. Keep every test
+    // QSettings instance away from the user's native preferences.
+    QTemporaryDir preferences;
+    if (!preferences.isValid()) {
+        qCritical() << "Could not create isolated macOS test preferences";
+        return 1;
+    }
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, preferences.path());
+    QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, preferences.path());
+#endif
 #ifdef SPEECHER_WITH_WINUI
     std::unique_ptr<speecher::WinUiHost> winUiHost;
     try {
