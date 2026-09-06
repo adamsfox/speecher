@@ -13,13 +13,14 @@ namespace speecher {
 namespace win {
 struct UpdateChipState {
     QString text;
+    QString action;
     bool visible = false;
     bool enabled = false;
 };
 
 UpdateChipState updateChipState(UpdateController::State state, const QString &version,
                                 int percent, const QString &error, bool repeatedFailure,
-                                DictationState sessionState);
+                                bool manualInstall, DictationState sessionState);
 } // namespace win
 
 class ApplicationController;
