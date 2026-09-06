@@ -846,6 +846,15 @@ Qt::KeyboardModifiers qtModifiersForFlags(NSUInteger flags)
                              bridge.whatsNewChanged();
                          }
                      });
+    QObject::connect(controller->updates(),
+                     &speecher::UpdateController::changed,
+                     &_state->lifetime,
+                     [weakSelf] {
+                         SpeecherBridge *bridge = weakSelf;
+                         if (bridge.updateChanged) {
+                             bridge.updateChanged();
+                         }
+                     });
     [self connectPanelTo:controller->session()];
     return self;
 }
@@ -1066,6 +1075,77 @@ Qt::KeyboardModifiers qtModifiersForFlags(NSUInteger flags)
 - (void)clearPendingWhatsNew
 {
     _state->controller->clearPendingWhatsNew();
+}
+
+- (SpeecherUpdateState)updateState
+{
+    switch (_state->controller->updates()->state()) {
+    case speecher::UpdateController::State::Idle:
+        return SpeecherUpdateStateIdle;
+    case speecher::UpdateController::State::Checking:
+        return SpeecherUpdateStateChecking;
+    case speecher::UpdateController::State::CheckFailed:
+        return SpeecherUpdateStateCheckFailed;
+    case speecher::UpdateController::State::UpToDate:
+        return SpeecherUpdateStateUpToDate;
+    case speecher::UpdateController::State::UpdateAvailable:
+        return SpeecherUpdateStateUpdateAvailable;
+    case speecher::UpdateController::State::Downloading:
+        return SpeecherUpdateStateDownloading;
+    case speecher::UpdateController::State::ReadyToRestart:
+        return SpeecherUpdateStateReadyToRestart;
+    case speecher::UpdateController::State::RestartPending:
+        return SpeecherUpdateStateRestartPending;
+    case speecher::UpdateController::State::Restarting:
+        return SpeecherUpdateStateRestarting;
+    case speecher::UpdateController::State::Error:
+        return SpeecherUpdateStateError;
+    }
+}
+
+- (NSString *)updateVersion
+{
+    return _state->controller->updates()->availableVersion().toNSString();
+}
+
+- (NSString *)installedVersion
+{
+    return _state->controller->updates()->currentVersion().toNSString();
+}
+
+- (NSInteger)updatePercent
+{
+    return _state->controller->updates()->downloadPercent();
+}
+
+- (NSString *)updateError
+{
+    return _state->controller->updates()->errorMessage().toNSString();
+}
+
+- (BOOL)updateBannerVisible
+{
+    return _state->controller->updates()->bannerVisible();
+}
+
+- (BOOL)updateStableReplacement
+{
+    return _state->controller->updates()->stableReplacementAvailable();
+}
+
+- (void)installUpdateAndRestart
+{
+    _state->controller->updates()->installAndRestart();
+}
+
+- (void)updateNow
+{
+    _state->controller->updates()->updateNow();
+}
+
+- (void)dismissUpdate
+{
+    _state->controller->updates()->dismissAvailableVersion();
 }
 
 - (BOOL)accessibilitySupported
