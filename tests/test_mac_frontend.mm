@@ -488,6 +488,24 @@ private slots:
         QCOMPARE(controller.settings()->updatesRestoreState(), QStringLiteral("settings"));
     }
 
+    // A CI-only capture: with SPEECHER_UPDATE_PREVIEW_DIR set, render the five
+    // update UI states to PNGs the workflow uploads. Skipped in a normal run,
+    // so it neither slows the suite nor needs a display of its own.
+    void renderUpdatePreviewsWhenRequested()
+    {
+        const QString directory = qEnvironmentVariable("SPEECHER_UPDATE_PREVIEW_DIR");
+        if (directory.isEmpty()) {
+            QSKIP("SPEECHER_UPDATE_PREVIEW_DIR unset; preview capture is CI-only");
+        }
+        NSArray<NSString *> *written =
+            [SpeecherUpdatePreview renderToDirectory:directory.toNSString()];
+        QCOMPARE(written.count, NSUInteger(5));
+        for (NSString *name in written) {
+            const QString path = directory + QStringLiteral("/") + QString::fromNSString(name);
+            QVERIFY2(QFile::exists(path), qPrintable(path));
+        }
+    }
+
     void whatsNewOfferFollowsPendingUpgradeState()
     {
         SettingsStore settings;
