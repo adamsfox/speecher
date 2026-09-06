@@ -284,6 +284,7 @@ set(SPEECHER_PROVIDER_SOURCES
   src/providers/StreamingRefinement.cpp
   src/providers/AnthropicApiRefiner.cpp
   src/providers/AnthropicTranscriptRefiner.cpp
+  src/providers/ClaudeCredentialStorage.cpp
   src/providers/ClaudeCredentials.cpp
   src/providers/ClaudeSpeechTranscriber.cpp
   src/providers/ClaudeVoiceClient.cpp
@@ -301,6 +302,7 @@ set(SPEECHER_PROVIDER_HEADERS
   src/providers/StreamingRefinement.h
   src/providers/AnthropicApiRefiner.h
   src/providers/AnthropicTranscriptRefiner.h
+  src/providers/ClaudeCredentialStorage.h
   src/providers/ClaudeCredentials.h
   src/providers/ClaudeSpeechTranscriber.h
   src/providers/ClaudeVoiceClient.h
@@ -613,6 +615,9 @@ add_library(speecher_providers STATIC
 )
 target_include_directories(speecher_providers PUBLIC src)
 target_link_libraries(speecher_providers PUBLIC speecher_workflow Qt6::Network)
+if(APPLE)
+  target_link_libraries(speecher_providers PRIVATE "-framework Security")
+endif()
 
 add_library(speecher_platform STATIC
   ${SPEECHER_PLATFORM_SOURCES}
