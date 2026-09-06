@@ -32,11 +32,11 @@ import SwiftUI
 
         let jobs: [(String, CGSize, AnyView)] = [
             ("01-settings-banner-update-available.png", CGSize(width: 640, height: 90),
-             AnyView(UpdateBannerContent(update: available).padding())),
+             AnyView(card(UpdateBannerContent(update: available).row))),
             ("02-settings-banner-ready-to-restart.png", CGSize(width: 640, height: 90),
-             AnyView(UpdateBannerContent(update: ready).padding())),
+             AnyView(card(UpdateBannerContent(update: ready).row))),
             ("03-settings-whats-new-strip.png", CGSize(width: 640, height: 90),
-             AnyView(WhatsNewStrip(installedNumber: "0.2.0").padding())),
+             AnyView(card(WhatsNewStrip(installedNumber: "0.2.0").row))),
             ("04-panel-update-chip.png", CGSize(width: 520, height: 140),
              AnyView(panel(updateChipState))),
             ("05-panel-whats-new-chip.png", CGSize(width: 520, height: 140),
@@ -51,6 +51,19 @@ import SwiftUI
             written.append(name)
         }
         return written
+    }
+
+    /// A banner or strip row on a rounded card. The settings window draws these
+    /// rows in a native GroupBox, which ImageRenderer leaves blank offscreen, so
+    /// the capture wraps the same row in a material card it can rasterise.
+    @MainActor
+    private static func card(_ row: some View) -> some View {
+        row
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .padding()
     }
 
     /// The dictation panel view with no-op actions, at rest on the live phase.

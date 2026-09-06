@@ -80,31 +80,35 @@ struct UpdateBannerContent: View {
     var dismiss: () -> Void = {}
 
     var body: some View {
-        GroupBox {
-            HStack {
-                Label(text, systemImage: update.state == .error
-                    ? "exclamationmark.triangle.fill"
-                    : "arrow.down.circle")
-                Spacer()
-                if update.state == .downloading {
-                    ProgressView(value: Double(update.percent), total: 100)
-                        .frame(width: 120)
-                }
-                switch update.state {
-                case .updateAvailable:
-                    Button("Install and restart", action: install)
-                    Button("Dismiss", action: dismiss)
-                case .readyToRestart:
-                    Button("Restart now", action: restart)
-                    Button("Later", action: later)
-                case .error:
-                    Button("Try again", action: retry)
-                    Button("Dismiss", action: dismiss)
-                default:
-                    // Downloading, restart pending and restarting carry no
-                    // actions: the sentence is the whole message.
-                    EmptyView()
-                }
+        GroupBox { row }
+    }
+
+    /// The banner's row, kept separate from its GroupBox so the offscreen
+    /// preview renderer can place it on a card ImageRenderer can rasterise.
+    @ViewBuilder var row: some View {
+        HStack {
+            Label(text, systemImage: update.state == .error
+                ? "exclamationmark.triangle.fill"
+                : "arrow.down.circle")
+            Spacer()
+            if update.state == .downloading {
+                ProgressView(value: Double(update.percent), total: 100)
+                    .frame(width: 120)
+            }
+            switch update.state {
+            case .updateAvailable:
+                Button("Install and restart", action: install)
+                Button("Dismiss", action: dismiss)
+            case .readyToRestart:
+                Button("Restart now", action: restart)
+                Button("Later", action: later)
+            case .error:
+                Button("Try again", action: retry)
+                Button("Dismiss", action: dismiss)
+            default:
+                // Downloading, restart pending and restarting carry no
+                // actions: the sentence is the whole message.
+                EmptyView()
             }
         }
     }
@@ -139,13 +143,15 @@ struct WhatsNewStrip: View {
     var dismiss: () -> Void = {}
 
     var body: some View {
-        GroupBox {
-            HStack {
-                Label("Speecher \(installedNumber) is installed", systemImage: "sparkles")
-                Spacer()
-                Button("See what's new", action: seeWhatsNew)
-                Button("Dismiss", action: dismiss)
-            }
+        GroupBox { row }
+    }
+
+    @ViewBuilder var row: some View {
+        HStack {
+            Label("Speecher \(installedNumber) is installed", systemImage: "sparkles")
+            Spacer()
+            Button("See what's new", action: seeWhatsNew)
+            Button("Dismiss", action: dismiss)
         }
     }
 }
