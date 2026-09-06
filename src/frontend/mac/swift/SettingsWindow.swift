@@ -87,13 +87,13 @@ struct UpdateBannerContent: View {
     /// preview renderer can place it on a card ImageRenderer can rasterise.
     @ViewBuilder var row: some View {
         HStack {
-            Label(text, systemImage: update.state == .error
-                ? "exclamationmark.triangle.fill"
-                : "arrow.down.circle")
+            Label(text, systemImage: icon)
             Spacer()
             if update.state == .downloading {
                 ProgressView(value: Double(update.percent), total: 100)
                     .frame(width: 120)
+            } else if update.state == .checking {
+                ProgressView().controlSize(.small)
             }
             switch update.state {
             case .updateAvailable:
@@ -102,19 +102,34 @@ struct UpdateBannerContent: View {
             case .readyToRestart:
                 Button("Restart now", action: restart)
                 Button("Later", action: later)
-            case .error:
+            case .error, .checkFailed:
                 Button("Try again", action: retry)
                 Button("Dismiss", action: dismiss)
+            case .upToDate:
+                Button("Dismiss", action: dismiss)
             default:
-                // Downloading, restart pending and restarting carry no
-                // actions: the sentence is the whole message.
+                // Checking, downloading, restart pending and restarting carry
+                // no actions: the sentence is the whole message.
                 EmptyView()
             }
         }
     }
 
+    private var icon: String {
+        switch update.state {
+        case .error, .checkFailed: return "exclamationmark.triangle.fill"
+        case .upToDate: return "checkmark.circle"
+        case .checking: return "arrow.triangle.2.circlepath"
+        default: return "arrow.down.circle"
+        }
+    }
+
     private var text: String {
         switch update.state {
+        case .checking:
+            return "Checking for updates…"
+        case .upToDate:
+            return "Speecher is up to date"
         case .updateAvailable:
             return update.stableReplacement
                 ? "Switch to Stable Release \(update.version) (replaces this Nightly Build)"
@@ -127,8 +142,8 @@ struct UpdateBannerContent: View {
             return "Restarting after this dictation…"
         case .restarting:
             return "Restarting…"
-        case .error:
-            return update.error
+        case .error, .checkFailed:
+            return update.error.isEmpty ? "Update check failed" : update.error
         default:
             return ""
         }
