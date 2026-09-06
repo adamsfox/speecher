@@ -166,6 +166,12 @@ bool ClipboardDelivery::restore(const ClipboardSnapshot &snapshot, QString *erro
         return WlClipboardDelivery::restore(snapshot, error);
     }
 #endif
+    if (!m_qtClipboard.ownsClipboardContent()) {
+        if (error) {
+            *error = QStringLiteral("Clipboard changed after dictation; kept the newer copy");
+        }
+        return false;
+    }
     return restoreQtClipboard(snapshot, error);
 }
 
