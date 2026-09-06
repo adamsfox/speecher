@@ -7,6 +7,7 @@
 #ifdef Q_OS_MACOS
 #include <QSettings>
 #include <QTemporaryDir>
+#include "core/SettingsStore.h"
 #endif
 
 #ifdef SPEECHER_WITH_WINUI
@@ -49,6 +50,14 @@ int main(int argc, char **argv)
     });
 #endif
     QStandardPaths::setTestModeEnabled(true);
+#ifdef Q_OS_MACOS
+    // Refuse to run mutating suites if the production store ignores isolation.
+    speecher::SettingsStore isolatedSettings;
+    if (isolatedSettings.raw().format() != QSettings::IniFormat) {
+        qCritical() << "Tests must not use native macOS preferences";
+        return 1;
+    }
+#endif
     QString selectedSuite;
     for (int i = 1; i < argc; ++i) {
         if (QByteArray(argv[i]) == "--suite" && i + 1 < argc) {

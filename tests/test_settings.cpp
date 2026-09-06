@@ -10,6 +10,16 @@ class SettingsTests : public QObject {
     Q_OBJECT
 
 private slots:
+    void settingsRespectConfiguredStorageFormat()
+    {
+        const auto previous = QSettings::defaultFormat();
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        SettingsStore settings;
+        const auto actual = settings.raw().format();
+        QSettings::setDefaultFormat(previous);
+        QCOMPARE(actual, QSettings::IniFormat);
+    }
+
 #ifdef SPEECHER_WITH_QKEYCHAIN
     void missingKeyringEntryOrBackendCountsAsSuccessfulDeletion()
     {

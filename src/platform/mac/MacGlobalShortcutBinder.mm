@@ -115,7 +115,8 @@ OSStatus handleHotKeyEvent(EventHandlerCallRef, EventRef event, void *userData)
 
 QKeySequence savedShortcut()
 {
-    QSettings settings(QString::fromLatin1(SettingsKeys::Organization),
+    QSettings settings(QSettings::defaultFormat(), QSettings::UserScope,
+                       QString::fromLatin1(SettingsKeys::Organization),
                        QString::fromLatin1(SettingsKeys::Application));
     const QString stored = settings.value(SettingsKeys::GlobalShortcut).toString();
     return stored.isEmpty() ? defaultShortcut() : QKeySequence(stored);
@@ -123,7 +124,8 @@ QKeySequence savedShortcut()
 
 void storeShortcut(const QKeySequence &shortcut)
 {
-    QSettings settings(QString::fromLatin1(SettingsKeys::Organization),
+    QSettings settings(QSettings::defaultFormat(), QSettings::UserScope,
+                       QString::fromLatin1(SettingsKeys::Organization),
                        QString::fromLatin1(SettingsKeys::Application));
     settings.setValue(SettingsKeys::GlobalShortcut, shortcut.toString());
 }
