@@ -6,6 +6,7 @@
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -72,6 +73,33 @@ LinuxGlobalShortcutSetupPage::LinuxGlobalShortcutSetupPage(
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(10);
 
+    // Installing comes first, and the shortcut controls stay hidden until it
+    // has happened: a shortcut bound to the pre-install path would break the
+    // moment the install moves the image.
+    m_integration = new QWidget(this);
+    m_integration->setObjectName(QStringLiteral("appMenuIntegration"));
+    auto *integrationLayout = new QVBoxLayout(m_integration);
+    integrationLayout->setContentsMargins(0, 0, 0, 0);
+    QString installFolder = appImageInstallDirectory(m_homePath);
+    if (installFolder.startsWith(m_homePath)) {
+        installFolder = QStringLiteral("~") + installFolder.mid(m_homePath.size());
+    }
+    integrationLayout->addWidget(guidanceLabel(
+        QStringLiteral("Installing moves the Speecher AppImage to %1, adds it to your app "
+                       "menu, and makes the speecher command available for desktop "
+                       "shortcuts. Setup continues once Speecher is installed.")
+            .arg(installFolder),
+        m_integration));
+    auto *integrationRow = new QHBoxLayout;
+    m_integrationButton = new QPushButton(
+        QStringLiteral("Install Speecher"), m_integration);
+    m_integrationStatus = new QLabel(m_integration);
+    integrationRow->addWidget(m_integrationButton);
+    integrationRow->addWidget(m_integrationStatus, 1);
+    integrationLayout->addLayout(integrationRow);
+    m_integration->setVisible(!m_appImagePath.isEmpty());
+    layout->addWidget(m_integration);
+
     m_keySequenceControls = new QWidget(this);
     m_keySequenceControls->setObjectName(QStringLiteral("keySequenceShortcut"));
     auto *keyLayout = new QVBoxLayout(m_keySequenceControls);
@@ -124,22 +152,6 @@ LinuxGlobalShortcutSetupPage::LinuxGlobalShortcutSetupPage(
     manualLayout->addLayout(commandRow);
     layout->addWidget(m_manualControls);
 
-    m_integration = new QWidget(this);
-    m_integration->setObjectName(QStringLiteral("appMenuIntegration"));
-    auto *integrationLayout = new QVBoxLayout(m_integration);
-    integrationLayout->setContentsMargins(0, 0, 0, 0);
-    integrationLayout->addWidget(guidanceLabel(
-        QStringLiteral("This also makes the speecher command available for desktop shortcuts."),
-        m_integration));
-    auto *integrationRow = new QHBoxLayout;
-    m_integrationButton = new QPushButton(
-        QStringLiteral("Add Speecher to your app menu"), m_integration);
-    m_integrationStatus = new QLabel(m_integration);
-    integrationRow->addWidget(m_integrationButton);
-    integrationRow->addWidget(m_integrationStatus, 1);
-    integrationLayout->addLayout(integrationRow);
-    m_integration->setVisible(!m_appImagePath.isEmpty());
-    layout->addWidget(m_integration);
     layout->addStretch();
 
     connect(m_sequence,
@@ -182,14 +194,58 @@ LinuxGlobalShortcutSetupPage::LinuxGlobalShortcutSetupPage(
     refresh();
 }
 
+// The settings-embedded instance has no other trigger after the wizard's
+// install moves the image: coming back to the page must not keep showing a
+// manual command for the deleted path.
+void LinuxGlobalShortcutSetupPage::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    refresh();
+}
+
 void LinuxGlobalShortcutSetupPage::hideAppMenuIntegration()
 {
     m_integration->hide();
+    m_integrationHidden = true;
+}
+
+bool LinuxGlobalShortcutSetupPage::installRequired() const
+{
+    // A command link from an earlier version can point at an image still in
+    // Downloads; that is not installed either — the move is part of the deal.
+    return !m_integrationHidden && !m_appImagePath.isEmpty()
+        && (!appImageIntegrationInstalled(m_homePath, m_appImagePath)
+            || !appImageInInstallFolder(m_homePath, m_appImagePath));
+}
+
+bool LinuxGlobalShortcutSetupPage::stepComplete() const
+{
+    if (installRequired()) {
+        return false;
+    }
+    if (!m_controller.globalShortcutSupportKnown()) {
+        return false;
+    }
+    if (!m_controller.globalShortcutsSupported()) {
+        return true;
+    }
+    return !m_controller.globalShortcutDisplay().isEmpty();
 }
 
 void LinuxGlobalShortcutSetupPage::installIntegration()
 {
     QString error;
+    QString installedPath;
+    if (!relocateAppImage(m_homePath, m_appImagePath, &installedPath, &error)) {
+        m_integrationStatus->setText(error);
+        return;
+    }
+    if (installedPath != m_appImagePath) {
+        // Everything that resolves the image path later (updates, restart,
+        // shortcut commands) reads APPIMAGE, so the move has to land there.
+        m_appImagePath = installedPath;
+        qputenv("APPIMAGE", QFile::encodeName(installedPath));
+    }
     if (!installAppImageIntegration(m_homePath,
                                     m_appImagePath,
                                     QCoreApplication::applicationDirPath(),
@@ -222,26 +278,53 @@ void LinuxGlobalShortcutSetupPage::chooseShortcut()
 
 void LinuxGlobalShortcutSetupPage::refresh()
 {
+    refreshControls();
+    // Only a real change may leave this widget: refresh() runs from
+    // showEvent(), and an unconditional emit loops through the assistant's
+    // gate update, whose button changes deliver new show events.
+    const bool complete = stepComplete();
+    if (m_notifiedStepComplete != complete) {
+        m_notifiedStepComplete = complete;
+        emit stepCompleteChanged();
+    }
+}
+
+void LinuxGlobalShortcutSetupPage::refreshControls()
+{
+    // Another instance (the wizard's, next to this settings-embedded one) may
+    // have moved the image and updated APPIMAGE since construction.
+    const QString appImage = QString::fromLocal8Bit(qgetenv("APPIMAGE"));
+    if (!appImage.isEmpty()) {
+        m_appImagePath = resolvedPath(appImage);
+    }
     // Let the long path wrap at its separators inside a narrow card; the
     // zero-width spaces are stripped again when the command is copied.
     m_command->setWordWrap(true);
     m_command->setText(QString(globalShortcutInstructionCommand(
         m_homePath, m_appImagePath, m_binaryPath)).replace(QLatin1Char('/'), QStringLiteral("/\u200B")));
     if (!m_appImagePath.isEmpty()) {
-        const bool installed = appImageIntegrationInstalled(m_homePath, m_appImagePath);
+        const bool installed = appImageIntegrationInstalled(m_homePath, m_appImagePath)
+            && appImageInInstallFolder(m_homePath, m_appImagePath);
         m_integrationButton->setText(
             installed ? QStringLiteral("Installed")
-                      : QStringLiteral("Add Speecher to your app menu"));
+                      : QStringLiteral("Install Speecher"));
         m_integrationButton->setEnabled(!installed);
     }
 
     const bool known = m_controller.globalShortcutSupportKnown();
     const bool supported = m_controller.globalShortcutsSupported();
     const bool desktopChooser = m_controller.globalShortcutUsesDesktopChooser();
-    m_keySequenceControls->setVisible(known && supported && !desktopChooser);
-    m_portalControls->setVisible(!known || (supported && desktopChooser));
-    m_manualControls->setVisible(known && !supported);
-    m_status->setVisible(!known || supported);
+    // Until the install has moved the image, every shortcut control is
+    // premature: the manual command would quote a path the install is about
+    // to remove.
+    const bool ready = !installRequired();
+    m_keySequenceControls->setVisible(ready && known && supported && !desktopChooser);
+    m_portalControls->setVisible(ready && (!known || (supported && desktopChooser)));
+    m_manualControls->setVisible(ready && known && !supported);
+    m_status->setVisible(ready && (!known || supported));
+    if (!ready) {
+        return;
+    }
 
     if (!known) {
         m_chooseShortcut->setEnabled(false);
@@ -278,9 +361,14 @@ void LinuxGlobalShortcutSetupPage::showRegistrationResult(bool bound,
     if (bound && !display.isEmpty()) {
         m_displayedShortcut = display;
         m_status->setText(shortcutSetStatus(display));
-        return;
+    } else {
+        m_status->setText(detail);
     }
-    m_status->setText(detail);
+    const bool complete = stepComplete();
+    if (m_notifiedStepComplete != complete) {
+        m_notifiedStepComplete = complete;
+        emit stepCompleteChanged();
+    }
 }
 
 } // namespace speecher

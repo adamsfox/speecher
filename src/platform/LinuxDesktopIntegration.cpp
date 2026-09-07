@@ -198,6 +198,78 @@ bool appImageIntegrationInstalled(const QString &homePath,
         && resolvedPath(link.symLinkTarget()) == resolvedPath(appImagePath);
 }
 
+QString appImageInstallDirectory(const QString &homePath)
+{
+    const QDir home(homePath);
+    const QString applications = home.filePath(QStringLiteral("Applications"));
+    const QString appImages = home.filePath(QStringLiteral("AppImages"));
+    if (!QFileInfo(applications).isDir() && QFileInfo(appImages).isDir()) {
+        return appImages;
+    }
+    return applications;
+}
+
+bool appImageInInstallFolder(const QString &homePath, const QString &appImagePath)
+{
+    const QDir home(homePath);
+    const QString directory = QFileInfo(resolvedPath(appImagePath)).absolutePath();
+    for (const QString &folder : {QStringLiteral("Applications"), QStringLiteral("AppImages")}) {
+        if (directory == resolvedPath(home.filePath(folder))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool relocateAppImage(const QString &homePath,
+                      const QString &appImagePath,
+                      QString *installedPath,
+                      QString *error)
+{
+    const QString image = resolvedPath(appImagePath);
+    *installedPath = image;
+
+    if (appImageInInstallFolder(homePath, image)) {
+        return true;
+    }
+
+    const QString directory = appImageInstallDirectory(homePath);
+    if (!QDir().mkpath(directory)) {
+        if (error) {
+            *error = QStringLiteral("Could not create the application folder: %1")
+                         .arg(directory);
+        }
+        return false;
+    }
+    const QString target = QDir(directory).filePath(QFileInfo(image).fileName());
+
+    // rename() replaces a leftover copy of the same name atomically; a stale
+    // AppImage there would otherwise shadow the one being installed.
+    const QByteArray imageName = QFile::encodeName(image);
+    const QByteArray targetName = QFile::encodeName(target);
+    if (std::rename(imageName.constData(), targetName.constData()) != 0) {
+        if (errno != EXDEV) {
+            if (error) {
+                *error = QStringLiteral("Could not move the AppImage to %1: %2")
+                             .arg(target, QString::fromLocal8Bit(std::strerror(errno)));
+            }
+            return false;
+        }
+        // Another filesystem: copy (QSaveFile replaces any leftover copy
+        // atomically), carry the executable bit over, then delete the
+        // original. An undeletable original is not a failed install — the
+        // copy in the application folder is complete; the stray file is the
+        // user's to remove.
+        if (!copyFile(image, target, error)) {
+            return false;
+        }
+        QFile::setPermissions(target, QFile::permissions(image) | QFileDevice::ExeOwner);
+        QFile::remove(image);
+    }
+    *installedPath = resolvedPath(target);
+    return true;
+}
+
 bool installAppImageIntegration(const QString &homePath,
                                 const QString &appImagePath,
                                 const QString &applicationDirPath,

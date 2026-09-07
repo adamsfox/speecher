@@ -422,7 +422,7 @@ private slots:
                  QApplication::palette().color(QPalette::Mid));
     }
 
-    void setupAssistantHidesSkipOnTheLastPage()
+    void setupAssistantHidesSkipWhileStepsAreIncomplete()
     {
         const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
         ApplicationController controller(true, platform);
@@ -438,7 +438,10 @@ private slots:
             }
         }
         QVERIFY(skip);
-        QVERIFY(skip->isVisible());
+        // On this fake platform the steps are incomplete (no provider signed
+        // in, no microphone input yet), so skipping is not offered on any
+        // page, the last one included.
+        QVERIFY(!skip->isVisible());
         const int lastPage = assistant.pageTitles().indexOf(QStringLiteral("Ready to dictate"));
         QCOMPARE(lastPage, assistant.pageTitles().size() - 1);
 #ifdef SPEECHER_WITH_KASSISTANT
@@ -910,6 +913,83 @@ private slots:
             QStringLiteral(".local/share/applications/io.github.firemonster612.speecher.desktop"))));
         QVERIFY(QFileInfo::exists(QDir(home).filePath(
             QStringLiteral(".local/share/icons/hicolor/scalable/apps/io.github.firemonster612.speecher.svg"))));
+    }
+
+    void relocateAppImageMovesTheImageIntoTheApplicationsFolder()
+    {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const QDir home(root.filePath(QStringLiteral("home")));
+        QVERIFY(QDir().mkpath(home.path()));
+        const QString image = root.filePath(QStringLiteral("Downloads/Speecher.AppImage"));
+        QVERIFY(QDir().mkpath(QFileInfo(image).path()));
+        QFile file(image);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write("image") == 5);
+        file.close();
+        QVERIFY(file.setPermissions(file.permissions() | QFileDevice::ExeOwner));
+
+        QString installed;
+        QString error;
+        QVERIFY2(relocateAppImage(home.path(), image, &installed, &error), qPrintable(error));
+        QCOMPARE(installed, resolvedPath(home.filePath(QStringLiteral("Applications/Speecher.AppImage"))));
+        QVERIFY(QFileInfo(installed).isFile());
+        QVERIFY(QFileInfo(installed).isExecutable());
+        QVERIFY(!QFile::exists(image));
+
+        // A second run from the new location is a no-op.
+        QString unchanged;
+        QVERIFY2(relocateAppImage(home.path(), installed, &unchanged, &error), qPrintable(error));
+        QCOMPARE(unchanged, installed);
+        QVERIFY(QFileInfo(installed).isFile());
+    }
+
+    void relocateAppImagePrefersAnExistingAppImagesFolder()
+    {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const QDir home(root.filePath(QStringLiteral("home")));
+        QVERIFY(QDir().mkpath(home.filePath(QStringLiteral("AppImages"))));
+
+        // A stray file named ~/Applications must not win over a real folder.
+        QFile stray(home.filePath(QStringLiteral("Applications")));
+        QVERIFY(stray.open(QIODevice::WriteOnly));
+        stray.close();
+        QCOMPARE(appImageInstallDirectory(home.path()),
+                 home.filePath(QStringLiteral("AppImages")));
+        QVERIFY(QFile::remove(home.filePath(QStringLiteral("Applications"))));
+
+        const auto makeImage = [](const QString &path) {
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly)) {
+                return false;
+            }
+            return file.write("image") == 5;
+        };
+
+        // No ~/Applications: the existing ~/AppImages folder is the home.
+        const QString image = root.filePath(QStringLiteral("Speecher.AppImage"));
+        QVERIFY(makeImage(image));
+        QString installed;
+        QString error;
+        QVERIFY2(relocateAppImage(home.path(), image, &installed, &error), qPrintable(error));
+        const QString kept = resolvedPath(home.filePath(QStringLiteral("AppImages/Speecher.AppImage")));
+        QCOMPARE(installed, kept);
+
+        // An image the user already keeps in ~/AppImages stays there even
+        // once ~/Applications exists.
+        QVERIFY(QDir().mkpath(home.filePath(QStringLiteral("Applications"))));
+        QVERIFY2(relocateAppImage(home.path(), installed, &installed, &error), qPrintable(error));
+        QCOMPARE(installed, kept);
+
+        // With both folders present ~/Applications wins, and a leftover copy
+        // of the same name there is replaced.
+        const QString elsewhere = root.filePath(QStringLiteral("Other.AppImage"));
+        QVERIFY(makeImage(elsewhere));
+        QVERIFY(makeImage(home.filePath(QStringLiteral("Applications/Other.AppImage"))));
+        QVERIFY2(relocateAppImage(home.path(), elsewhere, &installed, &error), qPrintable(error));
+        QCOMPARE(installed, resolvedPath(home.filePath(QStringLiteral("Applications/Other.AppImage"))));
+        QVERIFY(!QFile::exists(elsewhere));
     }
 #endif
 
