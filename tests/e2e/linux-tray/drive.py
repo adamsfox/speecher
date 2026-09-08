@@ -10,7 +10,6 @@ with E2E-RESULT: PASS|FAIL. Exits non-zero on the first failed assertion.
 """
 
 import os
-import re
 import subprocess
 import sys
 import time
@@ -178,19 +177,26 @@ def main() -> None:
         fail(f"menu did not flip back to Start Dictation: {items}")
     ok("the menu flips back to Start Dictation when idle")
 
-    pid_match = re.match(r"org\.kde\.StatusNotifierItem-(\d+)-", service)
-    pid = int(pid_match.group(1)) if pid_match else None
+    # Qt registers the item by object path, so `service` is a unique bus name;
+    # resolve the daemon pid from the bus before quitting.
+    try:
+        result = call("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                      "org.freedesktop.DBus", "GetConnectionUnixProcessID",
+                      GLib.Variant("(s)", (service,)))
+        pid = result.unpack()[0]
+    except GLib.Error as error:
+        fail(f"could not resolve the daemon pid from {service!r}: {error}")
+    log(f"daemon pid={pid}")
     menu_click(service, menu_path, items["Quit"])
     if not item_unregistered():
         fail("the StatusNotifierItem is still on the bus after Quit")
     ok("Quit removes the tray item from the bus")
-    if pid is not None:
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and os.path.exists(f"/proc/{pid}"):
-            time.sleep(0.3)
-        if os.path.exists(f"/proc/{pid}"):
-            fail(f"daemon pid {pid} is still alive after Quit")
-        ok("Quit ends the daemon process")
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and os.path.exists(f"/proc/{pid}"):
+        time.sleep(0.3)
+    if os.path.exists(f"/proc/{pid}"):
+        fail(f"daemon pid {pid} is still alive after Quit")
+    ok("Quit ends the daemon process")
 
     log("E2E-RESULT: PASS")
 

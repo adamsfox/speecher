@@ -13,14 +13,19 @@ namespace {
 
 QIcon trayIcon(bool listening)
 {
-    if (listening) {
-        return QIcon::fromTheme(QStringLiteral("media-record"));
-    }
     // The app icon lands in hicolor once Speecher is installed; a themed
     // microphone stands in until then (the AppImage bundles breeze as the
     // fallback theme, so both names resolve there too).
-    const QIcon icon = QIcon::fromTheme(QStringLiteral("io.github.firemonster612.speecher"));
-    return icon.isNull() ? QIcon::fromTheme(QStringLiteral("audio-input-microphone")) : icon;
+    QIcon idle = QIcon::fromTheme(QStringLiteral("io.github.firemonster612.speecher"));
+    if (idle.isNull()) {
+        idle = QIcon::fromTheme(QStringLiteral("audio-input-microphone"));
+    }
+    if (!listening) {
+        return idle;
+    }
+    // A theme without media-record must not blank the icon mid-dictation.
+    const QIcon recording = QIcon::fromTheme(QStringLiteral("media-record"));
+    return recording.isNull() ? idle : recording;
 }
 
 } // namespace

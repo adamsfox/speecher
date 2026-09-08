@@ -32,6 +32,7 @@
 #include <QSignalSpy>
 #include <QScopeGuard>
 #include <QStringList>
+#include <QSystemTrayIcon>
 #include <QTemporaryDir>
 
 #ifdef SPEECHER_WITH_KASSISTANT
@@ -593,6 +594,14 @@ private slots:
         QCOMPARE(status->text(), QStringLiteral("Setup was cancelled. Try again."));
     }
 
+    void trayShortcutNoteOnlyClaimsAnIconWhereATrayExists()
+    {
+        QVERIFY(linuxTrayShortcutNote(true).contains(QStringLiteral("system tray")));
+        QVERIFY(!linuxTrayShortcutNote(false).contains(QStringLiteral("system tray")));
+        QVERIFY(linuxTrayShortcutNote(false)
+                    .contains(QStringLiteral("while Speecher is running")));
+    }
+
     void globalShortcutPageExplainsTheTrayIcon()
     {
         const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
@@ -602,7 +611,8 @@ private slots:
         auto *note = page.findChild<QLabel *>(QStringLiteral("globalShortcutTrayNote"));
         QVERIFY(note);
         QVERIFY(!note->isHidden());
-        QVERIFY(note->text().contains(QStringLiteral("system tray")));
+        QCOMPARE(note->text(),
+                 linuxTrayShortcutNote(QSystemTrayIcon::isSystemTrayAvailable()));
 
         // The manual command starts Speecher itself, so the running-app
         // caveat is withheld on desktops that cannot register a shortcut.
@@ -620,7 +630,23 @@ private slots:
         auto *note = page.findChild<QLabel *>(QStringLiteral("finishTrayNote"));
         QVERIFY(note);
         QVERIFY(!note->isHidden());
-        QVERIFY(note->text().contains(QStringLiteral("system tray")));
+        QCOMPARE(note->text(),
+                 linuxTrayShortcutNote(QSystemTrayIcon::isSystemTrayAvailable()));
+    }
+
+    void finishPageHidesTheTrayNoteNextToTheManualCommand()
+    {
+        // Supported desktop, but no shortcut bound: the page recommends the
+        // manual command, which starts Speecher itself.
+        const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
+        ApplicationController controller(true, platform);
+        FinishSetupPage page(controller);
+
+        auto *note = page.findChild<QLabel *>(QStringLiteral("finishTrayNote"));
+        QVERIFY(note);
+        QVERIFY(note->isHidden());
+        QVERIFY(!page.findChild<QLabel *>(QStringLiteral("finishGlobalShortcutCommand"))
+                     ->isHidden());
     }
 
     void globalShortcutPageShowsOnlyManualSetupWhenUnsupported()

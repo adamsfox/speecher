@@ -27,6 +27,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QSystemTrayIcon>
 #include <QThread>
 #include <QVBoxLayout>
 
@@ -816,9 +817,6 @@ FinishSetupPage::FinishSetupPage(ApplicationController &controller, QWidget *par
     m_trayNote = new QLabel(this);
     m_trayNote->setWordWrap(true);
     m_trayNote->setObjectName(QStringLiteral("finishTrayNote"));
-    m_trayNote->setText(QStringLiteral(
-        "Speecher shows an icon in the system tray while it is running. The "
-        "shortcut only works while that icon is there."));
     m_manualCommand = new QLabel(this);
     m_manualCommand->setObjectName(QStringLiteral("finishGlobalShortcutCommand"));
     m_manualCommand->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
@@ -859,6 +857,8 @@ void FinishSetupPage::updateLinuxShortcutInstruction()
             QStringLiteral("Press %1 to start dictating, speak, then press it again to stop and insert the text.")
                 .arg(display));
         m_manualCommand->hide();
+        m_trayNote->setText(
+            linuxTrayShortcutNote(QSystemTrayIcon::isSystemTrayAvailable()));
         m_trayNote->show();
         return;
     }
@@ -869,9 +869,9 @@ void FinishSetupPage::updateLinuxShortcutInstruction()
             : linuxGlobalShortcutManualInstruction());
     m_manualCommand->setText(linuxGlobalShortcutCommand());
     m_manualCommand->show();
-    // The manual command starts Speecher when it is not already running, so
-    // the tray-icon caveat does not apply to it.
-    m_trayNote->setVisible(m_controller.globalShortcutsSupported());
+    // Both fallbacks recommend the manual command, which starts Speecher when
+    // it is not already running, so the running-app caveat does not apply.
+    m_trayNote->hide();
 }
 #endif
 

@@ -38,9 +38,9 @@ with wave.open(sys.argv[1], "wb") as w:
     w.writeframes(struct.pack("<" + "h" * 16000, *([0] * 16000)))
 PY
 
-# Qt only publishes QSystemTrayIcon over StatusNotifierItem if a watcher owns
-# org.kde.StatusNotifierWatcher when the icon is created, so the watcher must
-# be on the bus before the app starts.
+# Own org.kde.StatusNotifierWatcher before the app starts so the item
+# registers immediately and the driver's registration event is deterministic.
+# (Qt would also re-register with a watcher that appears later.)
 EVENTS="$FLOW_DIR/sni-events.log"
 : > "$EVENTS"
 python3 "$E2E_HERE/sni_watcher.py" "$EVENTS" > "$FLOW_DIR/watcher.log" 2>&1 &

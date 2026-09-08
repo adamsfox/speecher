@@ -15,6 +15,11 @@ class ApplicationController;
 
 QString linuxGlobalShortcutManualInstruction();
 QString linuxGlobalShortcutCommand();
+// The wizard's caveat that the shortcut needs a running Speecher. Only claims
+// a tray icon where a tray exists: portal shortcut support and a
+// StatusNotifier host are independent (stock GNOME has the former, not the
+// latter).
+QString linuxTrayShortcutNote(bool trayAvailable);
 
 class LinuxGlobalShortcutSetupPage final : public QWidget {
     Q_OBJECT
