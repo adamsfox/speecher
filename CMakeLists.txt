@@ -527,11 +527,13 @@ set(SPEECHER_FRONTEND_QT_HEADERS
 )
 
 set(SPEECHER_FRONTEND_QT_LINUX_SOURCES
+  src/frontend/qt/LinuxTrayIcon.cpp
   src/output/YdotoolSetupFlow.cpp
   src/ui/setup/LinuxGlobalShortcutSetupPage.cpp
 )
 
 set(SPEECHER_FRONTEND_QT_LINUX_HEADERS
+  src/frontend/qt/LinuxTrayIcon.h
   src/output/YdotoolSetupFlow.h
   src/ui/setup/LinuxGlobalShortcutSetupPage.h
 )
@@ -1165,7 +1167,10 @@ if(SPEECHER_BUILD_TESTS)
     speecher_frontend_qt Qt6::Test
   )
   if(UNIX AND NOT APPLE)
-    target_sources(speecher_tests PRIVATE tests/test_linux_style_choice.cpp)
+    target_sources(speecher_tests PRIVATE
+      tests/test_linux_style_choice.cpp
+      tests/test_linux_tray.cpp
+    )
   endif()
   if(TARGET speecher_frontend_mac)
     target_sources(speecher_tests PRIVATE tests/test_mac_frontend.mm)
@@ -1211,7 +1216,7 @@ if(SPEECHER_BUILD_TESTS)
     audio_pcm_converter
   )
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    list(APPEND SPEECHER_TEST_SUITES linux_style_choice)
+    list(APPEND SPEECHER_TEST_SUITES linux_style_choice linux_tray)
   endif()
   if(UNIX)
     list(APPEND SPEECHER_TEST_SUITES update_controller)

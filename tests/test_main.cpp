@@ -131,6 +131,7 @@ int main(int argc, char **argv)
     if (selected("platform_composition")) result |= runPlatformCompositionTests(argc, argv);
 #ifdef Q_OS_LINUX
     if (selected("linux_style_choice")) result |= runLinuxStyleChoiceTests(argc, argv);
+    if (selected("linux_tray")) result |= runLinuxTrayTests(argc, argv);
 #endif
     if (selected("platform_live")) result |= runPlatformLiveTests(argc, argv);
     if (selected("single_instance_ipc")) result |= runSingleInstanceIpcTests(argc, argv);

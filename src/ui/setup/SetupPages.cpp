@@ -27,6 +27,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QSystemTrayIcon>
 #include <QThread>
 #include <QVBoxLayout>
 
@@ -813,6 +814,9 @@ FinishSetupPage::FinishSetupPage(ApplicationController &controller, QWidget *par
     m_signInNote->setWordWrap(true);
 
 #ifdef Q_OS_LINUX
+    m_trayNote = new QLabel(this);
+    m_trayNote->setWordWrap(true);
+    m_trayNote->setObjectName(QStringLiteral("finishTrayNote"));
     m_manualCommand = new QLabel(this);
     m_manualCommand->setObjectName(QStringLiteral("finishGlobalShortcutCommand"));
     m_manualCommand->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
@@ -830,6 +834,7 @@ FinishSetupPage::FinishSetupPage(ApplicationController &controller, QWidget *par
     layout->addWidget(m_shortcutStatus);
 #ifdef Q_OS_LINUX
     layout->addWidget(m_manualCommand);
+    layout->addWidget(m_trayNote);
 #endif
     layout->addWidget(m_signInNote);
     layout->addStretch();
@@ -852,6 +857,9 @@ void FinishSetupPage::updateLinuxShortcutInstruction()
             QStringLiteral("Press %1 to start dictating, speak, then press it again to stop and insert the text.")
                 .arg(display));
         m_manualCommand->hide();
+        m_trayNote->setText(
+            linuxTrayShortcutNote(QSystemTrayIcon::isSystemTrayAvailable()));
+        m_trayNote->show();
         return;
     }
     m_shortcutStatus->setText(
@@ -861,6 +869,9 @@ void FinishSetupPage::updateLinuxShortcutInstruction()
             : linuxGlobalShortcutManualInstruction());
     m_manualCommand->setText(linuxGlobalShortcutCommand());
     m_manualCommand->show();
+    // Both fallbacks recommend the manual command, which starts Speecher when
+    // it is not already running, so the running-app caveat does not apply.
+    m_trayNote->hide();
 }
 #endif
 
