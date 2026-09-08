@@ -553,8 +553,14 @@ private slots:
         QCOMPARE(body.value(QStringLiteral("stream")).toBool(), true);
         QVERIFY(!body.contains(QStringLiteral("speed")));
 
-        const QString system = body.value(QStringLiteral("system")).toString();
-        QVERIFY(system.startsWith(QStringLiteral("You are Claude Code, Anthropic's official CLI for Claude.")));
+        const QJsonArray systemBlocks = body.value(QStringLiteral("system")).toArray();
+        QCOMPARE(systemBlocks.size(), 2);
+        // The identity block must hold the Claude Code line and nothing else;
+        // api.anthropic.com rejects OAuth requests whose first system block
+        // has anything appended to it.
+        QCOMPARE(systemBlocks.at(0).toObject().value(QStringLiteral("text")).toString(),
+                 QStringLiteral("You are Claude Code, Anthropic's official CLI for Claude."));
+        const QString system = systemBlocks.at(1).toObject().value(QStringLiteral("text")).toString();
         QVERIFY(system.contains(QStringLiteral("You are Speecher's document editor and writer.")));
         QVERIFY(!system.contains(QStringLiteral("transcript refinement engine")));
         QVERIFY(system.contains(QStringLiteral("selected document is the authoritative source")));

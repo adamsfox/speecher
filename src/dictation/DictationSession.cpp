@@ -823,6 +823,7 @@ void DictationSession::connectTranscriptRefiner(TranscriptRefiner *refiner)
         if (m_state != DictationState::Refining || m_refinementGeneration != m_generation) {
             return;
         }
+        qWarning().noquote() << "refinement failed, delivering raw transcript message=" + message;
         if (m_transcriptPipeline.editsSelection) {
             failSelectionEdit(message);
             return;
