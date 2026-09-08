@@ -158,6 +158,82 @@ private slots:
         QVERIFY(!popup.findChild<QPushButton *>(QStringLiteral("enableAccessibilityButton")));
     }
 
+    void popupHidesThePreviewPillUntilWordsArrive()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showListeningIndicator();
+        auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
+        QVERIFY(pill);
+        // No words yet: the waveform alone says "listening", with no
+        // placeholder capsule under it.
+        QVERIFY(pill->isHidden());
+
+        popup.setPreview(QStringLiteral("hello there"));
+        QVERIFY(!pill->isHidden());
+
+        // Silence clears the preview; the empty pill goes with it.
+        popup.setPreview(QString());
+        QVERIFY(pill->isHidden());
+    }
+
+    void popupTrimsThePreviewFromTheFrontWithAnEllipsis()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showListeningIndicator();
+        const QString spoken = QStringLiteral("start of a very long sentence ")
+            + QStringLiteral("more words in the middle ").repeated(8)
+            + QStringLiteral("the very last words");
+        popup.setPreview(spoken);
+
+        auto *preview = popup.findChild<QLabel *>(QStringLiteral("rawTranscript"));
+        QVERIFY(preview);
+        QVERIFY(preview->text().startsWith(QStringLiteral("…")));
+        QVERIFY(preview->text().endsWith(QStringLiteral("the very last words")));
+        const QFontMetrics metrics(preview->font());
+        QVERIFY(metrics.horizontalAdvance(preview->text()) <= 520);
+
+        // A short preview is shown whole, with nothing implied before it.
+        popup.setPreview(QStringLiteral("short preview"));
+        QCOMPARE(preview->text(), QStringLiteral("short preview"));
+    }
+
+    void popupErrorHugsAShortMessage()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showErrorMessage(QStringLiteral("Microphone unavailable"));
+        auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
+        QVERIFY(pill);
+        // The capsule sizes to the one short line instead of the full 520px
+        // wrap width plus padding.
+        QVERIFY(pill->sizeHint().width() < 520);
+
+        auto *preview = popup.findChild<QLabel *>(QStringLiteral("rawTranscript"));
+        QVERIFY(preview);
+        const QFontMetrics metrics(preview->font());
+        const int textWidth = metrics.horizontalAdvance(QStringLiteral("Microphone unavailable"));
+        QCOMPARE(preview->width(), textWidth);
+    }
+
+    void popupErrorCanBeDismissedEarly()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showPopup(0);
+        popup.showErrorMessage(QStringLiteral("Something went wrong"));
+        auto *dismiss = popup.findChild<QPushButton *>(QStringLiteral("errorDismiss"));
+        QVERIFY(dismiss);
+        QVERIFY(!dismiss->isHidden());
+
+        QSignalSpy dismissed(&popup, &TranscriberPopup::errorDismissed);
+        dismiss->click();
+        QCOMPARE(dismissed.count(), 1);
+        QVERIFY(popup.isHidden());
+
+        // The chip belongs to errors only; a live preview must not carry it.
+        popup.showPopup(0);
+        popup.setPreview(QStringLiteral("words again"));
+        QVERIFY(dismiss->isHidden());
+    }
+
     void popupUsesTheApplicationFontAndNoStylesheet()
     {
         TranscriberPopup popup(new SizingPopupPositioner);
