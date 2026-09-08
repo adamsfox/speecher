@@ -1113,6 +1113,79 @@ private slots:
         QVERIFY(status->minimumHeight() < longStatusHeight);
     }
 #endif
+
+    // The waveform's level mapping is Wispr Flow's: an adaptive noise floor,
+    // 150ms window means, then per-frame smoothing, scaled by 5 and floored at
+    // 1. Expected values come from that model, not from the implementation.
+    void waveformLevelModelFollowsSpeechAndSilence()
+    {
+        using LevelModel = speecher::WaveformWidget::LevelModel;
+        // A microphone chunk is rms * 8 clipped at 1, so room tone near
+        // -50 dBFS arrives as 0.024 and speech near -26 dBFS as 0.4.
+        constexpr float roomTone = 0.024f;
+        constexpr float speech = 0.4f;
+        constexpr int frameMs = 16;
+        constexpr int chunkMs = 40;
+
+        const auto run = [](LevelModel &model, float level, int durationMs, qint64 startMs) {
+            for (int elapsed = 0; elapsed < durationMs; elapsed += frameMs) {
+                if (elapsed % chunkMs < frameMs) {
+                    model.addChunk(level);
+                }
+                model.advance(startMs + elapsed);
+            }
+            return startMs + durationMs;
+        };
+
+        // Steady room tone defines the floor, so the bars stay at rest.
+        LevelModel model;
+        qint64 now = run(model, roomTone, 1000, 0);
+        QCOMPARE(model.audioScale(), 1.0f);
+
+        // Speech sits more than the model's 20dB span above that floor, so it
+        // saturates: a scale near the gain of 5.
+        now = run(model, speech, 1000, now);
+        QVERIFY(model.audioScale() > 4.0f);
+
+        // Silence, which is what a muted microphone and the end of a session
+        // both deliver, has to bring the bars back down.
+        now = run(model, 0.0f, 1000, now);
+        QCOMPARE(model.audioScale(), 1.0f);
+
+        // One freakishly quiet chunk (a single dither bit) must not drag the
+        // floor so low that ordinary room tone saturates the display.
+        LevelModel clamped;
+        clamped.addChunk(0.00001f);
+        run(clamped, roomTone, 1000, 0);
+        QVERIFY(clamped.audioScale() < 5.0f);
+    }
+
+    // The pill is Wispr Flow's 50x30 while it shows the waveform; the states
+    // this port does not change keep the size they had.
+    void waveformPillMatchesTheTranscriptPill()
+    {
+        // The pill takes the transcript pill's size in every state, so it
+        // reads as the same component and never resizes mid-session. The
+        // height grows with the desktop font, and a message wider than the
+        // pill widens it, so only the floors are fixed here.
+        speecher::WaveformWidget waveform;
+        const QSize resting = waveform.size();
+        QCOMPARE(resting.width(), 126);
+        QVERIFY(resting.height() >= 48);
+
+        waveform.setMode(speecher::WaveformWidget::Mode::Dots);
+        QCOMPARE(waveform.size(), resting);
+
+        waveform.setMode(speecher::WaveformWidget::Mode::Waveform);
+        QCOMPARE(waveform.size(), resting);
+
+        waveform.setMessage(QStringLiteral("Input sent"));
+        QVERIFY(waveform.width() >= resting.width());
+        QCOMPARE(waveform.height(), resting.height());
+
+        waveform.setMode(speecher::WaveformWidget::Mode::Waveform);
+        QCOMPARE(waveform.size(), resting);
+    }
 };
 
 int runUiTests(int argc, char **argv)

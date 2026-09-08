@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QFont>
+#include <QFontMetrics>
 #include <QHideEvent>
 #include <QPainter>
 #include <QPalette>
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace speecher {
 namespace {
@@ -19,42 +21,203 @@ QColor withAlpha(QColor color, int alpha)
     return color;
 }
 
-// The pill's width when it holds the waveform or the dots; a message widens it.
+// One pill for every state, so it never changes size between listening, the
+// delivery receipt and the status shimmer. Wispr Flow's own pill is 50x30 and
+// stands alone against a screen edge; Speecher's sits directly above the
+// transcript pill, so it takes that pill's size instead.
 constexpr int pillWidth = 126;
+constexpr int pillHeight = 48;
+// Bar geometry is Wispr Flow's 2px scaled by the pill's height ratio (48/30).
+constexpr qreal referencePillHeight = 30.0;
+constexpr qreal pillScale = pillHeight / referencePillHeight;
+
+// The waveform is a port of Wispr Flow's status-bar bars (v1.6.793): a row of
+// rounded dots, 2x2px before pillScale, each scaled vertically about its
+// centre by
+//
+//   audioScale * bulge * wave
+//
+// where audioScale is the smoothed mic level times a gain of 5 floored at 1,
+// bulge weights bars towards the centre, and wave is a 1s keyframe loop
+// (1 -> 1.2 -> 1.5 -> 1.1 -> 1.3 -> 1, ease-in-out between keyframes) whose
+// phase trails one bar's share of the loop per bar, so a crest travels across
+// the row once per second and wraps seamlessly.
+// Wispr Flow's row is ten bars in a 50px pill. This pill is wider, so it
+// holds proportionally more of the same bars rather than stretching them:
+// fifteen at Wispr Flow's thickness and spacing fill 74% of the width, the
+// same fraction its ten fill of 50px.
+constexpr int barCount = 15;
+constexpr qreal barWidth = 2.0 * pillScale;
+constexpr qreal barGap = 2.0 * pillScale;
+constexpr qreal barDotHeight = 2.0 * pillScale;
+constexpr qreal barRadius = 0.5 * pillScale;
+constexpr float audioGain = 5.0f;
+constexpr float levelSpanDb = 20.0f;
+// Wispr Flow's bulge falls off with the square of a bar's distance from the
+// centre for a short row, and linearly once its bulgeCoefficient reaches 2,
+// which is the branch a row this long wants: the quadratic would flatten the
+// outermost bars to nothing.
+constexpr qreal bulgeCoefficient = 2.0;
+// Wispr Flow stops the floor descending past -60 dBFS of the raw capture, so
+// one freakishly quiet chunk cannot leave the display permanently
+// oversensitive. Speecher's level signal is pre-gained and its gain differs
+// per audio input (the microphone emits rms*8 clipped at 1, the file input a
+// unity peak), so there is no single dBFS equivalent; -46dB is below room tone
+// on both paths, which is what the clamp is there to protect.
+constexpr float dbFloorLimit = -46.0f;
+constexpr int levelAverageMs = 150;
+// The tick rate the 0.85 smoothing factor assumes: Wispr Flow smooths once per
+// display frame in a requestAnimationFrame loop.
+constexpr int frameIntervalMs = 16;
+
+struct WaveKeyframe {
+    qreal at;
+    qreal value;
+};
+constexpr WaveKeyframe waveKeyframes[] = {
+    {0.0, 1.0}, {0.2, 1.2}, {0.4, 1.5}, {0.8, 1.1}, {0.9, 1.3}, {1.0, 1.0}};
+
+// CSS ease-in-out, cubic-bezier(0.42, 0, 0.58, 1): solve x(t) = s for t by
+// Newton's method, then return y(t). With y control points 0 and 1, y(t)
+// reduces to t^2 * (3 - 2t).
+qreal easeInOut(qreal s)
+{
+    constexpr qreal p1x = 0.42;
+    constexpr qreal p2x = 0.58;
+    qreal t = s;
+    for (int i = 0; i < 6; ++i) {
+        const qreal oneMinusT = 1.0 - t;
+        const qreal x = 3.0 * p1x * t * oneMinusT * oneMinusT
+            + 3.0 * p2x * t * t * oneMinusT + t * t * t;
+        const qreal dx = 3.0 * p1x * (1.0 - 4.0 * t + 3.0 * t * t)
+            + 3.0 * p2x * (2.0 * t - 3.0 * t * t) + 3.0 * t * t;
+        if (dx <= 0.0) {
+            break;
+        }
+        t = std::clamp(t - (x - s) / dx, 0.0, 1.0);
+    }
+    return t * t * (3.0 - 2.0 * t);
+}
+
+qreal waveMultiplier(qreal phase)
+{
+    constexpr int segments = int(std::size(waveKeyframes)) - 1;
+    for (int i = 0; i < segments; ++i) {
+        const WaveKeyframe &from = waveKeyframes[i];
+        const WaveKeyframe &to = waveKeyframes[i + 1];
+        if (phase > to.at) {
+            continue;
+        }
+        const qreal progress = (phase - from.at) / (to.at - from.at);
+        return from.value + (to.value - from.value) * easeInOut(progress);
+    }
+    return waveKeyframes[segments].value;
+}
 
 } // namespace
 
+void WaveformWidget::LevelModel::addChunk(float level)
+{
+    // A silent chunk still counts towards the window mean, so a muted
+    // microphone or the end of a session brings the bars back to rest; only
+    // the noise floor ignores it, because log10(0) has no floor to learn.
+    float mapped = 0.0f;
+    if (level > 0.0f) {
+        const float db = 20.0f * std::log10(level);
+        if (db < m_dbFloor) {
+            m_dbFloor = std::max(dbFloorLimit, db);
+        }
+        mapped = std::clamp((db - m_dbFloor) / levelSpanDb, 0.0f, 1.0f);
+    }
+    m_windowSum += mapped;
+    ++m_windowCount;
+}
+
+void WaveformWidget::LevelModel::advance(qint64 nowMs)
+{
+    if (nowMs - m_windowStartMs >= levelAverageMs) {
+        if (m_windowCount > 0) {
+            m_target = m_windowSum / float(m_windowCount);
+            m_windowSum = 0.0f;
+            m_windowCount = 0;
+        }
+        // Advance on the 150ms grid: assigning nowMs here would stretch every
+        // window to the next frame boundary, averaging 160ms of audio.
+        m_windowStartMs += levelAverageMs;
+        if (nowMs - m_windowStartMs >= levelAverageMs) {
+            m_windowStartMs = nowMs;
+        }
+    }
+    // Per-frame exponential smoothing, quantised to 0.01 steps.
+    m_smoothed = std::floor((m_smoothed * 0.85f + m_target * 0.15f) * 100.0f) / 100.0f;
+}
+
+void WaveformWidget::LevelModel::restart(qint64 nowMs)
+{
+    m_windowSum = 0.0f;
+    m_windowCount = 0;
+    m_windowStartMs = nowMs;
+    m_target = 0.0f;
+    m_smoothed = 0.0f;
+}
+
+float WaveformWidget::LevelModel::audioScale() const
+{
+    return std::max(1.0f, audioGain * m_smoothed);
+}
+
 WaveformWidget::WaveformWidget(QWidget *parent)
     : QWidget(parent)
-    , m_bars(10, 0.12f)
 {
-    setFixedSize(pillWidth, 48);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    m_timer.setInterval(24);
+    applyGeometry();
+    m_clock.start();
+    m_timer.setInterval(frameIntervalMs);
     connect(&m_timer, &QTimer::timeout, this, [this] {
         if (m_mode == Mode::Frozen) {
             return;
         }
-        m_idlePhase += 0.34f;
-        for (int i = 0; i < m_bars.size(); ++i) {
-            const float wave = 0.10f + 0.045f * std::sin(m_idlePhase + i * 0.7f);
-            const float speech = m_targetLevel * (0.24f + 0.16f * std::sin(m_idlePhase * 1.4f + i * 1.23f) * std::sin(m_idlePhase * 0.61f + i));
-            const float target = std::clamp(wave + speech, 0.08f, 1.0f);
-            m_bars[i] = m_bars[i] * 0.42f + target * 0.58f;
+        const qint64 now = m_clock.elapsed();
+        // Clamped so a Frozen spell or a missed tick cannot jump the bars.
+        const float dt = std::min(qreal(now - m_lastFrameMs) / 1000.0, 0.1);
+        m_lastFrameMs = now;
+        m_idlePhase += 14.2f * dt;
+        // One cycle per second, accumulated rather than read from the clock in
+        // paintWaveform: ticks stop while frozen, so the bars hold their last
+        // heights however often the widget repaints, and resume without a jump.
+        m_wavePhase = std::fmod(m_wavePhase + dt, 1.0f);
+        if (m_mode == Mode::Waveform) {
+            m_level.advance(now);
         }
-        m_targetLevel *= 0.68f;
         update();
     });
+}
+
+void WaveformWidget::applyGeometry()
+{
+    // The height follows the desktop's font where that is taller, so a large
+    // font cannot clip the receipt; a long message widens the pill.
+    const int height = std::max(pillHeight, fontMetrics().height() + 10);
+    const int width = m_message.isEmpty()
+        ? pillWidth
+        : std::max(pillWidth, fontMetrics().horizontalAdvance(m_message) + 32);
+    setFixedSize(width, height);
 }
 
 void WaveformWidget::hideEvent(QHideEvent *event)
 {
     m_timer.stop();
+    // Levels keep arriving while the popup shows an error, and the windowing
+    // runs on the frame timer; without this the first tick after the next show
+    // would average the whole hidden stretch into one window.
+    m_level.restart(m_clock.elapsed());
     QWidget::hideEvent(event);
 }
 
 void WaveformWidget::showEvent(QShowEvent *event)
 {
+    m_lastFrameMs = m_clock.elapsed();
+    m_level.restart(m_lastFrameMs);
     m_timer.start();
     QWidget::showEvent(event);
 }
@@ -64,10 +227,7 @@ void WaveformWidget::setLevel(float level)
     if (m_mode != Mode::Waveform) {
         return;
     }
-    constexpr float noiseFloor = 0.14f;
-    const float normalized = std::clamp((level - noiseFloor) / (1.0f - noiseFloor), 0.0f, 1.0f);
-    const float boosted = std::clamp(std::pow(normalized, 1.18f) * 0.82f, 0.0f, 1.0f);
-    m_targetLevel = std::max(m_targetLevel, boosted);
+    m_level.addChunk(level);
 }
 
 void WaveformWidget::setMode(Mode mode)
@@ -78,9 +238,13 @@ void WaveformWidget::setMode(Mode mode)
     m_mode = mode;
     if (mode != Mode::Message && mode != Mode::Status) {
         m_message.clear();
-        setFixedWidth(pillWidth);
     }
-    m_targetLevel = 0.0f;
+    // Frozen holds the bars where they were; every other mode change starts a
+    // fresh capture.
+    if (mode != Mode::Frozen) {
+        m_level.restart(m_clock.elapsed());
+    }
+    applyGeometry();
     update();
 }
 
@@ -88,10 +252,8 @@ void WaveformWidget::setStatusText(const QString &text)
 {
     m_message = text.simplified();
     m_mode = m_message.isEmpty() ? Mode::Waveform : Mode::Status;
-    m_targetLevel = 0.0f;
-    setFixedWidth(m_mode == Mode::Status
-        ? std::max(pillWidth, fontMetrics().horizontalAdvance(m_message) + 32)
-        : pillWidth);
+    m_level.restart(m_clock.elapsed());
+    applyGeometry();
     update();
 }
 
@@ -99,12 +261,8 @@ void WaveformWidget::setMessage(const QString &message)
 {
     m_message = message.simplified();
     m_mode = m_message.isEmpty() ? Mode::Waveform : Mode::Message;
-    m_targetLevel = 0.0f;
-    // At the waveform's width anything longer than "Input sent" clips against
-    // the pill; the text margins match paintMessage's 12px insets.
-    setFixedWidth(m_mode == Mode::Message
-        ? std::max(pillWidth, fontMetrics().horizontalAdvance(m_message) + 32)
-        : pillWidth);
+    m_level.restart(m_clock.elapsed());
+    applyGeometry();
     update();
 }
 
@@ -134,24 +292,34 @@ void WaveformWidget::paintEvent(QPaintEvent *)
     } else if (m_mode == Mode::Dots) {
         paintDots(painter, bar);
     } else {
-        paintWaveform(painter, bar);
+        // Frozen keeps the bars at their last heights but drops them to the
+        // 40% alpha Wispr Flow uses once the mic is no longer capturing.
+        paintWaveform(painter, m_mode == Mode::Frozen ? withAlpha(bar, 102) : bar);
     }
 }
 
 void WaveformWidget::paintWaveform(QPainter &painter, const QColor &bar)
 {
-    const int bars = m_bars.size();
-    const int gap = 6;
-    const int width = 4;
-    const int totalWidth = bars * width + (bars - 1) * gap;
-    const int startX = (rect().width() - totalWidth) / 2;
-    const int maxHeight = rect().height() - 8;
-    for (int i = 0; i < bars; ++i) {
-        const int h = std::clamp(int(8 + m_bars[i] * maxHeight), 10, maxHeight);
-        const int x = startX + i * (width + gap);
-        const int y = (height() - h) / 2;
-        painter.setBrush(bar);
-        painter.drawRoundedRect(QRect(x, y, width, h), width / 2.0, width / 2.0);
+    const qreal audioScale = m_level.audioScale();
+    const qreal totalWidth = barCount * barWidth + (barCount - 1) * barGap;
+    const qreal startX = (width() - totalWidth) / 2.0;
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(bar);
+    for (int i = 0; i < barCount; ++i) {
+        const qreal distance = std::abs((barCount - 1) / 2.0 - i);
+        const qreal bulge = std::max(0.0, 1.0 - distance * (bulgeCoefficient / 48.0));
+        // Each bar trails its neighbour by one bar's share of the loop, so the
+        // crest crosses the row exactly once per cycle however many bars there
+        // are. At Wispr Flow's ten this is its own 0.1s delay.
+        const qreal barPhase = m_wavePhase - qreal(i) / barCount;
+        const qreal wave = waveMultiplier(barPhase - std::floor(barPhase));
+        const qreal h = barDotHeight * audioScale * bulge * wave;
+        const qreal x = startX + i * (barWidth + barGap);
+        // scaleY on the reference bar stretches its corners too, which tapers
+        // the tips as the bar grows; the radius scales by the same factor.
+        const qreal radiusY = barRadius * h / barDotHeight;
+        painter.drawRoundedRect(QRectF(x, (height() - h) / 2.0, barWidth, h),
+                                barRadius, radiusY);
     }
 }
 
