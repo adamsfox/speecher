@@ -903,11 +903,25 @@ bool DictationPanel::saveGrabForTest(const QString &path) const
         return false;
     }
     HDC screen = GetDC(nullptr);
+    if (!screen) {
+        return false;
+    }
     HDC memory = CreateCompatibleDC(screen);
-    HBITMAP bitmap = CreateCompatibleBitmap(screen, width, height);
+    HBITMAP bitmap = memory ? CreateCompatibleBitmap(screen, width, height) : nullptr;
+    if (!memory || !bitmap) {
+        if (memory) {
+            DeleteDC(memory);
+        }
+        ReleaseDC(nullptr, screen);
+        return false;
+    }
     HGDIOBJ previous = SelectObject(memory, bitmap);
-    BitBlt(memory, 0, 0, width, height, screen, rect.left, rect.top,
-           SRCCOPY | CAPTUREBLT);
+    // A failed blit leaves the bitmap filled with uninitialised GDI memory,
+    // which would still save as a perfectly valid-looking PNG.
+    const bool blitted = BitBlt(memory, 0, 0, width, height, screen,
+                                rect.left, rect.top, SRCCOPY | CAPTUREBLT);
+    // GetDIBits requires the bitmap not be selected into any device context.
+    SelectObject(memory, previous);
     QImage image(width, height, QImage::Format_RGB32);
     BITMAPINFO info{};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -916,9 +930,9 @@ bool DictationPanel::saveGrabForTest(const QString &path) const
     info.bmiHeader.biPlanes = 1;
     info.bmiHeader.biBitCount = 32;
     info.bmiHeader.biCompression = BI_RGB;
-    const bool copied = GetDIBits(memory, bitmap, 0, height, image.bits(),
-                                  &info, DIB_RGB_COLORS) == height;
-    SelectObject(memory, previous);
+    const bool copied = blitted
+        && GetDIBits(memory, bitmap, 0, height, image.bits(),
+                     &info, DIB_RGB_COLORS) == height;
     DeleteObject(bitmap);
     DeleteDC(memory);
     ReleaseDC(nullptr, screen);
