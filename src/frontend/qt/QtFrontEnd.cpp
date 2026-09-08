@@ -9,6 +9,10 @@
 #include "ui/SetupAssistant.h"
 #include "ui/TranscriberPopup.h"
 
+#ifdef Q_OS_LINUX
+#include "frontend/qt/LinuxTrayIcon.h"
+#endif
+
 #include <QApplication>
 #include <QTabWidget>
 #include <QTimer>
@@ -26,6 +30,12 @@ QtFrontEnd::QtFrontEnd(ApplicationController *controller, QObject *parent)
     , m_controller(controller)
     , m_popup(new TranscriberPopup(controller->platform()->createPopupPositioner(nullptr)))
 {
+#ifdef Q_OS_LINUX
+    // Like the mac menu bar extra, the tray icon exists from launch: in
+    // daemon mode it is the only sign the process is running and the global
+    // shortcut has something to reach.
+    new LinuxTrayIcon(controller, this);
+#endif
     wireSessionToPopup();
     connect(controller->updates(),
             &UpdateController::changed,

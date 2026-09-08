@@ -219,6 +219,7 @@ private:
 #ifdef Q_OS_LINUX
     void updateLinuxShortcutInstruction();
     QLabel *m_manualCommand = nullptr;
+    QLabel *m_trayNote = nullptr;
 #endif
     QLabel *m_shortcutStatus;
     QLabel *m_signInNote;

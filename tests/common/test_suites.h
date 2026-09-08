@@ -63,6 +63,7 @@ int runProviderRegistryTests(int argc, char **argv);
 int runPlatformCompositionTests(int argc, char **argv);
 #ifdef Q_OS_LINUX
 int runLinuxStyleChoiceTests(int argc, char **argv);
+int runLinuxTrayTests(int argc, char **argv);
 #endif
 int runPlatformLiveTests(int argc, char **argv);
 int runSingleInstanceIpcTests(int argc, char **argv);

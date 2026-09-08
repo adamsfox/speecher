@@ -152,6 +152,15 @@ LinuxGlobalShortcutSetupPage::LinuxGlobalShortcutSetupPage(
     manualLayout->addLayout(commandRow);
     layout->addWidget(m_manualControls);
 
+    // Not shown on manual-command desktops: their command starts Speecher by
+    // itself, so "only while running" would be wrong there.
+    m_trayNote = guidanceLabel(
+        QStringLiteral("The shortcut works while Speecher is running. Its icon "
+                       "in the system tray shows that it is ready."),
+        this);
+    m_trayNote->setObjectName(QStringLiteral("globalShortcutTrayNote"));
+    layout->addWidget(m_trayNote);
+
     layout->addStretch();
 
     connect(m_sequence,
@@ -322,6 +331,7 @@ void LinuxGlobalShortcutSetupPage::refreshControls()
     m_portalControls->setVisible(ready && (!known || (supported && desktopChooser)));
     m_manualControls->setVisible(ready && known && !supported);
     m_status->setVisible(ready && (!known || supported));
+    m_trayNote->setVisible(ready && known && supported);
     if (!ready) {
         return;
     }

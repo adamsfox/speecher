@@ -593,6 +593,36 @@ private slots:
         QCOMPARE(status->text(), QStringLiteral("Setup was cancelled. Try again."));
     }
 
+    void globalShortcutPageExplainsTheTrayIcon()
+    {
+        const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
+        ApplicationController controller(true, platform);
+        LinuxGlobalShortcutSetupPage page(controller);
+
+        auto *note = page.findChild<QLabel *>(QStringLiteral("globalShortcutTrayNote"));
+        QVERIFY(note);
+        QVERIFY(!note->isHidden());
+        QVERIFY(note->text().contains(QStringLiteral("system tray")));
+
+        // The manual command starts Speecher itself, so the running-app
+        // caveat is withheld on desktops that cannot register a shortcut.
+        platform->binder->publishSupport(true, false);
+        QVERIFY(note->isHidden());
+    }
+
+    void finishPageExplainsTheTrayIcon()
+    {
+        const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
+        ApplicationController controller(true, platform);
+        platform->binder->publishShortcut(QKeySequence(Qt::META | Qt::ALT | Qt::Key_D));
+        FinishSetupPage page(controller);
+
+        auto *note = page.findChild<QLabel *>(QStringLiteral("finishTrayNote"));
+        QVERIFY(note);
+        QVERIFY(!note->isHidden());
+        QVERIFY(note->text().contains(QStringLiteral("system tray")));
+    }
+
     void globalShortcutPageShowsOnlyManualSetupWhenUnsupported()
     {
         const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());

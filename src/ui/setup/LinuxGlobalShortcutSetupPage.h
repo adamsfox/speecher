@@ -59,6 +59,7 @@ private:
     QPushButton *m_chooseShortcut = nullptr;
     QLabel *m_status = nullptr;
     QLabel *m_command = nullptr;
+    QLabel *m_trayNote = nullptr;
     QString m_displayedShortcut;
     QWidget *m_integration = nullptr;
     QPushButton *m_integrationButton = nullptr;
