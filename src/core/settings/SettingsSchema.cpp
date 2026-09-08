@@ -18,6 +18,7 @@
 static void initializeReleaseNotesResource()
 {
     Q_INIT_RESOURCE(release_notes);
+    Q_INIT_RESOURCE(release_history);
 }
 
 namespace speecher {
@@ -356,19 +357,49 @@ SettingsRow infoRow(QString id, QString label, QString help, QString text)
     return row;
 }
 
-QString nightlyChangesLink(const QString &lastVersion, const QString &currentVersion)
+const QString kRepositoryUrl = QStringLiteral("https://github.com/firemonster612/speecher");
+
+// The +g<sha> build metadata a nightly version carries; empty for a Stable
+// Release or a version recorded before nightlies existed.
+QString versionCommit(const QString &version)
 {
-    if (!currentVersion.contains(QStringLiteral("-nightly"))) {
+    static const QRegularExpression sha(QStringLiteral("[+]g([0-9a-fA-F]+)$"));
+    return sha.match(version).captured(1);
+}
+
+// One embedded history entry as a Markdown bullet. A merge commit's subject
+// names only the branch, so its pull request title rides in on the body's
+// first line; a squash merge already carries the title and "(#N)" in the
+// subject. Anything else links the commit itself.
+QString commitBullet(const QString &sha, const QString &subject, const QString &bodyTitle)
+{
+    static const QRegularExpression mergedPullRequest(
+        QStringLiteral("^Merge pull request #(\\d+) from \\S+$"));
+    static const QRegularExpression squashedPullRequest(
+        QStringLiteral("^(.+) \\(#(\\d+)\\)$"));
+    const auto pullRequestLink = [](const QString &number) {
+        return QStringLiteral("[#%1](%2/pull/%1)").arg(number, kRepositoryUrl);
+    };
+    const QRegularExpressionMatch merged = mergedPullRequest.match(subject);
+    if (merged.hasMatch()) {
+        return QStringLiteral("- %1 (%2)").arg(bodyTitle.isEmpty() ? subject : bodyTitle,
+                                               pullRequestLink(merged.captured(1)));
+    }
+    const QRegularExpressionMatch squashed = squashedPullRequest.match(subject);
+    if (squashed.hasMatch()) {
+        return QStringLiteral("- %1 (%2)").arg(squashed.captured(1),
+                                               pullRequestLink(squashed.captured(2)));
+    }
+    return QStringLiteral("- %1 ([%2](%3/commit/%2))").arg(subject, sha, kRepositoryUrl);
+}
+
+QString embeddedReleaseHistory()
+{
+    QFile file(QStringLiteral(":/releases/history.log"));
+    if (!file.open(QIODevice::ReadOnly)) {
         return {};
     }
-    const QRegularExpression sha(QStringLiteral("[+]g([0-9a-fA-F]+)$"));
-    const QRegularExpressionMatch last = sha.match(lastVersion);
-    const QRegularExpressionMatch current = sha.match(currentVersion);
-    if (last.hasMatch() && current.hasMatch()) {
-        return QStringLiteral("[Compare commits](https://github.com/firemonster612/speecher/compare/%1...%2)")
-            .arg(last.captured(1), current.captured(1));
-    }
-    return QStringLiteral("[View releases](https://github.com/firemonster612/speecher/releases)");
+    return QString::fromUtf8(file.readAll());
 }
 
 QString releaseNotesMarkdown(const SchemaContext &context)
@@ -395,16 +426,30 @@ QString releaseNotesMarkdown(const SchemaContext &context)
         return compareBaseVersions(left.version, right.version) > 0;
     });
 
+    const QString nightlyChanges = nightlyChangesMarkdown(embeddedReleaseHistory(),
+                                                          context.lastSeenVersion,
+                                                          context.currentVersion);
+
     QList<Note> selected;
     if (!context.lastSeenVersion.isEmpty()) {
+        // A nightly's base is the last stable tag patch+1, so it predates the
+        // Stable Release of its own base version. An update that moves past
+        // that base crossed the release; its notes are news to the user even
+        // though the base versions compare equal.
+        const bool crossedOwnBase =
+            context.lastSeenVersion.contains(QStringLiteral("-nightly"))
+            && compareBaseVersions(context.currentVersion, context.lastSeenVersion) > 0;
         for (const Note &note : notes) {
-            if (compareBaseVersions(note.version, context.lastSeenVersion) > 0
+            const int afterLastSeen = compareBaseVersions(note.version, context.lastSeenVersion);
+            if ((afterLastSeen > 0 || (afterLastSeen == 0 && crossedOwnBase))
                 && compareBaseVersions(note.version, context.currentVersion) <= 0) {
                 selected.append(note);
             }
         }
     }
-    if (selected.isEmpty()) {
+    // A nightly-to-nightly update that crosses no Stable Release reports its
+    // own commits; only without those does the newest stable note stand in.
+    if (selected.isEmpty() && nightlyChanges.isEmpty()) {
         const auto note = std::find_if(notes.cbegin(), notes.cend(), [&context](const Note &candidate) {
             return compareBaseVersions(candidate.version, context.currentVersion) <= 0;
         });
@@ -414,6 +459,9 @@ QString releaseNotesMarkdown(const SchemaContext &context)
     }
 
     QString markdown;
+    if (!nightlyChanges.isEmpty()) {
+        markdown = QStringLiteral("# Speecher %1\n\n%2").arg(context.currentVersion, nightlyChanges);
+    }
     for (const Note &note : selected) {
         if (!markdown.isEmpty()) {
             markdown += QStringLiteral("\n\n---\n\n");
@@ -423,9 +471,8 @@ QString releaseNotesMarkdown(const SchemaContext &context)
     if (markdown.isEmpty()) {
         markdown = QStringLiteral("Release notes are not available in this build.");
     }
-    const QString changes = nightlyChangesLink(context.lastSeenVersion, context.currentVersion);
-    if (!changes.isEmpty()) {
-        markdown += QStringLiteral("\n\n%1").arg(changes);
+    if (nightlyChanges.isEmpty() && context.currentVersion.contains(QStringLiteral("-nightly"))) {
+        markdown += QStringLiteral("\n\n[View releases](%1/releases)").arg(kRepositoryUrl);
     }
     return markdown;
 }
@@ -1748,6 +1795,48 @@ QList<RowOption> audioDeviceOptions(const QList<RowOption> &devices, const QStri
         options.append(missing);
     }
     return options;
+}
+
+QString nightlyChangesMarkdown(const QString &history, const QString &lastVersion,
+                               const QString &currentVersion)
+{
+    if (!currentVersion.contains(QStringLiteral("-nightly"))) {
+        return {};
+    }
+    const QString lastSha = versionCommit(lastVersion);
+    const QString currentSha = versionCommit(currentVersion);
+    if (lastSha.isEmpty() || currentSha.isEmpty()) {
+        return {};
+    }
+    const QString compare = QStringLiteral("[Compare commits](%1/compare/%2...%3)")
+                                .arg(kRepositoryUrl, lastSha, currentSha);
+
+    QStringList bullets;
+    bool lastShaFound = false;
+    const QStringList records = history.split(QChar(0x1e), Qt::SkipEmptyParts);
+    for (const QString &record : records) {
+        const QStringList fields = record.split(QChar(0x1f));
+        if (fields.size() < 2) {
+            continue;
+        }
+        const QString sha = fields.at(0).trimmed();
+        // Short SHAs grow with the repository, so either recording may be the
+        // longer one.
+        if (sha.startsWith(lastSha, Qt::CaseInsensitive)
+            || lastSha.startsWith(sha, Qt::CaseInsensitive)) {
+            lastShaFound = true;
+            break;
+        }
+        bullets.append(commitBullet(sha,
+                                    fields.at(1).trimmed(),
+                                    fields.value(2).section(QLatin1Char('\n'), 0, 0).trimmed()));
+    }
+    // A previous nightly older than the embedded history window can only be
+    // compared on GitHub.
+    if (!lastShaFound || bullets.isEmpty()) {
+        return compare;
+    }
+    return bullets.join(QLatin1Char('\n')) + QStringLiteral("\n\n") + compare;
 }
 
 int compareBaseVersions(const QString &left, const QString &right)

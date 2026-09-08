@@ -9,3 +9,9 @@ supplies one. CI uses the file verbatim as the GitHub release body, embeds the
 same Markdown as preformatted text in the Sparkle appcast, and bundles it for
 the What's New page. If the file is missing, CI publishes a stub asking for it.
 A file that exists but contains only headings fails the tag build.
+
+Nightly builds have no file here. Instead the build embeds the repository's
+recent first-parent commit history (`cmake/GitVersion.cmake`), and the What's
+New page lists the commits and merged pull requests since the previously
+installed nightly, ending with a GitHub compare link. Stable notes still
+appear beneath that list when the update crosses a Stable Release.
