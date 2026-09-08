@@ -554,7 +554,7 @@ private slots:
         page->load(snapshot);
         QVERIFY(!caution->isVisibleTo(page.get()));
 
-        snapshot.refinement.anthropicModel = QStringLiteral("claude-haiku-4-5-20251001");
+        snapshot.refinement.anthropicModel = QStringLiteral("claude-haiku-4-5");
         page->load(snapshot);
         QCOMPARE(model->currentText(), QStringLiteral("Claude Haiku 4.5"));
         QVERIFY(caution->isVisibleTo(page.get()));

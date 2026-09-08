@@ -470,7 +470,7 @@ private slots:
                                              QStringLiteral("anthropicModelCaution"));
         AppSettings settings;
         QVERIFY(!caution.visible(settings, Capabilities{}));
-        settings.refinement.anthropicModel = QStringLiteral("claude-haiku-4-5-20251001");
+        settings.refinement.anthropicModel = QStringLiteral("claude-haiku-4-5");
         QVERIFY(caution.visible(settings, Capabilities{}));
         QVERIFY(caution.value(settings).toString().contains(QStringLiteral("instructions")));
     }

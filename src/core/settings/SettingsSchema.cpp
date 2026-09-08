@@ -1538,12 +1538,12 @@ QList<ProviderAccount> providerAccounts()
     anthropic.modelLabel = QStringLiteral("Claude model");
     anthropic.modelHelp = QStringLiteral("Model used for Anthropic refinement.");
     anthropic.modelTooltip =
-        QStringLiteral("Defaults to Claude Sonnet 4.6. Select a model or type another model ID.");
+        QStringLiteral("Defaults to Claude Sonnet 5. Select a model or type another model ID.");
     anthropic.modelWidthHint = 24;
     anthropic.models = {
-        {QStringLiteral("claude-opus-4-8"), QStringLiteral("Claude Opus 4.8")},
-        {QStringLiteral("claude-sonnet-4-6"), QStringLiteral("Claude Sonnet 4.6")},
-        {QStringLiteral("claude-haiku-4-5-20251001"), QStringLiteral("Claude Haiku 4.5")},
+        {QStringLiteral("claude-opus-5"), QStringLiteral("Claude Opus 5")},
+        {QStringLiteral("claude-sonnet-5"), QStringLiteral("Claude Sonnet 5")},
+        {QStringLiteral("claude-haiku-4-5"), QStringLiteral("Claude Haiku 4.5")},
     };
     anthropic.model = &RefinementSettings::anthropicModel;
     anthropic.cautionWhenModelContains = QStringLiteral("haiku");
