@@ -1165,19 +1165,26 @@ private slots:
     void waveformPillMatchesTheTranscriptPill()
     {
         // The pill takes the transcript pill's size in every state, so it
-        // reads as the same component and never resizes mid-session.
+        // reads as the same component and never resizes mid-session. The
+        // height grows with the desktop font, and a message wider than the
+        // pill widens it, so only the floors are fixed here.
         speecher::WaveformWidget waveform;
-        QCOMPARE(waveform.size(), QSize(126, 48));
+        const QSize resting = waveform.size();
+        QCOMPARE(resting.width(), 126);
+        QVERIFY(resting.height() >= 48);
 
         waveform.setMode(speecher::WaveformWidget::Mode::Dots);
-        QCOMPARE(waveform.size(), QSize(126, 48));
+        QCOMPARE(waveform.size(), resting);
 
         waveform.setMode(speecher::WaveformWidget::Mode::Waveform);
-        QCOMPARE(waveform.size(), QSize(126, 48));
+        QCOMPARE(waveform.size(), resting);
 
-        // Only a message longer than the pill widens it.
         waveform.setMessage(QStringLiteral("Input sent"));
-        QCOMPARE(waveform.size(), QSize(126, 48));
+        QVERIFY(waveform.width() >= resting.width());
+        QCOMPARE(waveform.height(), resting.height());
+
+        waveform.setMode(speecher::WaveformWidget::Mode::Waveform);
+        QCOMPARE(waveform.size(), resting);
     }
 };
 
