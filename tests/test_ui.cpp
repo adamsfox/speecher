@@ -25,6 +25,7 @@
 #include <QFontMetrics>
 #include <QFormLayout>
 #include <QLineEdit>
+#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSpinBox>
@@ -232,6 +233,58 @@ private slots:
         popup.showPopup(0);
         popup.setPreview(QStringLiteral("words again"));
         QVERIFY(dismiss->isHidden());
+    }
+
+    void popupDoesNotCarryAnErrorIntoTheNextDictation()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showPopup(0);
+        popup.showErrorMessage(QStringLiteral("Microphone unavailable"));
+        auto *dismiss = popup.findChild<QPushButton *>(QStringLiteral("errorDismiss"));
+        auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
+        auto *countdown = popup.findChild<QPropertyAnimation *>();
+        QVERIFY(dismiss && pill && countdown);
+        QVERIFY(!dismiss->isHidden());
+        QCOMPARE(countdown->state(), QAbstractAnimation::Running);
+
+        // The next dictation starts while that countdown is still draining.
+        popup.showPopup(1);
+        QVERIFY(dismiss->isHidden());
+        QVERIFY(pill->isHidden());
+        QCOMPARE(pill->height(), 48);
+        // Left running it would hide this dictation's popup when it finished,
+        // and report a dismissal against a session that had moved on.
+        QCOMPARE(countdown->state(), QAbstractAnimation::Stopped);
+    }
+
+    void popupStopsTheCountdownWhenHidden()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showPopup(0);
+        popup.showErrorMessage(QStringLiteral("Microphone unavailable"));
+        auto *countdown = popup.findChild<QPropertyAnimation *>();
+        QVERIFY(countdown);
+        QCOMPARE(countdown->state(), QAbstractAnimation::Running);
+
+        // The session hides the popup by any route, not only the chip.
+        popup.hide();
+        QCOMPARE(countdown->state(), QAbstractAnimation::Stopped);
+    }
+
+    void popupErrorKeepsTheDismissChipInsideTheCapsule()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        // The app's longest error, which clamps to the wrapping width.
+        popup.showErrorMessage(QStringLiteral(
+            "Microphone access is off. Allow Speecher under Privacy & Security > "
+            "Microphone, then try again."));
+        auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
+        auto *dismiss = popup.findChild<QPushButton *>(QStringLiteral("errorDismiss"));
+        QVERIFY(pill && dismiss);
+        popup.adjustSize();
+        // The chip must sit inside the painted capsule, not across its stroke.
+        QVERIFY(pill->sizeHint().width() >= 520 + dismiss->sizeHint().width());
+        QVERIFY(popup.width() >= pill->sizeHint().width());
     }
 
     void popupUsesTheApplicationFontAndNoStylesheet()

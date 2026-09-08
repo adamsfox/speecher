@@ -14,6 +14,8 @@ on:
   pull_request:
     paths:
       - src/frontend/win/DictationPanel.*
+      - src/frontend/win/WinFrontEnd.*
+      - tests/test_win_frontend.cpp
       - .github/workflows/win-panel-evidence.yml
 
 permissions:
@@ -56,6 +58,7 @@ jobs:
           path: |
             build/nupkg
             !build/nupkg/*.nupkg
+          # Package directories contain .done markers, so never restore across SDK changes.
           key: windows-sdk-v1-${{ hashFiles('cmake/WindowsAppSdk.cmake') }}
 
       - name: Configure

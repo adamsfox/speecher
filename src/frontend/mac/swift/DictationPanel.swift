@@ -448,16 +448,17 @@ final class SpeecherDictationPanel {
         present()
         problemAutoDismiss?.invalidate()
         problemAutoDismiss = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                // invalidate() cannot recall a closure this timer has already
-                // queued, so a dictation that started in the meantime would be
-                // torn down by the previous problem's countdown. The problem
-                // is cleared before such a session shows, which says so.
-                guard !state.problem.isEmpty else { return }
-                dismiss()
-            }
+            DispatchQueue.main.async { self?.autoDismissProblem() }
         }
+    }
+
+    /// The countdown's end. invalidate() cannot recall a closure this timer has
+    /// already queued, so a dictation that started in the meantime would be torn
+    /// down by the previous problem's countdown; a problem is cleared before
+    /// such a session shows, which says so.
+    private func autoDismissProblem() {
+        guard !state.problem.isEmpty else { return }
+        dismiss()
     }
 
     func dismiss() {

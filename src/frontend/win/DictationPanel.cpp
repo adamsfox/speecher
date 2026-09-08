@@ -57,8 +57,28 @@ constexpr auto windowClassName = L"SpeecherDictationPanel";
 // The mic level meter's geometry, matching the Qt popup's WaveformWidget: an
 // accent ProgressBar here used to read as "loading", not "I can hear you".
 constexpr int levelBarCount = 10;
-constexpr float levelBarMinHeight = 8.0f;
-constexpr float levelBarMaxHeight = 28.0f;
+constexpr float levelBarMinHeight = 9.0f;
+// The Qt waveform swings 10..40 inside a 48px pill; the same proportion of
+// this 52 DIP panel is what keeps the meter as responsive as its reference.
+constexpr float levelBarMaxHeight = 36.0f;
+
+// Whether every pixel is the same colour, which is what a capture with no
+// desktop behind it looks like.
+bool isUniform(const QImage &image)
+{
+    if (image.isNull()) {
+        return true;
+    }
+    const QRgb first = image.pixel(0, 0);
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (image.pixel(x, y) != first) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 QString phaseGlyph(const QString &status, bool problem)
 {
@@ -532,9 +552,12 @@ struct DictationPanel::Native : QObject {
         if (chrome) {
             chrome.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
             // The rectangles captured the text brush at creation; a theme
-            // change hands them the newly resolved one.
+            // change hands them the newly resolved one. While the status text
+            // shimmers its foreground is the animated gradient, which would
+            // freeze into the bars as a half-swept smear.
+            const auto ink = shimmering ? normalForeground : text.Foreground();
             for (auto &bar : barRects) {
-                bar.Fill(text.Foreground());
+                bar.Fill(ink);
             }
         }
     }
@@ -936,7 +959,12 @@ bool DictationPanel::saveGrabForTest(const QString &path) const
     DeleteObject(bitmap);
     DeleteDC(memory);
     ReleaseDC(nullptr, screen);
-    return copied && image.save(path);
+    if (!copied || isUniform(image)) {
+        // A session without a composited desktop blits solid black, which
+        // saves as a perfectly valid PNG and would be uploaded as evidence.
+        return false;
+    }
+    return image.save(path);
 }
 
 } // namespace speecher

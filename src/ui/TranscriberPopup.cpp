@@ -474,7 +474,9 @@ void TranscriberPopup::showErrorMessage(const QString &message)
     m_preview->setVisible(true);
     m_errorDismiss->setVisible(true);
     m_previewPill->setVisible(true);
-    m_pillLayout->setContentsMargins(24, 0, 24, kErrorBarInset);
+    // previewRow is centred in what is left after the bar and its air, so the
+    // same amount above it puts the text on the capsule's optical centre.
+    m_pillLayout->setContentsMargins(24, kErrorBarInset + 3, 24, kErrorBarInset);
     m_errorDismissProgress->setValue(m_errorDismissProgress->maximum());
     m_errorDismissProgress->show();
 
@@ -486,7 +488,7 @@ void TranscriberPopup::showErrorMessage(const QString &message)
     // 24 keeps the label's 12px above and below the text; 3 is the countdown
     // bar; the inset is the air between the bar and the border.
     m_previewPill->setFixedHeight(
-        qMax(48, textHeight + 24 + 3 + kErrorBarInset));
+        qMax(48, textHeight + 24 + 2 * (3 + kErrorBarInset)));
     m_previewPill->resize(m_previewPill->sizeHint());
     adjustSize();
     updateWindowMask();
@@ -495,6 +497,12 @@ void TranscriberPopup::showErrorMessage(const QString &message)
 
 void TranscriberPopup::showPopup(quint64 generation)
 {
+    // A previous dictation's error belongs to the attempt that failed: its
+    // text, its Dismiss chip, its taller pill and its draining countdown all
+    // go before this dictation is shown. Without this the countdown could
+    // hide a live dictation's popup and report a dismissal against it.
+    restoreStandardLayout();
+    hidePreview();
     m_pendingPresentationGeneration = generation;
     m_positioner->positionBottomCenter(m_surface);
     updateWindowMask();
@@ -553,6 +561,14 @@ void TranscriberPopup::changeEvent(QEvent *event)
         applyTheme();
     }
     QWidget::changeEvent(event);
+}
+
+void TranscriberPopup::hideEvent(QHideEvent *event)
+{
+    // Whatever hid the popup, a countdown left running would hide the next
+    // dictation's popup when it finished.
+    m_errorDismissAnimation->stop();
+    QWidget::hideEvent(event);
 }
 
 void TranscriberPopup::paintEvent(QPaintEvent *event)

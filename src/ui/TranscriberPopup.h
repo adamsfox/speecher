@@ -7,6 +7,7 @@
 
 class QFrame;
 class QEvent;
+class QHideEvent;
 class QProgressBar;
 class QPushButton;
 class QPropertyAnimation;
@@ -55,6 +56,7 @@ signals:
 
 protected:
     void changeEvent(QEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
 
