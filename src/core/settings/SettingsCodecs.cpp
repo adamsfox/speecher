@@ -607,15 +607,15 @@ void SettingsCodecs::setOpenAiFastMode(bool value)
 
 QString SettingsCodecs::anthropicModel() const
 {
-    const QString model = value(SettingsKeys::AnthropicModel, QStringLiteral("claude-sonnet-4-6")).toString().trimmed();
-    return model.isEmpty() ? QStringLiteral("claude-sonnet-4-6") : model;
+    const QString model = value(SettingsKeys::AnthropicModel, QStringLiteral("claude-sonnet-5")).toString().trimmed();
+    return model.isEmpty() ? QStringLiteral("claude-sonnet-5") : model;
 }
 
 void SettingsCodecs::setAnthropicModel(const QString &value)
 {
     const QString model = value.trimmed();
     m_settings.setValue(SettingsKeys::AnthropicModel,
-                        model.isEmpty() ? QStringLiteral("claude-sonnet-4-6") : model);
+                        model.isEmpty() ? QStringLiteral("claude-sonnet-5") : model);
 }
 
 QString SettingsCodecs::anthropicAuthMode() const

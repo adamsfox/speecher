@@ -637,7 +637,7 @@ static QVector<ProviderStat> refinementProviderStats(const QString &id)
     }
     if (id == QStringLiteral("anthropic")) {
         return {{QStringLiteral("Score"), QStringLiteral("8 / 10")},
-                {QStringLiteral("Default model"), QStringLiteral("Claude Sonnet 4.6")},
+                {QStringLiteral("Default model"), QStringLiteral("Claude Sonnet 5")},
                 {QStringLiteral("Speed"), QStringLiteral("About 2 seconds per dictation")},
                 {QStringLiteral("Efficiency"), QStringLiteral("Light reasoning; very consistent finish times")},
                 {QStringLiteral("Quality"), QStringLiteral("Excellent cleanup; can leave a spoken correction in")}};

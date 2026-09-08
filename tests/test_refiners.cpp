@@ -112,7 +112,7 @@ private slots:
         QSignalSpy failed(refiner, SIGNAL(failed(QString)));
         const auto start = [&] {
             const QString endpoint = QStringLiteral("http://127.0.0.1:%1/v1").arg(server.serverPort());
-            if (anthropic) claude.refine("hello", {}, {}, "token", endpoint, "claude-opus-4-8", "low", true, "balanced", {});
+            if (anthropic) claude.refine("hello", {}, {}, "token", endpoint, "claude-opus-5", "low", true, "balanced", {});
             else openAi.refine("hello", {}, {}, "token", {}, {}, endpoint, {}, "gpt-test", "low", true, "balanced", {});
         };
         start();
@@ -513,7 +513,7 @@ private slots:
                        QStringList{QStringLiteral("my email")},
                        QStringLiteral("test-token"),
                        QStringLiteral("http://127.0.0.1:%1/v1/").arg(server.serverPort()),
-                       QStringLiteral("claude-sonnet-4-6"),
+                       QStringLiteral("claude-sonnet-5"),
                        QStringLiteral("low"),
                        false,
                        QStringLiteral("balanced"),
@@ -546,7 +546,7 @@ private slots:
         const QByteArray payload = request.mid(headerEnd + 4, contentLength);
         const QJsonObject body = QJsonDocument::fromJson(payload, &parseError).object();
         QCOMPARE(parseError.error, QJsonParseError::NoError);
-        QCOMPARE(body.value(QStringLiteral("model")).toString(), QStringLiteral("claude-sonnet-4-6"));
+        QCOMPARE(body.value(QStringLiteral("model")).toString(), QStringLiteral("claude-sonnet-5"));
         QCOMPARE(body.value(QStringLiteral("thinking")).toObject().value(QStringLiteral("type")).toString(), QStringLiteral("adaptive"));
         QCOMPARE(body.value(QStringLiteral("thinking")).toObject().value(QStringLiteral("display")).toString(), QStringLiteral("omitted"));
         QCOMPARE(body.value(QStringLiteral("output_config")).toObject().value(QStringLiteral("effort")).toString(), QStringLiteral("low"));
@@ -619,7 +619,7 @@ private slots:
                        {},
                        QStringLiteral("test-token"),
                        QStringLiteral("http://127.0.0.1:%1/v1/").arg(server.serverPort()),
-                       QStringLiteral("claude-sonnet-4-6"),
+                       QStringLiteral("claude-sonnet-5"),
                        QStringLiteral("low"),
                        false,
                        QStringLiteral("balanced"),
@@ -691,7 +691,7 @@ private slots:
         });
         anthropic.refine(QStringLiteral("test"), {}, {}, QStringLiteral("token"),
                          QStringLiteral("http://127.0.0.1:%1/v1").arg(anthropicServer.serverPort()),
-                         QStringLiteral("claude-sonnet-4-6"), QStringLiteral("low"), false,
+                         QStringLiteral("claude-sonnet-5"), QStringLiteral("low"), false,
                          QStringLiteral("balanced"), {});
         QTRY_VERIFY_WITH_TIMEOUT(anthropicServer.hasPendingConnections(), 1000);
         QTcpSocket *anthropicSocket = anthropicServer.nextPendingConnection();
@@ -757,7 +757,7 @@ private slots:
         QSignalSpy anthropicFailed(&anthropic, &AnthropicApiRefiner::failed);
         anthropic.refine(QStringLiteral("test"), {}, {}, QStringLiteral("token"),
                          QStringLiteral("http://127.0.0.1:%1/v1").arg(anthropicServer.serverPort()),
-                         QStringLiteral("claude-sonnet-4-6"), QStringLiteral("low"), false,
+                         QStringLiteral("claude-sonnet-5"), QStringLiteral("low"), false,
                          QStringLiteral("balanced"), {});
         QTRY_VERIFY_WITH_TIMEOUT(anthropicServer.hasPendingConnections(), 1000);
         QTcpSocket *anthropicSocket = anthropicServer.nextPendingConnection();
@@ -928,7 +928,7 @@ private slots:
 
         refiner.refine(QStringLiteral("hello"), {}, {}, QStringLiteral("token"),
                        QStringLiteral("http://127.0.0.1:%1/v1").arg(server.serverPort()),
-                       QStringLiteral("claude-opus-4-8"), QStringLiteral("low"), true,
+                       QStringLiteral("claude-opus-5"), QStringLiteral("low"), true,
                        QStringLiteral("balanced"), {});
 
         QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 1000);
@@ -985,7 +985,7 @@ private slots:
         // fast-mode probe instead of paying a failed round trip again.
         refiner.refine(QStringLiteral("hello again"), {}, {}, QStringLiteral("token"),
                        QStringLiteral("http://127.0.0.1:%1/v1").arg(server.serverPort()),
-                       QStringLiteral("claude-opus-4-8"), QStringLiteral("low"), true,
+                       QStringLiteral("claude-opus-5"), QStringLiteral("low"), true,
                        QStringLiteral("balanced"), {});
         QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 1000);
         QTcpSocket *latchedSocket = server.nextPendingConnection();
@@ -1008,7 +1008,7 @@ private slots:
         elapsed.start();
         refiner.refine(QStringLiteral("hello"), {}, {}, QStringLiteral("token"),
                        QStringLiteral("http://127.0.0.1:%1/v1").arg(server.serverPort()),
-                       QStringLiteral("claude-opus-4-8"), QStringLiteral("low"), true,
+                       QStringLiteral("claude-opus-5"), QStringLiteral("low"), true,
                        QStringLiteral("balanced"), {});
 
         for (int attempt = 0; attempt < 2; ++attempt) {
@@ -1076,7 +1076,7 @@ private slots:
 
         refiner.refine(QStringLiteral("hello"), {}, {}, QStringLiteral("token"),
                        QStringLiteral("http://127.0.0.1:%1/v1").arg(server.serverPort()),
-                       QStringLiteral("claude-opus-4-8"), QStringLiteral("low"), true,
+                       QStringLiteral("claude-opus-5"), QStringLiteral("low"), true,
                        QStringLiteral("balanced"), {});
 
         QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 1000);
@@ -1114,7 +1114,7 @@ private slots:
         AnthropicApiRefiner refiner;
         refiner.refine(QStringLiteral("hello"), {}, {}, QStringLiteral("token"),
                        QStringLiteral("http://127.0.0.1:%1/v1").arg(server.serverPort()),
-                       QStringLiteral("claude-sonnet-4-6"), QStringLiteral("low"), true,
+                       QStringLiteral("claude-sonnet-5"), QStringLiteral("low"), true,
                        QStringLiteral("balanced"), {});
 
         QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 1000);

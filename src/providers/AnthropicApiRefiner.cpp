@@ -36,7 +36,9 @@ QByteArray claudeCodeUserAgent()
 bool modelSupportsAdaptiveEffort(const QString &model)
 {
     const QString normalized = model.toCaseFolded();
-    return normalized.contains(QStringLiteral("sonnet-4-6"))
+    return normalized.contains(QStringLiteral("opus-5"))
+        || normalized.contains(QStringLiteral("sonnet-5"))
+        || normalized.contains(QStringLiteral("sonnet-4-6"))
         || normalized.contains(QStringLiteral("opus-4-8"))
         || normalized.contains(QStringLiteral("opus-4-7"))
         || normalized.contains(QStringLiteral("opus-4-6"))
@@ -55,7 +57,9 @@ bool modelSupportsFastMode(const QString &model)
 bool modelSupportsExtraHighEffort(const QString &model)
 {
     const QString normalized = model.toCaseFolded();
-    return normalized.contains(QStringLiteral("opus-4-8"))
+    return normalized.contains(QStringLiteral("opus-5"))
+        || normalized.contains(QStringLiteral("sonnet-5"))
+        || normalized.contains(QStringLiteral("opus-4-8"))
         || normalized.contains(QStringLiteral("opus-4-7"));
 }
 

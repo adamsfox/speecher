@@ -85,7 +85,7 @@ struct RefinementSettings {
     QString openAiEffort = QStringLiteral("none");
     bool openAiFastMode = true;
     QString openAiCliproxyAccount;
-    QString anthropicModel = QStringLiteral("claude-sonnet-4-6");
+    QString anthropicModel = QStringLiteral("claude-sonnet-5");
     QString anthropicAuthMode = QStringLiteral("oauth");
     QString anthropicEffort = QStringLiteral("low");
     bool anthropicFastMode = true;
