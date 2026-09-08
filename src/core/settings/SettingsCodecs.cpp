@@ -608,7 +608,15 @@ void SettingsCodecs::setOpenAiFastMode(bool value)
 QString SettingsCodecs::anthropicModel() const
 {
     const QString model = value(SettingsKeys::AnthropicModel, QStringLiteral("claude-sonnet-5")).toString().trimmed();
-    return model.isEmpty() ? QStringLiteral("claude-sonnet-5") : model;
+    if (model.isEmpty()) {
+        return QStringLiteral("claude-sonnet-5");
+    }
+    // The picker used to ship Haiku as a dated snapshot; the undated ID is the
+    // same model and matches the current picker entry's display name.
+    if (model == QStringLiteral("claude-haiku-4-5-20251001")) {
+        return QStringLiteral("claude-haiku-4-5");
+    }
+    return model;
 }
 
 void SettingsCodecs::setAnthropicModel(const QString &value)
