@@ -9,8 +9,10 @@ import SwiftUI
 /// The pill's height, for the window that is created at it and the content that
 /// fills it, so that the capsule is the whole window. Left to size itself the
 /// content came out between 59 and 61pt depending on which trailing control was
-/// showing, which moved the pill's edges as the dictation changed phase.
-private let pillHeight: CGFloat = 72
+/// showing, which moved the pill's edges as the dictation changed phase. 60
+/// sits inside that band, near the Windows panel's 52 and the Qt pill's 48; the
+/// previous 72 read as a chunky slab of empty padding around one line of type.
+private let pillHeight: CGFloat = 60
 private let minimumPillWidth: CGFloat = 420
 private let previewChromeWidth: CGFloat = 190
 private let screenEdgeMargin: CGFloat = 80
@@ -125,16 +127,18 @@ struct DictationPanelView: View {
 
     var body: some View {
         VStack(spacing: bannerSpacing) {
-            if !state.updateMessage.isEmpty {
-                PanelBanner(message: state.updateMessage,
-                            actionLabel: state.updateAction,
-                            action: installUpdate)
-            }
+            // What's-new above the update offer, the order the Qt and Windows
+            // panels stack them in.
             if !state.whatsNewMessage.isEmpty {
                 PanelBanner(message: state.whatsNewMessage,
                             actionLabel: "See what's new",
                             action: openWhatsNew,
                             dismiss: dismissWhatsNew)
+            }
+            if !state.updateMessage.isEmpty {
+                PanelBanner(message: state.updateMessage,
+                            actionLabel: state.updateAction,
+                            action: installUpdate)
             }
             pill
         }
@@ -296,6 +300,14 @@ final class SpeecherDictationPanel {
     private var updateObserver: AnyCancellable?
     private var whatsNewObserver: AnyCancellable?
     private var whatsNewAutoHide: Timer?
+    /// A problem tidies itself away after the same five seconds the Qt popup
+    /// counts down; the Dismiss button remains the early way out.
+    private var problemAutoDismiss: Timer?
+    /// Scratch-branch-only E2E seam: pins both notices on so the capture rig
+    /// can film how they stack above the pill. A CI run has no update pending,
+    /// so the stack is otherwise never on screen to photograph.
+    private let e2eBanners = ProcessInfo.processInfo
+        .environment["SPEECHER_E2E_PANEL_BANNERS"] == "1"
     /// Opens the settings window on the What's New pane. Set by SpeecherMacUI,
     /// which owns that window.
     var openWhatsNew: (() -> Void)?
@@ -402,10 +414,20 @@ final class SpeecherDictationPanel {
             self?.state.problem = ""
             self?.show(generation: generation)
         }
-        bridge.popupHideRequested = { [weak self] in self?.panel.orderOut(nil) }
+        bridge.popupHideRequested = { [weak self] in
+            guard let self else { return }
+            // A stale problem timer must not fire into whatever shows next.
+            problemAutoDismiss?.invalidate()
+            problemAutoDismiss = nil
+            panel.orderOut(nil)
+        }
     }
 
     func show(generation: UInt64) {
+        // A dictation starting inside a problem's five seconds must not be
+        // torn down when that problem's timer fires.
+        problemAutoDismiss?.invalidate()
+        problemAutoDismiss = nil
         present()
         // The session waits out a 50ms fallback otherwise; telling it the panel
         // is up lets the microphone open as soon as the frame is on screen.
@@ -424,12 +446,33 @@ final class SpeecherDictationPanel {
         state.problem = problem
         state.phase = .live
         present()
+        problemAutoDismiss?.invalidate()
+        problemAutoDismiss = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async { self?.autoDismissProblem() }
+        }
+    }
+
+    /// The countdown's end. invalidate() cannot recall a closure this timer has
+    /// already queued, so a dictation that started in the meantime would be torn
+    /// down by the previous problem's countdown; a problem is cleared before
+    /// such a session shows, which says so.
+    private func autoDismissProblem() {
+        guard !state.problem.isEmpty else { return }
+        dismiss()
     }
 
     func dismiss() {
+        problemAutoDismiss?.invalidate()
+        problemAutoDismiss = nil
         state.problem = ""
         panel.orderOut(nil)
-        bridge.stopListening()
+        // Only an errored session is the one this problem belongs to. On a
+        // live session stopListening() cancels the refinement or stops the
+        // mic, which the countdown must never do behind the user's back; the
+        // Qt front end has always guarded it this way.
+        if bridge.stateName == "error" {
+            bridge.stopListening()
+        }
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -492,6 +535,10 @@ final class SpeecherDictationPanel {
     /// The update banner's message and button for the state, exactly as the Qt
     /// popup words them.
     private func refreshUpdateBanner(_ update: AppModel.UpdateStatus) {
+        guard !e2eBanners else {
+            setUpdateBanner("Speecher 9.9.9 available", action: "Install and restart")
+            return
+        }
         switch update.state {
         case .updateAvailable:
             // The bare number only: a nightly identifier's "-nightly…" suffix
@@ -526,6 +573,10 @@ final class SpeecherDictationPanel {
     /// The offer returns with every showing of the panel and tidies itself away
     /// six seconds later; only the dismiss button clears the pending state.
     private func refreshWhatsNewBanner() {
+        guard !e2eBanners else {
+            setWhatsNewMessage("Speecher \(model.installedVersionNumber) installed")
+            return
+        }
         setWhatsNewMessage(model.whatsNewPending
             ? "Speecher \(model.installedVersionNumber) installed"
             : "")

@@ -23,13 +23,17 @@
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
+#include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #pragma pop_macro("GetCurrentTime")
 
+#include <QImage>
 #include <QTimer>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace speecher {
 namespace {
@@ -49,6 +53,32 @@ constexpr int screenEdgeMargin = 80;
 constexpr int bottomMargin = 28;
 constexpr int bannerGap = 12;
 constexpr auto windowClassName = L"SpeecherDictationPanel";
+
+// The mic level meter's geometry, matching the Qt popup's WaveformWidget: an
+// accent ProgressBar here used to read as "loading", not "I can hear you".
+constexpr int levelBarCount = 10;
+constexpr float levelBarMinHeight = 9.0f;
+// The Qt waveform swings 10..40 inside a 48px pill; the same proportion of
+// this 52 DIP panel is what keeps the meter as responsive as its reference.
+constexpr float levelBarMaxHeight = 36.0f;
+
+// Whether every pixel is the same colour, which is what a capture with no
+// desktop behind it looks like.
+bool isUniform(const QImage &image)
+{
+    if (image.isNull()) {
+        return true;
+    }
+    const QRgb first = image.pixel(0, 0);
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (image.pixel(x, y) != first) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 QString phaseGlyph(const QString &status, bool problem)
 {
@@ -120,6 +150,13 @@ struct DictationPanel::Native : QObject {
         , controller(owner)
         , panel(q)
     {
+        barTimer.setInterval(24);
+        connect(&barTimer, &QTimer::timeout, this, &Native::animateBars);
+        // The same five seconds the Qt popup counts down; the Dismiss button
+        // remains the early way out.
+        problemAutoDismiss.setSingleShot(true);
+        problemAutoDismiss.setInterval(5000);
+        connect(&problemAutoDismiss, &QTimer::timeout, this, &Native::dismissProblem);
         whatsNewAutoHide.setSingleShot(true);
         whatsNewAutoHide.setInterval(6000);
         connect(&whatsNewAutoHide, &QTimer::timeout, this, [this] {
@@ -266,12 +303,24 @@ struct DictationPanel::Native : QObject {
         row.Children().Append(text);
         probe = TextBlock();
 
-        level = ProgressBar();
-        level.Width(96);
-        level.Minimum(0);
-        level.Maximum(1);
-        level.VerticalAlignment(VerticalAlignment::Center);
-        row.Children().Append(level);
+        bars = StackPanel();
+        bars.Orientation(Orientation::Horizontal);
+        bars.Spacing(6);
+        bars.Width(96);
+        bars.Height(levelBarMaxHeight + 4);
+        bars.VerticalAlignment(VerticalAlignment::Center);
+        for (int i = 0; i < levelBarCount; ++i) {
+            Microsoft::UI::Xaml::Shapes::Rectangle bar;
+            bar.Width(4);
+            bar.RadiusX(2);
+            bar.RadiusY(2);
+            bar.Height(levelBarMinHeight);
+            bar.VerticalAlignment(VerticalAlignment::Center);
+            bar.Fill(text.Foreground());
+            bars.Children().Append(bar);
+            barRects.push_back(bar);
+        }
+        row.Children().Append(bars);
 
         ring = ProgressRing();
         ring.Width(24);
@@ -433,6 +482,9 @@ struct DictationPanel::Native : QObject {
 
     void show(quint64 generation)
     {
+        // A dictation starting inside a problem's five seconds must not be
+        // torn down when that problem's timer fires.
+        problemAutoDismiss.stop();
         problem.clear();
         // The previous dictation's words are spent; the session's clearing
         // preview can be dropped by the frozen guard, so clear here too.
@@ -476,11 +528,14 @@ struct DictationPanel::Native : QObject {
         if (!controller->pendingWhatsNewVersion().isEmpty()) {
             whatsNewAutoHide.start();
         }
+        problemAutoDismiss.start();
     }
 
     void hide()
     {
         whatsNewAutoHide.stop();
+        problemAutoDismiss.stop();
+        barTimer.stop();
         setShimmer(false);
         if (banner) {
             ShowWindow(banner, SW_HIDE);
@@ -496,6 +551,14 @@ struct DictationPanel::Native : QObject {
     {
         if (chrome) {
             chrome.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
+            // The rectangles captured the text brush at creation; a theme
+            // change hands them the newly resolved one. While the status text
+            // shimmers its foreground is the animated gradient, which would
+            // freeze into the bars as a half-swept smear.
+            const auto ink = shimmering ? normalForeground : text.Foreground();
+            for (auto &bar : barRects) {
+                bar.Fill(ink);
+            }
         }
     }
 
@@ -503,7 +566,13 @@ struct DictationPanel::Native : QObject {
     {
         problem.clear();
         hide();
-        controller->stopListening();
+        // Only an errored session is the one this problem belongs to. On a
+        // live session stopListening() cancels the refinement or stops the
+        // mic, which the countdown must never do behind the user's back; the
+        // Qt front end has always guarded it this way.
+        if (controller->session()->state() == DictationState::Error) {
+            controller->stopListening();
+        }
     }
 
     void setStatus(const QString &value)
@@ -528,7 +597,34 @@ struct DictationPanel::Native : QObject {
     void setLevel(float value)
     {
         ensureWindow();
-        level.Value(std::clamp(value, 0.0f, 1.0f));
+        // The Qt waveform's normalisation: lift speech out of the noise floor
+        // and soften the top so ordinary talking fills most of the range.
+        constexpr float noiseFloor = 0.14f;
+        const float normalized =
+            std::clamp((value - noiseFloor) / (1.0f - noiseFloor), 0.0f, 1.0f);
+        const float boosted =
+            std::clamp(std::pow(normalized, 1.18f) * 0.82f, 0.0f, 1.0f);
+        barTarget = std::max(barTarget, boosted);
+    }
+
+    // One tick of the Qt WaveformWidget's idle-plus-speech animation, driving
+    // XAML rectangle heights instead of painted bars.
+    void animateBars()
+    {
+        barPhase += 0.34f;
+        for (int i = 0; i < int(barRects.size()); ++i) {
+            const float wave = 0.10f + 0.045f * std::sin(barPhase + i * 0.7f);
+            const float speech = barTarget
+                * (0.24f
+                   + 0.16f * std::sin(barPhase * 1.4f + i * 1.23f)
+                       * std::sin(barPhase * 0.61f + i));
+            const float target = std::clamp(wave + speech, 0.08f, 1.0f);
+            barHeights[i] = barHeights[i] * 0.42f + target * 0.58f;
+            barRects[i].Height(std::clamp(
+                levelBarMinHeight + barHeights[i] * levelBarMaxHeight,
+                levelBarMinHeight, levelBarMaxHeight));
+        }
+        barTarget *= 0.68f;
     }
 
     void setRefining(bool value)
@@ -641,10 +737,16 @@ struct DictationPanel::Native : QObject {
             text.Width(textWidth);
             row.HorizontalAlignment(HorizontalAlignment::Left);
         }
-        level.Visibility(!hasProblem && !finished && phase == Phase::Live
-                                 && status.compare(QStringLiteral("listening"), Qt::CaseInsensitive) == 0
-                             ? Visibility::Visible
-                             : Visibility::Collapsed);
+        const bool listening = !hasProblem && !finished && phase == Phase::Live
+            && status.compare(QStringLiteral("listening"), Qt::CaseInsensitive) == 0;
+        bars.Visibility(listening ? Visibility::Visible : Visibility::Collapsed);
+        if (listening) {
+            if (!barTimer.isActive()) {
+                barTimer.start();
+            }
+        } else {
+            barTimer.stop();
+        }
         ring.Visibility(!hasProblem && !finished && refining ? Visibility::Visible
                                                  : Visibility::Collapsed);
         dismiss.Visibility(hasProblem ? Visibility::Visible : Visibility::Collapsed);
@@ -727,7 +829,13 @@ struct DictationPanel::Native : QObject {
     FontIcon glyph{nullptr};
     TextBlock text{nullptr};
     TextBlock probe{nullptr};
-    ProgressBar level{nullptr};
+    StackPanel bars{nullptr};
+    std::vector<Microsoft::UI::Xaml::Shapes::Rectangle> barRects;
+    QTimer barTimer;
+    std::array<float, levelBarCount> barHeights{};
+    float barTarget = 0.0f;
+    float barPhase = 0.0f;
+    QTimer problemAutoDismiss;
     ProgressRing ring{nullptr};
     Button dismiss{nullptr};
     QString status;
@@ -783,6 +891,86 @@ quint64 DictationPanel::presentedGenerationForTest() const
 qintptr DictationPanel::windowStyleForTest() const
 {
     return m_native->window ? GetWindowLongPtrW(m_native->window, GWL_EXSTYLE) : 0;
+}
+
+void DictationPanel::driveStatusForTest(const QString &status)
+{
+    m_native->ensureWindow();
+    m_native->setStatus(status);
+}
+
+void DictationPanel::drivePreviewForTest(const QString &preview)
+{
+    m_native->ensureWindow();
+    m_native->setPreview(preview);
+}
+
+void DictationPanel::driveLevelForTest(float level)
+{
+    m_native->setLevel(level);
+}
+
+int DictationPanel::levelBarCountForTest() const
+{
+    return int(m_native->barRects.size());
+}
+
+// Copies the panel's screen rectangle, DWM-composed, so the picture carries
+// the acrylic backdrop and rounded corners the user actually sees. The panel
+// is topmost, so nothing can sit in front of it.
+bool DictationPanel::saveGrabForTest(const QString &path) const
+{
+    HWND window = m_native->window;
+    if (!window || !IsWindowVisible(window)) {
+        return false;
+    }
+    RECT rect{};
+    GetWindowRect(window, &rect);
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+    HDC screen = GetDC(nullptr);
+    if (!screen) {
+        return false;
+    }
+    HDC memory = CreateCompatibleDC(screen);
+    HBITMAP bitmap = memory ? CreateCompatibleBitmap(screen, width, height) : nullptr;
+    if (!memory || !bitmap) {
+        if (memory) {
+            DeleteDC(memory);
+        }
+        ReleaseDC(nullptr, screen);
+        return false;
+    }
+    HGDIOBJ previous = SelectObject(memory, bitmap);
+    // A failed blit leaves the bitmap filled with uninitialised GDI memory,
+    // which would still save as a perfectly valid-looking PNG.
+    const bool blitted = BitBlt(memory, 0, 0, width, height, screen,
+                                rect.left, rect.top, SRCCOPY | CAPTUREBLT);
+    // GetDIBits requires the bitmap not be selected into any device context.
+    SelectObject(memory, previous);
+    QImage image(width, height, QImage::Format_RGB32);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    const bool copied = blitted
+        && GetDIBits(memory, bitmap, 0, height, image.bits(),
+                     &info, DIB_RGB_COLORS) == height;
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+    if (!copied || isUniform(image)) {
+        // A session without a composited desktop blits solid black, which
+        // saves as a perfectly valid PNG and would be uploaded as evidence.
+        return false;
+    }
+    return image.save(path);
 }
 
 } // namespace speecher

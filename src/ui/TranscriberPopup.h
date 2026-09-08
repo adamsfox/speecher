@@ -7,6 +7,7 @@
 
 class QFrame;
 class QEvent;
+class QHideEvent;
 class QProgressBar;
 class QPushButton;
 class QPropertyAnimation;
@@ -55,6 +56,7 @@ signals:
 
 protected:
     void changeEvent(QEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
 
@@ -71,7 +73,9 @@ private:
 
     QVBoxLayout *m_layout = nullptr;
     QFrame *m_previewPill = nullptr;
+    QVBoxLayout *m_pillLayout = nullptr;
     QLabel *m_preview = nullptr;
+    QPushButton *m_errorDismiss = nullptr;
     QProgressBar *m_errorDismissProgress = nullptr;
     QPropertyAnimation *m_errorDismissAnimation = nullptr;
     WaveformWidget *m_waveform = nullptr;

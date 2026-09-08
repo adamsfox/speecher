@@ -25,6 +25,7 @@
 #include <QFontMetrics>
 #include <QFormLayout>
 #include <QLineEdit>
+#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSpinBox>
@@ -156,6 +157,134 @@ private slots:
         TranscriberPopup popup(new SizingPopupPositioner);
         QVERIFY(!popup.findChild<AccessibilityNotice *>());
         QVERIFY(!popup.findChild<QPushButton *>(QStringLiteral("enableAccessibilityButton")));
+    }
+
+    void popupHidesThePreviewPillUntilWordsArrive()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showListeningIndicator();
+        auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
+        QVERIFY(pill);
+        // No words yet: the waveform alone says "listening", with no
+        // placeholder capsule under it.
+        QVERIFY(pill->isHidden());
+
+        popup.setPreview(QStringLiteral("hello there"));
+        QVERIFY(!pill->isHidden());
+
+        // Silence clears the preview; the empty pill goes with it.
+        popup.setPreview(QString());
+        QVERIFY(pill->isHidden());
+    }
+
+    void popupTrimsThePreviewFromTheFrontWithAnEllipsis()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showListeningIndicator();
+        const QString spoken = QStringLiteral("start of a very long sentence ")
+            + QStringLiteral("more words in the middle ").repeated(8)
+            + QStringLiteral("the very last words");
+        popup.setPreview(spoken);
+
+        auto *preview = popup.findChild<QLabel *>(QStringLiteral("rawTranscript"));
+        QVERIFY(preview);
+        QVERIFY(preview->text().startsWith(QStringLiteral("…")));
+        QVERIFY(preview->text().endsWith(QStringLiteral("the very last words")));
+        const QFontMetrics metrics(preview->font());
+        QVERIFY(metrics.horizontalAdvance(preview->text()) <= 520);
+
+        // A short preview is shown whole, with nothing implied before it.
+        popup.setPreview(QStringLiteral("short preview"));
+        QCOMPARE(preview->text(), QStringLiteral("short preview"));
+    }
+
+    void popupErrorHugsAShortMessage()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showErrorMessage(QStringLiteral("Microphone unavailable"));
+        auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
+        QVERIFY(pill);
+        // The capsule sizes to the one short line instead of the full 520px
+        // wrap width plus padding.
+        QVERIFY(pill->sizeHint().width() < 520);
+
+        auto *preview = popup.findChild<QLabel *>(QStringLiteral("rawTranscript"));
+        QVERIFY(preview);
+        const QFontMetrics metrics(preview->font());
+        const int textWidth = metrics.horizontalAdvance(QStringLiteral("Microphone unavailable"));
+        QCOMPARE(preview->width(), textWidth);
+    }
+
+    void popupErrorCanBeDismissedEarly()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showPopup(0);
+        popup.showErrorMessage(QStringLiteral("Something went wrong"));
+        auto *dismiss = popup.findChild<QPushButton *>(QStringLiteral("errorDismiss"));
+        QVERIFY(dismiss);
+        QVERIFY(!dismiss->isHidden());
+
+        QSignalSpy dismissed(&popup, &TranscriberPopup::errorDismissed);
+        dismiss->click();
+        QCOMPARE(dismissed.count(), 1);
+        QVERIFY(popup.isHidden());
+
+        // The chip belongs to errors only; a live preview must not carry it.
+        popup.showPopup(0);
+        popup.setPreview(QStringLiteral("words again"));
+        QVERIFY(dismiss->isHidden());
+    }
+
+    void popupDoesNotCarryAnErrorIntoTheNextDictation()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showPopup(0);
+        popup.showErrorMessage(QStringLiteral("Microphone unavailable"));
+        auto *dismiss = popup.findChild<QPushButton *>(QStringLiteral("errorDismiss"));
+        auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
+        auto *countdown = popup.findChild<QPropertyAnimation *>();
+        QVERIFY(dismiss && pill && countdown);
+        QVERIFY(!dismiss->isHidden());
+        QCOMPARE(countdown->state(), QAbstractAnimation::Running);
+
+        // The next dictation starts while that countdown is still draining.
+        popup.showPopup(1);
+        QVERIFY(dismiss->isHidden());
+        QVERIFY(pill->isHidden());
+        QCOMPARE(pill->height(), 48);
+        // Left running it would hide this dictation's popup when it finished,
+        // and report a dismissal against a session that had moved on.
+        QCOMPARE(countdown->state(), QAbstractAnimation::Stopped);
+    }
+
+    void popupStopsTheCountdownWhenHidden()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.showPopup(0);
+        popup.showErrorMessage(QStringLiteral("Microphone unavailable"));
+        auto *countdown = popup.findChild<QPropertyAnimation *>();
+        QVERIFY(countdown);
+        QCOMPARE(countdown->state(), QAbstractAnimation::Running);
+
+        // The session hides the popup by any route, not only the chip.
+        popup.hide();
+        QCOMPARE(countdown->state(), QAbstractAnimation::Stopped);
+    }
+
+    void popupErrorKeepsTheDismissChipInsideTheCapsule()
+    {
+        TranscriberPopup popup(new SizingPopupPositioner);
+        // The app's longest error, which clamps to the wrapping width.
+        popup.showErrorMessage(QStringLiteral(
+            "Microphone access is off. Allow Speecher under Privacy & Security > "
+            "Microphone, then try again."));
+        auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
+        auto *dismiss = popup.findChild<QPushButton *>(QStringLiteral("errorDismiss"));
+        QVERIFY(pill && dismiss);
+        popup.adjustSize();
+        // The chip must sit inside the painted capsule, not across its stroke.
+        QVERIFY(pill->sizeHint().width() >= 520 + dismiss->sizeHint().width());
+        QVERIFY(popup.width() >= pill->sizeHint().width());
     }
 
     void popupUsesTheApplicationFontAndNoStylesheet()

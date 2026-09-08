@@ -30,6 +30,10 @@
 namespace speecher {
 namespace {
 
+// Lifts the error countdown bar clear of the capsule's bottom border, which
+// it otherwise sits on as a square-ended strip crossing the hairline.
+constexpr int kErrorBarInset = 9;
+
 // Paints the pill instead of a stylesheet border: Qt's QSS rounded borders
 // render with uneven thickness at fractional display scales, which reads as
 // blur around the edge. This draws a one-device-pixel hairline aligned to the
@@ -138,7 +142,8 @@ protected:
         const qreal fraction = qreal(value() - minimum()) / qreal(maximum() - minimum());
         QRectF chunk(rect());
         chunk.setWidth(chunk.width() * fraction);
-        painter.drawRoundedRect(chunk, 1.0, 1.0);
+        // Capsule ends, like every other shape on this popup.
+        painter.drawRoundedRect(chunk, chunk.height() / 2.0, chunk.height() / 2.0);
     }
 };
 
@@ -181,15 +186,33 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     m_previewPill->setAutoFillBackground(false);
     m_previewPill->setFixedHeight(48);
     m_previewPill->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    auto *previewLayout = new QVBoxLayout(m_previewPill);
-    previewLayout->setContentsMargins(24, 0, 24, 0);
-    previewLayout->setSpacing(0);
+    // Hidden until the first words arrive: before this popup showed a tiny
+    // "---" capsule under the waveform while there was nothing to preview.
+    m_previewPill->hide();
+    m_pillLayout = new QVBoxLayout(m_previewPill);
+    m_pillLayout->setContentsMargins(24, 0, 24, 0);
+    m_pillLayout->setSpacing(0);
 
     m_preview->setWordWrap(false);
     m_preview->setAlignment(Qt::AlignCenter);
     m_preview->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_preview->setText(QStringLiteral("---"));
-    previewLayout->addWidget(m_preview, 1);
+    auto *previewRow = new QHBoxLayout;
+    previewRow->setContentsMargins(0, 0, 0, 0);
+    previewRow->setSpacing(10);
+    previewRow->addWidget(m_preview, 1);
+    // An error's explicit way out, beside the auto-dismiss countdown, matching
+    // the Dismiss buttons on the mac and Windows panels.
+    m_errorDismiss = new ChipButton(m_previewPill);
+    m_errorDismiss->setObjectName(QStringLiteral("errorDismiss"));
+    m_errorDismiss->setText(QStringLiteral("Dismiss"));
+    m_errorDismiss->hide();
+    connect(m_errorDismiss, &QPushButton::clicked, this, [this] {
+        m_errorDismissAnimation->stop();
+        hide();
+        emit errorDismissed();
+    });
+    previewRow->addWidget(m_errorDismiss, 0, Qt::AlignVCenter);
+    m_pillLayout->addLayout(previewRow, 1);
 
     m_errorDismissProgress->setObjectName(QStringLiteral("errorDismissProgress"));
     m_errorDismissProgress->setRange(0, 1000);
@@ -197,7 +220,7 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     m_errorDismissProgress->setTextVisible(false);
     m_errorDismissProgress->setFixedHeight(3);
     m_errorDismissProgress->hide();
-    previewLayout->addWidget(m_errorDismissProgress);
+    m_pillLayout->addWidget(m_errorDismissProgress);
 
     m_errorDismissAnimation = new QPropertyAnimation(
         m_errorDismissProgress,
@@ -322,19 +345,31 @@ void TranscriberPopup::setRefinementPreview(const QString &preview)
 void TranscriberPopup::applyPreviewText(const QString &preview)
 {
     QString visible = preview.simplified();
-    if (!visible.isEmpty()) {
-        const QFontMetrics metrics(m_preview->font());
-        constexpr int maxTextWidth = 520;
-        while (metrics.horizontalAdvance(visible) > maxTextWidth) {
+    if (visible.isEmpty()) {
+        // Nothing to preview means no pill, not a placeholder capsule.
+        hidePreview();
+        return;
+    }
+    const QFontMetrics metrics(m_preview->font());
+    constexpr int maxTextWidth = 520;
+    if (metrics.horizontalAdvance(visible) > maxTextWidth) {
+        // A live transcript overflows from the front: the words just spoken
+        // stay visible, and the ellipsis says something came before them,
+        // as on the mac and Windows panels.
+        const QString ellipsis = QStringLiteral("… ");
+        const int room = maxTextWidth - metrics.horizontalAdvance(ellipsis);
+        while (metrics.horizontalAdvance(visible) > room) {
             const int firstSpace = visible.indexOf(QLatin1Char(' '));
             if (firstSpace < 0) {
-                visible.clear();
                 break;
             }
             visible = visible.mid(firstSpace + 1).trimmed();
         }
+        visible = metrics.horizontalAdvance(visible) > room
+            ? metrics.elidedText(visible, Qt::ElideLeft, maxTextWidth)
+            : ellipsis + visible;
     }
-    m_preview->setText(visible.isEmpty() ? QStringLiteral("---") : visible);
+    m_preview->setText(visible);
     m_preview->setVisible(true);
     m_previewPill->setVisible(true);
     m_preview->setMaximumWidth(520);
@@ -427,21 +462,33 @@ void TranscriberPopup::showErrorMessage(const QString &message)
     setRefreshLayout(false);
     m_errorDismissAnimation->stop();
     m_waveform->hide();
-    m_preview->setText(message.simplified());
+    const QString text = message.simplified();
+    const QFontMetrics metrics(m_preview->font());
+    constexpr int maxTextWidth = 520;
+    // The capsule hugs a short error instead of stretching to the full wrap
+    // width around one small centred line.
+    const int textWidth = qBound(1, metrics.horizontalAdvance(text), maxTextWidth);
+    m_preview->setText(text);
     m_preview->setWordWrap(true);
-    m_preview->setFixedWidth(520);
+    m_preview->setFixedWidth(textWidth);
     m_preview->setVisible(true);
+    m_errorDismiss->setVisible(true);
     m_previewPill->setVisible(true);
+    // previewRow is centred in what is left after the bar and its air, so the
+    // same amount above it puts the text on the capsule's optical centre.
+    m_pillLayout->setContentsMargins(24, kErrorBarInset + 3, 24, kErrorBarInset);
     m_errorDismissProgress->setValue(m_errorDismissProgress->maximum());
     m_errorDismissProgress->show();
 
-    const QFontMetrics metrics(m_preview->font());
     const int textHeight = metrics.boundingRect(
-                                      QRect(0, 0, m_preview->width(), 1000),
+                                      QRect(0, 0, textWidth, 1000),
                                       Qt::AlignCenter | Qt::TextWordWrap,
-                                      m_preview->text())
+                                      text)
                                .height();
-    m_previewPill->setFixedHeight(qMax(48, textHeight + 27));
+    // 24 keeps the label's 12px above and below the text; 3 is the countdown
+    // bar; the inset is the air between the bar and the border.
+    m_previewPill->setFixedHeight(
+        qMax(48, textHeight + 24 + 2 * (3 + kErrorBarInset)));
     m_previewPill->resize(m_previewPill->sizeHint());
     adjustSize();
     updateWindowMask();
@@ -450,6 +497,12 @@ void TranscriberPopup::showErrorMessage(const QString &message)
 
 void TranscriberPopup::showPopup(quint64 generation)
 {
+    // A previous dictation's error belongs to the attempt that failed: its
+    // text, its Dismiss chip, its taller pill and its draining countdown all
+    // go before this dictation is shown. Without this the countdown could
+    // hide a live dictation's popup and report a dismissal against it.
+    restoreStandardLayout();
+    hidePreview();
     m_pendingPresentationGeneration = generation;
     m_positioner->positionBottomCenter(m_surface);
     updateWindowMask();
@@ -510,6 +563,14 @@ void TranscriberPopup::changeEvent(QEvent *event)
     QWidget::changeEvent(event);
 }
 
+void TranscriberPopup::hideEvent(QHideEvent *event)
+{
+    // Whatever hid the popup, a countdown left running would hide the next
+    // dictation's popup when it finished.
+    m_errorDismissAnimation->stop();
+    QWidget::hideEvent(event);
+}
+
 void TranscriberPopup::paintEvent(QPaintEvent *event)
 {
     QWidget::paintEvent(event);
@@ -550,6 +611,8 @@ void TranscriberPopup::restoreStandardLayout()
 {
     m_errorDismissAnimation->stop();
     m_errorDismissProgress->hide();
+    m_errorDismiss->hide();
+    m_pillLayout->setContentsMargins(24, 0, 24, 0);
     m_waveform->show();
     m_preview->setWordWrap(false);
     m_preview->setMinimumWidth(0);
