@@ -21,16 +21,23 @@ QColor withAlpha(QColor color, int alpha)
     return color;
 }
 
-// Wispr Flow's active status pill, used by the waveform and its frozen twin.
-constexpr int wavePillWidth = 50;
-constexpr int wavePillHeight = 30;
-// The pill's earlier size, kept for the states this port does not touch: the
-// sign-in dots, the delivery receipt, and the shimmering status text.
+// The pill size for the states this port does not touch: the sign-in dots,
+// the delivery receipt, and the shimmering status text.
 constexpr int textPillWidth = 126;
 constexpr int textPillHeight = 48;
+// Wispr Flow's active status pill is 50x30 and stands alone against a screen
+// edge. Speecher's popup stacks the waveform above the transcript pill, where
+// that size reads as a different, much smaller component, so the whole design
+// is scaled to the transcript pill's height. Every proportion below stays
+// Wispr Flow's; only this factor is ours.
+constexpr qreal referencePillHeight = 30.0;
+constexpr qreal pillScale = textPillHeight / referencePillHeight;
+constexpr int wavePillWidth = int(50.0 * pillScale);
+constexpr int wavePillHeight = textPillHeight;
 
-// The waveform is a port of Wispr Flow's status-bar bars (v1.6.793): ten 2x2px
-// rounded dots, each scaled vertically about its centre by
+// The waveform is a port of Wispr Flow's status-bar bars (v1.6.793): ten
+// rounded dots, 2x2px before pillScale, each scaled vertically about its
+// centre by
 //
 //   audioScale * bulge * wave
 //
@@ -40,10 +47,10 @@ constexpr int textPillHeight = 48;
 // keyframes) whose phase trails 0.1s per bar, so a crest travels across the
 // row once per second and wraps seamlessly.
 constexpr int barCount = 10;
-constexpr qreal barWidth = 2.0;
-constexpr qreal barGap = 2.0;
-constexpr qreal barDotHeight = 2.0;
-constexpr qreal barRadius = 0.5;
+constexpr qreal barWidth = 2.0 * pillScale;
+constexpr qreal barGap = 2.0 * pillScale;
+constexpr qreal barDotHeight = 2.0 * pillScale;
+constexpr qreal barRadius = 0.5 * pillScale;
 constexpr float audioGain = 5.0f;
 constexpr float levelSpanDb = 20.0f;
 // Wispr Flow stops the floor descending past -60 dBFS of the raw capture, so

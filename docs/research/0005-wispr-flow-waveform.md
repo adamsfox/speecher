@@ -81,4 +81,11 @@ A separate 5-bar "mini" waveform (used in the compact/resting indicator) hard-co
 
 ## Port to speecher
 
-Speecher's `WaveformWidget` reimplements stages 2 and 3 plus the CSS model in QPainter: per-level adaptive dB floor mapping (fed from the existing `levelChanged` signal, whose fixed 8x gain the floor absorbs), 150ms mean with hold-on-empty, per-frame 0.85 EMA at a 16ms tick, gain 5 floored at 1, and per-bar `2px x audioScale x bulge x wave` with the same keyframes, per-segment ease-in-out (Newton-solved bezier), and 0.1s/bar phase trail. Colors follow palette roles (Base pill, Text bars) per the project's UI rules instead of Wispr Flow's fixed dark palette.
+Speecher's `WaveformWidget` reimplements stages 2 and 3 plus the CSS model in QPainter: per-level adaptive dB floor mapping (fed from the existing `levelChanged` signal), a 150ms mean with hold-on-empty, a per-frame 0.85 EMA at a 16ms tick, gain 5 floored at 1, and per-bar `dotHeight x audioScale x bulge x wave` with the same keyframes, per-segment ease-in-out (Newton-solved bezier), and 0.1s/bar phase trail.
+
+Two deliberate departures:
+
+- **Colours are palette roles** (Base pill, Text bars) rather than Wispr Flow's fixed dark palette, because Speecher follows the desktop theme.
+- **The pill is scaled up by 1.6.** Wispr Flow's active pill is 50x30 and stands alone against a screen edge. Speecher's popup stacks the waveform directly above the transcript pill, which is 48px tall, and at 30px the waveform read as a separate, much smaller component. The whole design is therefore scaled to that height (80x48, bars 3.2px wide with 3.2px gaps), so every proportion stays Wispr Flow's: the bar row still fills 76% of the pill's width and a saturated bar still reaches 50% of its height.
+
+The floor's clamp is the one constant that could not be carried over directly. Wispr Flow stops the floor descending past -60 dBFS of the raw capture; Speecher's level signal is pre-gained and the gain differs per audio input (`QtAudioInput` emits `rms*8` clipped at 1, `WavFileAudioInput` a unity peak), so there is no single dBFS equivalent. The port clamps at -46dB, which sits below room tone on both paths.
