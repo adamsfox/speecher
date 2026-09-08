@@ -555,6 +555,10 @@ private slots:
 
         const QJsonArray systemBlocks = body.value(QStringLiteral("system")).toArray();
         QCOMPARE(systemBlocks.size(), 2);
+        QCOMPARE(systemBlocks.at(0).toObject().value(QStringLiteral("type")).toString(),
+                 QStringLiteral("text"));
+        QCOMPARE(systemBlocks.at(1).toObject().value(QStringLiteral("type")).toString(),
+                 QStringLiteral("text"));
         // The identity block must hold the Claude Code line and nothing else;
         // api.anthropic.com rejects OAuth requests whose first system block
         // has anything appended to it.
