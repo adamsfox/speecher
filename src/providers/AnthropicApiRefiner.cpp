@@ -72,13 +72,28 @@ QString apiEffortForModel(const QString &model, const QString &effort)
     return QStringLiteral("high");
 }
 
-QString claudeCodeSystemPrompt(const QString &refinementStyle,
+// api.anthropic.com accepts Claude Code OAuth tokens only when the first
+// system block is exactly the Claude Code identity line. Appending the
+// refinement instructions to that block (or sending them as one string) makes
+// every request fail with a 429 rate_limit_error, so the instructions go in a
+// second block.
+QJsonArray claudeCodeSystemBlocks(const QString &refinementStyle,
     const RefinementContext &context)
 {
-    return QStringLiteral("You are Claude Code, Anthropic's official CLI for Claude.\n\n")
-        + (context.editSelection
-               ? selectedDocumentEditingSystemPrompt(refinementStyle, context)
-               : dictationRefinementSystemPrompt(refinementStyle, context));
+    const QString instructions = context.editSelection
+        ? selectedDocumentEditingSystemPrompt(refinementStyle, context)
+        : dictationRefinementSystemPrompt(refinementStyle, context);
+    return {
+        QJsonObject{
+            {QStringLiteral("type"), QStringLiteral("text")},
+            {QStringLiteral("text"),
+             QStringLiteral("You are Claude Code, Anthropic's official CLI for Claude.")},
+        },
+        QJsonObject{
+            {QStringLiteral("type"), QStringLiteral("text")},
+            {QStringLiteral("text"), instructions},
+        },
+    };
 }
 
 StreamingRefinement::Event anthropicEvent(const QByteArray &name, const QByteArray &data)
@@ -166,7 +181,7 @@ void AnthropicApiRefiner::refine(const QString &rawTranscript,
         qInfo().noquote() << "anthropic oauth refinement request model=" + model
                           << "effort=" + (body.value(QStringLiteral("output_config")).toObject().value(QStringLiteral("effort")).toString(QStringLiteral("default")))
                           << "endpoint=" + endpoint.toString(QUrl::RemoveUserInfo);
-        body.insert(QStringLiteral("system"), claudeCodeSystemPrompt(refinementStyle, context));
+        body.insert(QStringLiteral("system"), claudeCodeSystemBlocks(refinementStyle, context));
         const QString userMessage = transcriptRefinementUserMessage(
             rawTranscript,
             vocabulary,

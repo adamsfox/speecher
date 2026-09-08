@@ -816,6 +816,7 @@ void DictationSession::connectTranscriptRefiner(TranscriptRefiner *refiner)
         } else if (m_transcriptPipeline.editsSelection) {
             failSelectionEdit(QStringLiteral("The refinement model returned an unusable selection edit"));
         } else {
+            qWarning() << "refinement result could not be restored, delivering fallback";
             deliverFinal(m_transcriptPipeline.deliveryFallback);
         }
     });
@@ -823,6 +824,7 @@ void DictationSession::connectTranscriptRefiner(TranscriptRefiner *refiner)
         if (m_state != DictationState::Refining || m_refinementGeneration != m_generation) {
             return;
         }
+        qWarning().noquote() << "refinement failed message=" + message;
         if (m_transcriptPipeline.editsSelection) {
             failSelectionEdit(message);
             return;
