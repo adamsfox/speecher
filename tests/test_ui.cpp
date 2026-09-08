@@ -1162,23 +1162,22 @@ private slots:
 
     // The pill is Wispr Flow's 50x30 while it shows the waveform; the states
     // this port does not change keep the size they had.
-    void waveformPillMatchesTheTranscriptPillHeight()
+    void waveformPillMatchesTheTranscriptPill()
     {
-        // Wispr Flow's 50x30 pill scaled to the transcript pill's height, so
-        // the two read as one component rather than a big and a small one.
+        // The pill takes the transcript pill's size in every state, so it
+        // reads as the same component and never resizes mid-session.
         speecher::WaveformWidget waveform;
-        QCOMPARE(waveform.size(), QSize(80, 48));
+        QCOMPARE(waveform.size(), QSize(126, 48));
 
         waveform.setMode(speecher::WaveformWidget::Mode::Dots);
-        QCOMPARE(waveform.width(), 126);
-        QVERIFY(waveform.height() >= 48);
-
-        waveform.setMessage(QStringLiteral("Input sent"));
-        QVERIFY(waveform.width() >= 126);
-        QVERIFY(waveform.height() >= 48);
+        QCOMPARE(waveform.size(), QSize(126, 48));
 
         waveform.setMode(speecher::WaveformWidget::Mode::Waveform);
-        QCOMPARE(waveform.size(), QSize(80, 48));
+        QCOMPARE(waveform.size(), QSize(126, 48));
+
+        // Only a message longer than the pill widens it.
+        waveform.setMessage(QStringLiteral("Input sent"));
+        QCOMPARE(waveform.size(), QSize(126, 48));
     }
 };
 

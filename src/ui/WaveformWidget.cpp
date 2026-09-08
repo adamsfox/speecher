@@ -21,19 +21,15 @@ QColor withAlpha(QColor color, int alpha)
     return color;
 }
 
-// The pill size for the states this port does not touch: the sign-in dots,
-// the delivery receipt, and the shimmering status text.
-constexpr int textPillWidth = 126;
-constexpr int textPillHeight = 48;
-// Wispr Flow's active status pill is 50x30 and stands alone against a screen
-// edge. Speecher's popup stacks the waveform above the transcript pill, where
-// that size reads as a different, much smaller component, so the whole design
-// is scaled to the transcript pill's height. Every proportion below stays
-// Wispr Flow's; only this factor is ours.
+// One pill for every state, so it never changes size between listening, the
+// delivery receipt and the status shimmer. Wispr Flow's own pill is 50x30 and
+// stands alone against a screen edge; Speecher's sits directly above the
+// transcript pill, so it takes that pill's size instead.
+constexpr int pillWidth = 126;
+constexpr int pillHeight = 48;
+// Bar geometry is Wispr Flow's 2px scaled by the pill's height ratio (48/30).
 constexpr qreal referencePillHeight = 30.0;
-constexpr qreal pillScale = textPillHeight / referencePillHeight;
-constexpr int wavePillWidth = int(50.0 * pillScale);
-constexpr int wavePillHeight = textPillHeight;
+constexpr qreal pillScale = pillHeight / referencePillHeight;
 
 // The waveform is a port of Wispr Flow's status-bar bars (v1.6.793): ten
 // rounded dots, 2x2px before pillScale, each scaled vertically about its
@@ -42,17 +38,26 @@ constexpr int wavePillHeight = textPillHeight;
 //   audioScale * bulge * wave
 //
 // where audioScale is the smoothed mic level times a gain of 5 floored at 1,
-// bulge weights bars towards the centre (1 - distance^2 / 48), and wave is a
-// 1s keyframe loop (1 -> 1.2 -> 1.5 -> 1.1 -> 1.3 -> 1, ease-in-out between
-// keyframes) whose phase trails 0.1s per bar, so a crest travels across the
-// row once per second and wraps seamlessly.
-constexpr int barCount = 10;
+// bulge weights bars towards the centre, and wave is a 1s keyframe loop
+// (1 -> 1.2 -> 1.5 -> 1.1 -> 1.3 -> 1, ease-in-out between keyframes) whose
+// phase trails one bar's share of the loop per bar, so a crest travels across
+// the row once per second and wraps seamlessly.
+// Wispr Flow's row is ten bars in a 50px pill. This pill is wider, so it
+// holds proportionally more of the same bars rather than stretching them:
+// fifteen at Wispr Flow's thickness and spacing fill 74% of the width, the
+// same fraction its ten fill of 50px.
+constexpr int barCount = 15;
 constexpr qreal barWidth = 2.0 * pillScale;
 constexpr qreal barGap = 2.0 * pillScale;
 constexpr qreal barDotHeight = 2.0 * pillScale;
 constexpr qreal barRadius = 0.5 * pillScale;
 constexpr float audioGain = 5.0f;
 constexpr float levelSpanDb = 20.0f;
+// Wispr Flow's bulge falls off with the square of a bar's distance from the
+// centre for a short row, and linearly once its bulgeCoefficient reaches 2,
+// which is the branch a row this long wants: the quadratic would flatten the
+// outermost bars to nothing.
+constexpr qreal bulgeCoefficient = 2.0;
 // Wispr Flow stops the floor descending past -60 dBFS of the raw capture, so
 // one freakishly quiet chunk cannot leave the display permanently
 // oversensitive. Speecher's level signal is pre-gained and its gain differs
@@ -190,17 +195,12 @@ WaveformWidget::WaveformWidget(QWidget *parent)
 
 void WaveformWidget::applyGeometry()
 {
-    if (m_mode == Mode::Waveform || m_mode == Mode::Frozen) {
-        setFixedSize(wavePillWidth, wavePillHeight);
-        return;
-    }
-    // The text states keep the pill they had before this port. The height
-    // follows the desktop's font where that is taller, so a large font cannot
-    // clip the receipt.
-    const int height = std::max(textPillHeight, fontMetrics().height() + 10);
+    // The height follows the desktop's font where that is taller, so a large
+    // font cannot clip the receipt; a long message widens the pill.
+    const int height = std::max(pillHeight, fontMetrics().height() + 10);
     const int width = m_message.isEmpty()
-        ? textPillWidth
-        : std::max(textPillWidth, fontMetrics().horizontalAdvance(m_message) + 32);
+        ? pillWidth
+        : std::max(pillWidth, fontMetrics().horizontalAdvance(m_message) + 32);
     setFixedSize(width, height);
 }
 
@@ -307,10 +307,11 @@ void WaveformWidget::paintWaveform(QPainter &painter, const QColor &bar)
     painter.setBrush(bar);
     for (int i = 0; i < barCount; ++i) {
         const qreal distance = std::abs((barCount - 1) / 2.0 - i);
-        const qreal bulge = std::max(0.0, 1.0 - distance * distance / 48.0);
-        // The bar's animation trails the phase by 0.1s per index; the wrap at
-        // 1s means bar 0 and bar 9 sit a tenth of a cycle apart, seamlessly.
-        const qreal barPhase = m_wavePhase - 0.1 * i;
+        const qreal bulge = std::max(0.0, 1.0 - distance * (bulgeCoefficient / 48.0));
+        // Each bar trails its neighbour by one bar's share of the loop, so the
+        // crest crosses the row exactly once per cycle however many bars there
+        // are. At Wispr Flow's ten this is its own 0.1s delay.
+        const qreal barPhase = m_wavePhase - qreal(i) / barCount;
         const qreal wave = waveMultiplier(barPhase - std::floor(barPhase));
         const qreal h = barDotHeight * audioScale * bulge * wave;
         const qreal x = startX + i * (barWidth + barGap);
