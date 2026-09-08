@@ -31,7 +31,7 @@ constexpr int pillHeight = 48;
 constexpr qreal referencePillHeight = 30.0;
 constexpr qreal pillScale = pillHeight / referencePillHeight;
 
-// The waveform is a port of Wispr Flow's status-bar bars (v1.6.793): ten
+// The waveform is a port of Wispr Flow's status-bar bars (v1.6.793): a row of
 // rounded dots, 2x2px before pillScale, each scaled vertically about its
 // centre by
 //
