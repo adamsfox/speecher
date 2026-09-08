@@ -466,7 +466,13 @@ final class SpeecherDictationPanel {
         problemAutoDismiss = nil
         state.problem = ""
         panel.orderOut(nil)
-        bridge.stopListening()
+        // Only an errored session is the one this problem belongs to. On a
+        // live session stopListening() cancels the refinement or stops the
+        // mic, which the countdown must never do behind the user's back; the
+        // Qt front end has always guarded it this way.
+        if bridge.stateName == "error" {
+            bridge.stopListening()
+        }
     }
 
     var isVisible: Bool { panel.isVisible }

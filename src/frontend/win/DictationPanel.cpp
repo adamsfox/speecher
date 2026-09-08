@@ -566,7 +566,13 @@ struct DictationPanel::Native : QObject {
     {
         problem.clear();
         hide();
-        controller->stopListening();
+        // Only an errored session is the one this problem belongs to. On a
+        // live session stopListening() cancels the refinement or stops the
+        // mic, which the countdown must never do behind the user's back; the
+        // Qt front end has always guarded it this way.
+        if (controller->session()->state() == DictationState::Error) {
+            controller->stopListening();
+        }
     }
 
     void setStatus(const QString &value)
