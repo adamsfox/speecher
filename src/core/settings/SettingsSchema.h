@@ -257,6 +257,15 @@ SettingsSchema buildSettingsSchema(const SchemaContext &context);
 // are numbers rather than text (0.10 follows 0.2).
 int compareBaseVersions(const QString &left, const QString &right);
 
+// The nightly What's New body: the first-parent commits between two nightly
+// builds, read from the build-embedded history (0x1e-separated records of
+// sha, subject, body), each bullet linking its pull request or commit, ending
+// in a GitHub compare link. Falls back to the compare link alone when the
+// previous commit is outside the embedded window, and to empty unless the
+// current version is a nightly and both versions name a commit.
+QString nightlyChangesMarkdown(const QString &history, const QString &lastVersion,
+                               const QString &currentVersion);
+
 // The one sentence that describes the restore-clipboard setting, wherever it
 // is offered (Output page, setup assistant).
 QString restoreClipboardDescription();

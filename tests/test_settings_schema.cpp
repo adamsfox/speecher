@@ -191,6 +191,113 @@ private slots:
 
         QVERIFY(notes.contains(QStringLiteral(
             "https://github.com/firemonster612/speecher/compare/abc1234...def5678")));
+        // Crossing 0.1.x Stable Releases keeps their notes on the page, after
+        // the nightly's own section.
+        QVERIFY(notes.startsWith(
+            QStringLiteral("# Speecher 0.2.0-nightly.20260901+gdef5678")));
+        QVERIFY(notes.contains(QStringLiteral("# Speecher 0.1.1")));
+    }
+
+    void nightlyCrossingAStableReleaseKeepsItsNotes()
+    {
+        // The patch+1 scheme makes a pre-release nightly share its base with
+        // the Stable Release it precedes: 0.1.5-nightly ships before v0.1.5,
+        // and the first nightly after the tag is 0.1.6-nightly.
+        SchemaContext context = fakeContext();
+        context.lastSeenVersion = QStringLiteral("0.1.5-nightly.20260831+gabc1234");
+        context.currentVersion = QStringLiteral("0.1.6-nightly.20260901+gdef5678");
+        const QString notes = rowById(buildSettingsSchema(context).page(
+                                          QStringLiteral("whatsNew")),
+                                      QStringLiteral("whatsNewNotes"))
+                                  .value(AppSettings{})
+                                  .toString();
+
+        QVERIFY(notes.startsWith(
+            QStringLiteral("# Speecher 0.1.6-nightly.20260901+gdef5678")));
+        QVERIFY(notes.contains(QStringLiteral("# Speecher 0.1.5")));
+        QVERIFY(!notes.contains(QStringLiteral("# Speecher 0.1.4")));
+    }
+
+    void nightlyNotesLeadWithTheNightlyBuildNotTheStableFallback()
+    {
+        SchemaContext context = fakeContext();
+        context.lastSeenVersion = QStringLiteral("0.1.6-nightly.20260831+gabc1234");
+        context.currentVersion = QStringLiteral("0.1.6-nightly.20260901+gdef5678");
+        const QString notes = rowById(buildSettingsSchema(context).page(
+                                          QStringLiteral("whatsNew")),
+                                      QStringLiteral("whatsNewNotes"))
+                                  .value(AppSettings{})
+                                  .toString();
+
+        QVERIFY(notes.startsWith(
+            QStringLiteral("# Speecher 0.1.6-nightly.20260901+gdef5678")));
+        QVERIFY(!notes.contains(QStringLiteral("# Speecher 0.1.5")));
+        QVERIFY(notes.contains(QStringLiteral("compare/abc1234...def5678")));
+    }
+
+    void nightlyChangesListCommitsSinceThePreviousNightly()
+    {
+        const QChar rs(0x1e);
+        const QChar us(0x1f);
+        QString history;
+        history += rs
+            + QStringLiteral("def5678") + us
+            + QStringLiteral("Merge pull request #91 from firemonster612/feat/thing") + us
+            + QStringLiteral("Add the thing\n\nA longer description.\n");
+        history += rs
+            + QStringLiteral("bbb1111") + us
+            + QStringLiteral("Fix crash on empty transcript (#90)") + us + QStringLiteral("\n");
+        history += rs
+            + QStringLiteral("ccc2222") + us
+            + QStringLiteral("Tidy the tray icon") + us + QStringLiteral("\n");
+        history += rs
+            + QStringLiteral("eee4444") + us
+            + QStringLiteral("Merge pull request #92 from firemonster612/no-body") + us
+            + QStringLiteral("\n");
+        history += rs
+            + QStringLiteral("abc1234") + us
+            + QStringLiteral("Merge pull request #88 from firemonster612/old") + us
+            + QStringLiteral("Older work\n");
+
+        const QString markdown = nightlyChangesMarkdown(
+            history,
+            QStringLiteral("0.1.6-nightly.20260831+gabc1234"),
+            QStringLiteral("0.1.6-nightly.20260901+gdef5678"));
+
+        QVERIFY(markdown.contains(QStringLiteral(
+            "- Add the thing ([#91](https://github.com/firemonster612/speecher/pull/91))")));
+        QVERIFY(markdown.contains(QStringLiteral(
+            "- Fix crash on empty transcript ([#90](https://github.com/firemonster612/speecher/pull/90))")));
+        QVERIFY(markdown.contains(QStringLiteral(
+            "- Tidy the tray icon ([ccc2222](https://github.com/firemonster612/speecher/commit/ccc2222))")));
+        // A merge whose body carries no pull request title keeps the subject.
+        QVERIFY(markdown.contains(QStringLiteral(
+            "- Merge pull request #92 from firemonster612/no-body "
+            "([#92](https://github.com/firemonster612/speecher/pull/92))")));
+        QVERIFY(!markdown.contains(QStringLiteral("Older work")));
+        QVERIFY(markdown.endsWith(QStringLiteral(
+            "[Compare commits](https://github.com/firemonster612/speecher/compare/abc1234...def5678)")));
+    }
+
+    void nightlyChangesFallBackToTheCompareLinkAlone()
+    {
+        const QString outsideWindow = nightlyChangesMarkdown(
+            QString(QChar(0x1e)) + QStringLiteral("ddd9999") + QChar(0x1f)
+                + QStringLiteral("Unrelated") + QChar(0x1f),
+            QStringLiteral("0.1.6-nightly.20260831+gabc1234"),
+            QStringLiteral("0.1.6-nightly.20260901+gdef5678"));
+        QCOMPARE(outsideWindow,
+                 QStringLiteral("[Compare commits]"
+                                "(https://github.com/firemonster612/speecher/compare/abc1234...def5678)"));
+
+        QVERIFY(nightlyChangesMarkdown({},
+                                       QStringLiteral("0.1.6-nightly.20260831+gabc1234"),
+                                       QStringLiteral("0.1.7"))
+                    .isEmpty());
+        QVERIFY(nightlyChangesMarkdown({},
+                                       QStringLiteral("0.1.5"),
+                                       QStringLiteral("0.1.6-nightly.20260901+gdef5678"))
+                    .isEmpty());
     }
 
     void rowsRoundTripAValueThroughAppSettings()

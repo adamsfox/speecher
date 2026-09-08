@@ -614,6 +614,11 @@ qt_add_resources(speecher_domain release_notes
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/docs/releases"
   FILES ${SPEECHER_RELEASE_NOTES}
 )
+qt_add_resources(speecher_domain release_history
+  PREFIX "/releases"
+  BASE "${SPEECHER_RELEASE_HISTORY_DIR}"
+  FILES "${SPEECHER_RELEASE_HISTORY_DIR}/history.log"
+)
 target_include_directories(speecher_domain PUBLIC src)
 target_link_libraries(speecher_domain PUBLIC Qt6::Core)
 
