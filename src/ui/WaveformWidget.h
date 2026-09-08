@@ -1,8 +1,8 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QString>
-#include <QVector>
 #include <QWidget>
 
 class QHideEvent;
@@ -36,9 +36,17 @@ private:
     void paintStatus(QPainter &painter, const QColor &bar);
 
     QTimer m_timer;
-    QVector<float> m_bars;
+    // The clock drives the traveling wave's phase and the frame delta; it
+    // keeps running across Frozen spells so freezing never rewinds the wave.
+    QElapsedTimer m_clock;
     QString m_message;
+    qint64 m_lastFrameMs = 0;
+    qint64 m_lastAverageMs = 0;
+    float m_dbFloor = 0.0f;
+    float m_levelSum = 0.0f;
+    int m_levelCount = 0;
     float m_targetLevel = 0.0f;
+    float m_smoothedLevel = 0.0f;
     float m_idlePhase = 0.0f;
     Mode m_mode = Mode::Waveform;
 };

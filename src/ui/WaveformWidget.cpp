@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace speecher {
 namespace {
@@ -19,30 +20,111 @@ QColor withAlpha(QColor color, int alpha)
     return color;
 }
 
-// The pill's width when it holds the waveform or the dots; a message widens it.
-constexpr int pillWidth = 126;
+// The pill's width when it holds the waveform or the dots; a message widens
+// it. Both dimensions follow Wispr Flow's active status pill (50x30).
+constexpr int pillWidth = 50;
+constexpr int pillHeight = 30;
+
+// The waveform model is a faithful port of Wispr Flow's status-bar bars
+// (v1.6.793): ten 2x2px rounded dots, each scaled vertically by
+//
+//   audioScale * bulge * wave
+//
+// where audioScale is the smoothed mic level times a gain of 5 floored at 1,
+// bulge weights bars towards the centre (1 - distance^2 / 48), and wave is a
+// 1s keyframe loop (1 -> 1.2 -> 1.5 -> 1.1 -> 1.3 -> 1, ease-in-out between
+// keyframes) whose phase trails 0.1s per bar, so a crest travels across the
+// row once per second and wraps seamlessly.
+constexpr int barCount = 10;
+constexpr qreal barWidth = 2.0;
+constexpr qreal barGap = 2.0;
+constexpr qreal barDotHeight = 2.0;
+constexpr qreal barRadius = 0.5;
+constexpr qreal audioGain = 5.0;
+constexpr int levelAverageMs = 150;
+
+struct WaveKeyframe {
+    qreal at;
+    qreal value;
+};
+constexpr WaveKeyframe waveKeyframes[] = {
+    {0.0, 1.0}, {0.2, 1.2}, {0.4, 1.5}, {0.8, 1.1}, {0.9, 1.3}, {1.0, 1.0}};
+
+// CSS ease-in-out, cubic-bezier(0.42, 0, 0.58, 1): solve x(t) = s for t by
+// Newton's method, then return y(t). With y control points 0 and 1, y(t)
+// reduces to t^2 * (3 - 2t).
+qreal easeInOut(qreal s)
+{
+    constexpr qreal p1x = 0.42;
+    constexpr qreal p2x = 0.58;
+    qreal t = s;
+    for (int i = 0; i < 6; ++i) {
+        const qreal oneMinusT = 1.0 - t;
+        const qreal x = 3.0 * p1x * t * oneMinusT * oneMinusT
+            + 3.0 * p2x * t * t * oneMinusT + t * t * t;
+        const qreal dx = 3.0 * p1x * (1.0 - 4.0 * t + 3.0 * t * t)
+            + 3.0 * p2x * (2.0 * t - 3.0 * t * t) + 3.0 * t * t;
+        if (dx <= 0.0) {
+            break;
+        }
+        t = std::clamp(t - (x - s) / dx, 0.0, 1.0);
+    }
+    return t * t * (3.0 - 2.0 * t);
+}
+
+qreal waveMultiplier(qreal phase)
+{
+    constexpr int segments = int(std::size(waveKeyframes)) - 1;
+    for (int i = 0; i < segments; ++i) {
+        const WaveKeyframe &from = waveKeyframes[i];
+        const WaveKeyframe &to = waveKeyframes[i + 1];
+        if (phase > to.at) {
+            continue;
+        }
+        const qreal progress = (phase - from.at) / (to.at - from.at);
+        return from.value + (to.value - from.value) * easeInOut(progress);
+    }
+    return waveKeyframes[segments].value;
+}
 
 } // namespace
 
 WaveformWidget::WaveformWidget(QWidget *parent)
     : QWidget(parent)
-    , m_bars(10, 0.12f)
 {
-    setFixedSize(pillWidth, 48);
+    setFixedSize(pillWidth, pillHeight);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    m_timer.setInterval(24);
+    m_clock.start();
+    // 16ms matches the display-rate loop the smoothing constant below was
+    // tuned for; the per-frame factor is frame-count based, not time based.
+    m_timer.setInterval(16);
+    m_timer.setTimerType(Qt::PreciseTimer);
     connect(&m_timer, &QTimer::timeout, this, [this] {
         if (m_mode == Mode::Frozen) {
             return;
         }
-        m_idlePhase += 0.34f;
-        for (int i = 0; i < m_bars.size(); ++i) {
-            const float wave = 0.10f + 0.045f * std::sin(m_idlePhase + i * 0.7f);
-            const float speech = m_targetLevel * (0.24f + 0.16f * std::sin(m_idlePhase * 1.4f + i * 1.23f) * std::sin(m_idlePhase * 0.61f + i));
-            const float target = std::clamp(wave + speech, 0.08f, 1.0f);
-            m_bars[i] = m_bars[i] * 0.42f + target * 0.58f;
+        const qint64 now = m_clock.elapsed();
+        // Clamped so a Frozen spell or a missed tick can't jump the dots.
+        const float dt = std::min(qreal(now - m_lastFrameMs) / 1000.0, 0.1);
+        m_lastFrameMs = now;
+        m_idlePhase += 14.2f * dt;
+        if (m_mode == Mode::Waveform) {
+            // Levels arrive per capture chunk; every 150ms their mean becomes
+            // the smoothing target. An empty window holds the previous target,
+            // mirroring Wispr Flow's main process, which skips silent ticks.
+            if (now - m_lastAverageMs >= levelAverageMs) {
+                if (m_levelCount > 0) {
+                    m_targetLevel = m_levelSum / float(m_levelCount);
+                    m_levelSum = 0.0f;
+                    m_levelCount = 0;
+                }
+                m_lastAverageMs = now;
+            }
+            // Per-frame exponential smoothing, quantised to 0.01 steps.
+            m_smoothedLevel = std::floor(
+                                  (m_smoothedLevel * 0.85f + m_targetLevel * 0.15f) * 100.0f)
+                / 100.0f;
         }
-        m_targetLevel *= 0.68f;
         update();
     });
 }
@@ -55,6 +137,7 @@ void WaveformWidget::hideEvent(QHideEvent *event)
 
 void WaveformWidget::showEvent(QShowEvent *event)
 {
+    m_lastFrameMs = m_clock.elapsed();
     m_timer.start();
     QWidget::showEvent(event);
 }
@@ -64,10 +147,21 @@ void WaveformWidget::setLevel(float level)
     if (m_mode != Mode::Waveform) {
         return;
     }
-    constexpr float noiseFloor = 0.14f;
-    const float normalized = std::clamp((level - noiseFloor) / (1.0f - noiseFloor), 0.0f, 1.0f);
-    const float boosted = std::clamp(std::pow(normalized, 1.18f) * 0.82f, 0.0f, 1.0f);
-    m_targetLevel = std::max(m_targetLevel, boosted);
+    // Zero is the session's idle marker, not a captured chunk; feeding it to
+    // the floor would slam the floor to the -60dB clamp.
+    if (level <= 0.0f) {
+        return;
+    }
+    // Wispr Flow's level mapping: the chunk's amplitude in dB through an
+    // adaptive noise floor. The floor tracks the quietest chunk seen (clamped
+    // at -60dB) and maps to 0; floor + 20dB maps to 1. The floor persists
+    // across sessions so the room's noise stays calibrated.
+    const float db = 20.0f * std::log10(level);
+    if (db < m_dbFloor) {
+        m_dbFloor = std::max(-60.0f, db);
+    }
+    m_levelSum += std::clamp((db - m_dbFloor) / 20.0f, 0.0f, 1.0f);
+    ++m_levelCount;
 }
 
 void WaveformWidget::setMode(Mode mode)
@@ -80,7 +174,15 @@ void WaveformWidget::setMode(Mode mode)
         m_message.clear();
         setFixedWidth(pillWidth);
     }
-    m_targetLevel = 0.0f;
+    // Entering Waveform starts a fresh capture; leaving keeps the smoothed
+    // level so Frozen shows the last frame. The dB floor survives on purpose.
+    if (mode == Mode::Waveform) {
+        m_targetLevel = 0.0f;
+        m_smoothedLevel = 0.0f;
+        m_levelSum = 0.0f;
+        m_levelCount = 0;
+        m_lastAverageMs = m_clock.elapsed();
+    }
     update();
 }
 
@@ -134,24 +236,31 @@ void WaveformWidget::paintEvent(QPaintEvent *)
     } else if (m_mode == Mode::Dots) {
         paintDots(painter, bar);
     } else {
-        paintWaveform(painter, bar);
+        // Frozen keeps the bars at their last heights but drops them to the
+        // 40% alpha Wispr Flow uses once the mic is no longer capturing.
+        paintWaveform(painter, m_mode == Mode::Frozen ? withAlpha(bar, 102) : bar);
     }
 }
 
 void WaveformWidget::paintWaveform(QPainter &painter, const QColor &bar)
 {
-    const int bars = m_bars.size();
-    const int gap = 6;
-    const int width = 4;
-    const int totalWidth = bars * width + (bars - 1) * gap;
-    const int startX = (rect().width() - totalWidth) / 2;
-    const int maxHeight = rect().height() - 8;
-    for (int i = 0; i < bars; ++i) {
-        const int h = std::clamp(int(8 + m_bars[i] * maxHeight), 10, maxHeight);
-        const int x = startX + i * (width + gap);
-        const int y = (height() - h) / 2;
-        painter.setBrush(bar);
-        painter.drawRoundedRect(QRect(x, y, width, h), width / 2.0, width / 2.0);
+    const qreal audioScale = std::max(1.0f, float(audioGain) * m_smoothedLevel);
+    const qreal totalWidth = barCount * barWidth + (barCount - 1) * barGap;
+    const qreal startX = (width() - totalWidth) / 2.0;
+    const qreal phase = qreal(m_clock.elapsed() % 1000) / 1000.0;
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(bar);
+    for (int i = 0; i < barCount; ++i) {
+        const qreal distance = std::abs((barCount - 1) / 2.0 - i);
+        const qreal bulge = std::max(0.0, 1.0 - distance * distance / 48.0);
+        // The bar's animation trails the clock by 0.1s per index; the wrap at
+        // 1s means bar 0 and bar 9 sit a tenth of a cycle apart, seamlessly.
+        const qreal barPhase = phase - 0.1 * i;
+        const qreal wave = waveMultiplier(barPhase - std::floor(barPhase));
+        const qreal h = barDotHeight * audioScale * bulge * wave;
+        const qreal x = startX + i * (barWidth + barGap);
+        painter.drawRoundedRect(QRectF(x, (height() - h) / 2.0, barWidth, h),
+                                barRadius, barRadius);
     }
 }
 
