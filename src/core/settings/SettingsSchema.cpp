@@ -595,6 +595,17 @@ SettingsPage generalPage(const SchemaContext &context)
         return capabilities.automaticUpdateDownloads;
     };
 
+    SettingsRow previewWords = numberRow(
+        QStringLiteral("previewWords"),
+        QStringLiteral("Preview words"),
+        QStringLiteral("How many of the latest words each preview shows."),
+        {1, 40, 1, QString()},
+        [](const AppSettings &settings) { return settings.ui.previewWords; },
+        [](AppSettings &settings, int value) { settings.ui.previewWords = value; });
+    previewWords.enabled = [](const AppSettings &settings, const Capabilities &) {
+        return settings.ui.transcriptionPreviewEnabled || settings.ui.refinementPreviewEnabled;
+    };
+
     SettingsPage page{
         QStringLiteral("general"),
         QStringLiteral("General"),
@@ -623,12 +634,17 @@ SettingsPage generalPage(const SchemaContext &context)
                            QStringLiteral("Play sounds when dictation starts and stops"),
                            [](const AppSettings &settings) { return settings.ui.soundsEnabled; },
                            [](AppSettings &settings, bool value) { settings.ui.soundsEnabled = value; }),
-                 numberRow(QStringLiteral("previewWords"),
-                           QStringLiteral("Live preview"),
-                           QStringLiteral("How many of the latest words the popup shows while you speak."),
-                           {1, 40, 1, QString()},
-                           [](const AppSettings &settings) { return settings.ui.previewWords; },
-                           [](AppSettings &settings, int value) { settings.ui.previewWords = value; }),
+                 toggleRow(QStringLiteral("transcriptionPreviewEnabled"),
+                           QStringLiteral("Transcription preview"),
+                           QStringLiteral("Show live text in the popup while you speak"),
+                           [](const AppSettings &settings) { return settings.ui.transcriptionPreviewEnabled; },
+                           [](AppSettings &settings, bool value) { settings.ui.transcriptionPreviewEnabled = value; }),
+                 toggleRow(QStringLiteral("refinementPreviewEnabled"),
+                           QStringLiteral("Refinement preview"),
+                           QStringLiteral("Show live text in the popup during refinement"),
+                           [](const AppSettings &settings) { return settings.ui.refinementPreviewEnabled; },
+                           [](AppSettings &settings, bool value) { settings.ui.refinementPreviewEnabled = value; }),
+                 std::move(previewWords),
              }},
             {
 #ifdef Q_OS_LINUX
@@ -1882,6 +1898,8 @@ static QList<SettingsPane> settingsPanes()
              {group("Appearance", {QStringLiteral("themeControl"),
                                    QStringLiteral("pauseMedia"),
                                    QStringLiteral("soundsEnabled"),
+                                   QStringLiteral("transcriptionPreviewEnabled"),
+                                   QStringLiteral("refinementPreviewEnabled"),
                                    QStringLiteral("previewWords")}),
               group("System", {QStringLiteral("launchAtLogin")}),
               group("Maintenance", {QStringLiteral("runSetup")}),
