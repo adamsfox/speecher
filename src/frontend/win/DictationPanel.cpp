@@ -27,6 +27,7 @@
 #pragma pop_macro("GetCurrentTime")
 
 #include <QImage>
+#include <QElapsedTimer>
 #include <QTimer>
 
 #include <algorithm>
@@ -46,21 +47,43 @@ using namespace Microsoft::UI::Xaml::Media;
 
 // The panel's layout constants are DIPs, as the XAML content measures them;
 // every HWND move and resize scales them by the window's DPI.
-constexpr int panelWidth = 420;
-constexpr int panelHeight = 52;
-constexpr int previewChromeWidth = 190;
+constexpr int panelWidth = 126;
+constexpr int panelHeight = 48;
+constexpr int previewChromeWidth = 48;
+constexpr int previewGap = 8;
+constexpr int maximumPreviewWidth = 568;
 constexpr int screenEdgeMargin = 80;
 constexpr int bottomMargin = 28;
 constexpr int bannerGap = 12;
 constexpr auto windowClassName = L"SpeecherDictationPanel";
 
-// The mic level meter's geometry, matching the Qt popup's WaveformWidget: an
-// accent ProgressBar here used to read as "loading", not "I can hear you".
-constexpr int levelBarCount = 10;
-constexpr float levelBarMinHeight = 9.0f;
-// The Qt waveform swings 10..40 inside a 48px pill; the same proportion of
-// this 52 DIP panel is what keeps the meter as responsive as its reference.
-constexpr float levelBarMaxHeight = 36.0f;
+// Same dot geometry and travelling crest as the Linux waveform.
+constexpr int levelBarCount = 15;
+constexpr float barDotHeight = 3.2f;
+
+float waveMultiplier(float phase)
+{
+    constexpr std::array<std::array<float, 2>, 6> frames{{
+        {0, 1}, {0.2f, 1.2f}, {0.4f, 1.5f}, {0.8f, 1.1f}, {0.9f, 1.3f}, {1, 1}}};
+    for (int i = 1; i < int(frames.size()); ++i) {
+        if (phase > frames[i][0]) {
+            continue;
+        }
+        const float progress = (phase - frames[i - 1][0]) / (frames[i][0] - frames[i - 1][0]);
+        float t = progress;
+        for (int iteration = 0; iteration < 6; ++iteration) {
+            const float inverse = 1 - t;
+            const float x = 1.26f * t * inverse * inverse + 1.74f * t * t * inverse + t * t * t;
+            const float dx = 1.26f * (1 - 4 * t + 3 * t * t) + 1.74f * (2 * t - 3 * t * t) + 3 * t * t;
+            if (dx <= 0) {
+                break;
+            }
+            t = std::clamp(t - (x - progress) / dx, 0.0f, 1.0f);
+        }
+        return frames[i - 1][1] + (frames[i][1] - frames[i - 1][1]) * t * t * (3 - 2 * t);
+    }
+    return 1;
+}
 
 // Whether every pixel is the same colour, which is what a capture with no
 // desktop behind it looks like.
@@ -150,7 +173,8 @@ struct DictationPanel::Native : QObject {
         , controller(owner)
         , panel(q)
     {
-        barTimer.setInterval(24);
+        barTimer.setInterval(16);
+        barClock.start();
         connect(&barTimer, &QTimer::timeout, this, &Native::animateBars);
         // The same five seconds the Qt popup counts down; the Dismiss button
         // remains the early way out.
@@ -221,6 +245,12 @@ struct DictationPanel::Native : QObject {
 
     ~Native() override
     {
+        if (previewSource) {
+            previewSource.Close();
+        }
+        if (previewWindow) {
+            DestroyWindow(previewWindow);
+        }
         if (bannerSource) {
             bannerSource.Close();
         }
@@ -285,7 +315,7 @@ struct DictationPanel::Native : QObject {
 
         chrome = Border();
         chrome.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
-        chrome.Padding({20, 0, 20, 0});
+        chrome.Padding({12, 0, 12, 0});
         row = StackPanel();
         row.Orientation(Orientation::Horizontal);
         row.Spacing(12);
@@ -305,29 +335,23 @@ struct DictationPanel::Native : QObject {
 
         bars = StackPanel();
         bars.Orientation(Orientation::Horizontal);
-        bars.Spacing(6);
-        bars.Width(96);
-        bars.Height(levelBarMaxHeight + 4);
+        bars.Spacing(3.2);
+        bars.Width(92.8);
+        bars.Height(panelHeight);
         bars.VerticalAlignment(VerticalAlignment::Center);
         for (int i = 0; i < levelBarCount; ++i) {
             Microsoft::UI::Xaml::Shapes::Rectangle bar;
-            bar.Width(4);
-            bar.RadiusX(2);
-            bar.RadiusY(2);
-            bar.Height(levelBarMinHeight);
+            bar.Width(3.2);
+            bar.RadiusX(0.8);
+            bar.RadiusY(0.8);
+            bar.Height(barDotHeight);
             bar.VerticalAlignment(VerticalAlignment::Center);
             bar.Fill(text.Foreground());
             bars.Children().Append(bar);
             barRects.push_back(bar);
         }
+        Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(bars, L"Input level");
         row.Children().Append(bars);
-
-        ring = ProgressRing();
-        ring.Width(24);
-        ring.Height(24);
-        ring.IsActive(true);
-        ring.Visibility(Visibility::Collapsed);
-        row.Children().Append(ring);
 
         dismiss = Button();
         dismiss.Content(box_value(L"Dismiss"));
@@ -352,6 +376,29 @@ struct DictationPanel::Native : QObject {
         source.Content(chrome);
         source.SystemBackdrop(DesktopAcrylicBackdrop());
         resize(panelWidth);
+    }
+
+    void ensurePreview()
+    {
+        if (previewWindow) {
+            return;
+        }
+        previewWindow = CreateWindowExW(
+            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            windowClassName, L"Speecher transcript", WS_POPUP,
+            0, 0, panelWidth, panelHeight, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        previewSource = DesktopWindowXamlSource();
+        previewSource.Initialize(Microsoft::UI::GetWindowIdFromWindow(previewWindow));
+        previewChrome = Border();
+        previewChrome.Padding({24, 0, 24, 0});
+        previewText = TextBlock();
+        previewText.VerticalAlignment(VerticalAlignment::Center);
+        previewText.TextAlignment(TextAlignment::Center);
+        previewText.MaxLines(1);
+        previewText.TextTrimming(TextTrimming::CharacterEllipsis);
+        previewChrome.Child(previewText);
+        previewSource.Content(previewChrome);
+        previewSource.SystemBackdrop(DesktopAcrylicBackdrop());
     }
 
     // The notices live in their own rounded acrylic surface floating above
@@ -492,6 +539,11 @@ struct DictationPanel::Native : QObject {
         completed = false;
         phase = Phase::Live;
         pendingGeneration = generation;
+        levelSum = 0;
+        levelChunks = 0;
+        barTarget = 0;
+        smoothedLevel = 0;
+        levelWindow = barClock.elapsed();
         ensureWindow();
         applyTheme();
         // Each dictation starts back at the floor, like the mac panel's
@@ -536,6 +588,9 @@ struct DictationPanel::Native : QObject {
         whatsNewAutoHide.stop();
         problemAutoDismiss.stop();
         barTimer.stop();
+        if (previewWindow) {
+            ShowWindow(previewWindow, SW_HIDE);
+        }
         setShimmer(false);
         if (banner) {
             ShowWindow(banner, SW_HIDE);
@@ -597,34 +652,42 @@ struct DictationPanel::Native : QObject {
     void setLevel(float value)
     {
         ensureWindow();
-        // The Qt waveform's normalisation: lift speech out of the noise floor
-        // and soften the top so ordinary talking fills most of the range.
-        constexpr float noiseFloor = 0.14f;
-        const float normalized =
-            std::clamp((value - noiseFloor) / (1.0f - noiseFloor), 0.0f, 1.0f);
-        const float boosted =
-            std::clamp(std::pow(normalized, 1.18f) * 0.82f, 0.0f, 1.0f);
-        barTarget = std::max(barTarget, boosted);
+        float mapped = 0;
+        if (value > 0) {
+            const float db = 20 * std::log10(value);
+            dbFloor = std::max(-46.0f, std::min(dbFloor, db));
+            mapped = std::clamp((db - dbFloor) / 20, 0.0f, 1.0f);
+        }
+        levelSum += mapped;
+        ++levelChunks;
     }
 
-    // One tick of the Qt WaveformWidget's idle-plus-speech animation, driving
-    // XAML rectangle heights instead of painted bars.
     void animateBars()
     {
-        barPhase += 0.34f;
-        for (int i = 0; i < int(barRects.size()); ++i) {
-            const float wave = 0.10f + 0.045f * std::sin(barPhase + i * 0.7f);
-            const float speech = barTarget
-                * (0.24f
-                   + 0.16f * std::sin(barPhase * 1.4f + i * 1.23f)
-                       * std::sin(barPhase * 0.61f + i));
-            const float target = std::clamp(wave + speech, 0.08f, 1.0f);
-            barHeights[i] = barHeights[i] * 0.42f + target * 0.58f;
-            barRects[i].Height(std::clamp(
-                levelBarMinHeight + barHeights[i] * levelBarMaxHeight,
-                levelBarMinHeight, levelBarMaxHeight));
+        const qint64 now = barClock.elapsed();
+        const float elapsed = (now - lastFrame) / 1000.0f;
+        lastFrame = now;
+        if (frozen) {
+            return;
         }
-        barTarget *= 0.68f;
+        barPhase = std::fmod(barPhase + elapsed, 1.0f);
+        if (now - levelWindow >= 150) {
+            if (levelChunks > 0) {
+                barTarget = levelSum / levelChunks;
+            }
+            levelSum = 0;
+            levelChunks = 0;
+            levelWindow = now;
+        }
+        smoothedLevel = std::floor((smoothedLevel * 0.85f + barTarget * 0.15f) * 100) / 100;
+        for (int i = 0; i < int(barRects.size()); ++i) {
+            const float bulge = 1 - std::abs(7.0f - i) / 24;
+            const float phase = barPhase - float(i) / levelBarCount;
+            const float height = barDotHeight * std::max(1.0f, smoothedLevel * 5)
+                * bulge * waveMultiplier(phase - std::floor(phase));
+            barRects[i].Height(height);
+            barRects[i].RadiusY(height / 4);
+        }
     }
 
     void setRefining(bool value)
@@ -696,65 +759,57 @@ struct DictationPanel::Native : QObject {
                                  ? QString::fromUtf16(u"\uE8A9")
                                  : phaseGlyph(status, hasProblem))
                                 .toStdWString()));
-        const bool waiting = !hasProblem && !finished
-            && (phase == Phase::Transcribing || (refining && preview.isEmpty()));
+        const bool waiting = !hasProblem && !finished && phase != Phase::Live;
+        const bool listening = !hasProblem && !finished && !waiting;
+        const bool showPreview = !hasProblem && !finished && !preview.isEmpty();
         setShimmer(waiting);
-        QString shown = hasProblem ? problem
-            : finished                ? status
-            : waiting                 ? (phase == Phase::Transcribing
-                                             ? QStringLiteral("Transcribing…")
-                                             : QStringLiteral("Refining…"))
-            : preview.isEmpty()       ? status
-                                      : preview;
-
-        // The pill hugs the one line of type like the mac panel: the width
-        // follows the measured text between the 420 floor and the screen
-        // edge, word by word, while a status line or the delivered message
-        // leaves the width where the last preview put it.
+        QString shown = hasProblem ? problem : finished ? status
+            : phase == Phase::Transcribing ? QStringLiteral("Transcribing…")
+            : waiting ? QStringLiteral("Refining…") : QString();
         POINT pointer{};
         GetCursorPos(&pointer);
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
-        const int maximumWidth = std::max(
-            panelWidth,
-            int((monitor.rcWork.right - monitor.rcWork.left) / scale()) - screenEdgeMargin);
-        const int maximumCharacters = std::max(20, (maximumWidth - previewChromeWidth) / 7);
-        if (!hasProblem && shown.size() > maximumCharacters) {
-            shown = QString::fromUtf16(u"\u2026") + shown.right(maximumCharacters - 1);
-        }
-        const bool sizesToText = hasProblem || (!finished && !waiting && !preview.isEmpty());
-        int wantedWidth = width;
-        if (sizesToText) {
-            wantedWidth = std::clamp(measuredTextWidth(shown) + previewChromeWidth,
-                                     panelWidth, maximumWidth);
-        }
-        const int textWidth = wantedWidth - previewChromeWidth;
+        const int maximumWidth = std::max(panelWidth, std::min(maximumPreviewWidth,
+            int((monitor.rcWork.right - monitor.rcWork.left) / scale()) - screenEdgeMargin));
+        const int wantedWidth = listening ? panelWidth
+            : std::clamp(measuredTextWidth(shown) + (hasProblem ? 150 : finished ? 68 : previewChromeWidth),
+                         panelWidth, maximumWidth);
         text.Text(hstring(shown.toStdWString()));
-        if (finished) {
-            text.ClearValue(FrameworkElement::WidthProperty());
-            row.HorizontalAlignment(HorizontalAlignment::Center);
-        } else {
-            text.Width(textWidth);
-            row.HorizontalAlignment(HorizontalAlignment::Left);
-        }
-        const bool listening = !hasProblem && !finished && phase == Phase::Live
-            && status.compare(QStringLiteral("listening"), Qt::CaseInsensitive) == 0;
+        text.Visibility(listening ? Visibility::Collapsed : Visibility::Visible);
+        text.Width(std::max(1, wantedWidth - (hasProblem ? 150 : finished ? 68 : 24)));
+        text.TextAlignment(TextAlignment::Center);
+        row.HorizontalAlignment(HorizontalAlignment::Center);
+        glyph.Visibility(hasProblem || finished ? Visibility::Visible : Visibility::Collapsed);
         bars.Visibility(listening ? Visibility::Visible : Visibility::Collapsed);
-        if (listening) {
-            if (!barTimer.isActive()) {
-                barTimer.start();
-            }
-        } else {
+        if (listening && !barTimer.isActive()) {
+            lastFrame = barClock.elapsed();
+            barTimer.start();
+        } else if (!listening) {
             barTimer.stop();
         }
-        ring.Visibility(!hasProblem && !finished && refining ? Visibility::Visible
-                                                 : Visibility::Collapsed);
         dismiss.Visibility(hasProblem ? Visibility::Visible : Visibility::Collapsed);
-        if (wantedWidth != width) {
-            resize(wantedWidth);
-            if (IsWindowVisible(window)) {
-                reposition();
+        if (showPreview) {
+            ensurePreview();
+            previewChrome.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
+            QString visible = preview;
+            while (visible.size() > 1 && measuredTextWidth(visible) > maximumWidth - previewChromeWidth) {
+                visible.remove(0, 1);
             }
+            if (visible != preview) {
+                visible = QString::fromUtf16(u"\u2026") + visible.mid(1);
+            }
+            previewText.Text(hstring(visible.toStdWString()));
+            previewWidth = std::clamp(measuredTextWidth(visible) + previewChromeWidth,
+                                      panelWidth, maximumWidth);
+        }
+        previewVisible = showPreview;
+        if (previewWindow && !showPreview) {
+            ShowWindow(previewWindow, SW_HIDE);
+        }
+        resize(wantedWidth);
+        if (IsWindowVisible(window)) {
+            reposition();
         }
         refreshBanner();
     }
@@ -802,9 +857,23 @@ struct DictationPanel::Native : QObject {
         const int physicalHeight = px(panelHeight);
         const int x = monitor.rcWork.left
             + (monitor.rcWork.right - monitor.rcWork.left - physicalWidth) / 2;
-        const int y = monitor.rcWork.bottom - physicalHeight - px(bottomMargin);
+        const int previewHeight = previewVisible ? px(panelHeight + previewGap) : 0;
+        const int y = monitor.rcWork.bottom - physicalHeight - px(bottomMargin) - previewHeight;
         SetWindowPos(window, HWND_TOPMOST, x, y, physicalWidth, physicalHeight,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetWindowRgn(window, CreateRoundRectRgn(0, 0, physicalWidth + 1, physicalHeight + 1,
+                                               physicalHeight, physicalHeight), TRUE);
+        if (previewVisible) {
+            const int transcriptWidth = px(previewWidth);
+            const int transcriptX = monitor.rcWork.left
+                + (monitor.rcWork.right - monitor.rcWork.left - transcriptWidth) / 2;
+            SetWindowPos(previewWindow, HWND_TOPMOST, transcriptX,
+                         y + physicalHeight + px(previewGap), transcriptWidth, physicalHeight,
+                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            previewSource.SiteBridge().MoveAndResize({0, 0, transcriptWidth, physicalHeight});
+            SetWindowRgn(previewWindow, CreateRoundRectRgn(0, 0, transcriptWidth + 1,
+                         physicalHeight + 1, physicalHeight, physicalHeight), TRUE);
+        }
         if (banner && IsWindowVisible(banner)) {
             positionBanner();
         }
@@ -813,6 +882,12 @@ struct DictationPanel::Native : QObject {
     ApplicationController *controller;
     DictationPanel *panel;
     HWND window = nullptr;
+    HWND previewWindow = nullptr;
+    DesktopWindowXamlSource previewSource{nullptr};
+    Border previewChrome{nullptr};
+    TextBlock previewText{nullptr};
+    int previewWidth = panelWidth;
+    bool previewVisible = false;
     HWND banner = nullptr;
     DesktopWindowXamlSource source{nullptr};
     DesktopWindowXamlSource bannerSource{nullptr};
@@ -832,11 +907,16 @@ struct DictationPanel::Native : QObject {
     StackPanel bars{nullptr};
     std::vector<Microsoft::UI::Xaml::Shapes::Rectangle> barRects;
     QTimer barTimer;
-    std::array<float, levelBarCount> barHeights{};
+    QElapsedTimer barClock;
+    qint64 lastFrame = 0;
+    qint64 levelWindow = 0;
+    float dbFloor = 0;
+    float levelSum = 0;
+    int levelChunks = 0;
+    float smoothedLevel = 0;
     float barTarget = 0.0f;
     float barPhase = 0.0f;
     QTimer problemAutoDismiss;
-    ProgressRing ring{nullptr};
     Button dismiss{nullptr};
     QString status;
     QString preview;
@@ -926,6 +1006,11 @@ bool DictationPanel::saveGrabForTest(const QString &path) const
     }
     RECT rect{};
     GetWindowRect(window, &rect);
+    if (m_native->previewVisible) {
+        RECT transcript{};
+        GetWindowRect(m_native->previewWindow, &transcript);
+        UnionRect(&rect, &rect, &transcript);
+    }
     const int width = rect.right - rect.left;
     const int height = rect.bottom - rect.top;
     if (width <= 0 || height <= 0) {

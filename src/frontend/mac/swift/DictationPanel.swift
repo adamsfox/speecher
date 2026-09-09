@@ -6,15 +6,10 @@ import SwiftUI
 // is being dictated into. A non-activating NSPanel, so showing it never takes
 // focus away from the app the text is going to.
 
-/// The pill's height, for the window that is created at it and the content that
-/// fills it, so that the capsule is the whole window. Left to size itself the
-/// content came out between 59 and 61pt depending on which trailing control was
-/// showing, which moved the pill's edges as the dictation changed phase. 60
-/// sits inside that band, near the Windows panel's 52 and the Qt pill's 48; the
-/// previous 72 read as a chunky slab of empty padding around one line of type.
-private let pillHeight: CGFloat = 60
-private let minimumPillWidth: CGFloat = 420
-private let previewChromeWidth: CGFloat = 190
+private let pillHeight: CGFloat = 48
+private let minimumPillWidth: CGFloat = 126
+private let previewChromeWidth: CGFloat = 48
+private let maximumPreviewWidth: CGFloat = 568
 private let screenEdgeMargin: CGFloat = 80
 /// The update and what's-new banners stacked above the pill.
 private let bannerHeight: CGFloat = 36
@@ -68,6 +63,7 @@ final class DictationPanelState: ObservableObject {
     @Published var preview = ""
     @Published var level: Float = 0
     @Published var phase = Phase.live
+    @Published var frozen = false
     @Published var problem = ""
     /// The update banner's message, empty while there is nothing to offer, and
     /// the label of the button beside it, empty for a passive progress state.
@@ -75,6 +71,29 @@ final class DictationPanelState: ObservableObject {
     @Published var updateAction = ""
     /// The what's-new banner's message, empty once hidden or dismissed.
     @Published var whatsNewMessage = ""
+
+    var presentation: (symbol: String, label: String, finished: Bool) {
+        if !problem.isEmpty {
+            return ("exclamationmark.triangle.fill", "Dictation problem", false)
+        }
+        switch status.lowercased() {
+        case "", "preparing", "starting":
+            return ("arrow.triangle.2.circlepath", status.isEmpty ? "Dictating" : status, false)
+        case "listening": return ("mic.fill", status, false)
+        case "stopping": return ("waveform", status, false)
+        case "refining": return ("sparkles", status, false)
+        // Set by the OAuth refresh callback in wire(): ongoing work, not an
+        // outcome, so it must not present as a finished delivery.
+        case "refreshing sign-in…":
+            return ("arrow.triangle.2.circlepath", status, false)
+        default: return ("paperplane.fill", status, true)
+        }
+    }
+
+
+    var finished: Bool { presentation.finished }
+
+    var showsPreview: Bool { !problem.isEmpty || (!finished && !preview.isEmpty) }
 }
 
 /// One banner capsule above the pill, on the pill's own material: a plain
@@ -115,9 +134,7 @@ private struct PanelBanner: View {
     }
 }
 
-/// One glass pill. This is the one place in this front end that asks for Liquid
-/// Glass by hand, because it is the one genuinely floating element: everything
-/// else is a stock sidebar, form or popover that already carries it.
+/// Separate waveform and transcript capsules on the platform material.
 struct DictationPanelView: View {
     @ObservedObject var state: DictationPanelState
     let dismiss: () -> Void
@@ -146,95 +163,56 @@ struct DictationPanelView: View {
     }
 
     private var pill: some View {
-        HStack {
-            if finished {
-                // The delivery outcome takes the whole pill, centred as one
-                // icon-and-text group (and one VoiceOver element); the
-                // transcript and the live level bar left with the live audio.
-                Label(state.status, systemImage: symbol)
-                    .imageScale(.large)
-                    .font(.body)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity)
-            } else if state.problem.isEmpty, let waiting = waitingLabel {
-                // The provider is finalising or the refiner has not streamed a
-                // word yet: a shimmering label where the preview was, and no
-                // trailing control — the sweep already says work is under way,
-                // and the mic-level Gauge would be a meter over a closed mic.
-                Image(systemName: symbol)
-                    .imageScale(.large)
-                    .accessibilityLabel(phaseLabel)
-                ShimmerText(text: waiting)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Image(systemName: symbol)
-                    .imageScale(.large)
-                    .accessibilityLabel(phaseLabel)
-                // The words are the point of the panel, so they get the only line
-                // of type in it, and a problem takes that line rather than a
-                // second one.
-                Text(state.problem.isEmpty ? state.preview : state.problem)
-                    .font(.body)
-                    .lineLimit(1)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .layoutPriority(1)
-                    // A live transcript overflows from the front: the words the
-                    // user just said must always be the visible end.
-                    .truncationMode(state.problem.isEmpty ? .head : .tail)
-                if !state.problem.isEmpty {
-                    Button("Dismiss", action: dismiss)
-                } else if state.phase == .refining {
-                    // A spinner beside the streamed text, because refinement has
-                    // no measurable end, and no label because it appeared when
-                    // the work started.
-                    ProgressView().controlSize(.small)
-                } else {
-                    Gauge(value: Double(min(max(state.level, 0), 1))) { EmptyView() }
-                        .gaugeStyle(.linearCapacity)
-                        .frame(width: 96)
-                        .accessibilityLabel("Input level")
+        VStack(spacing: bannerSpacing) {
+            if state.problem.isEmpty {
+                Group {
+                    if finished {
+                        Label(state.status, systemImage: symbol)
+                            .font(.body)
+                            .lineLimit(1)
+                            .padding(.horizontal, 24)
+                    } else if let waiting = waitingLabel {
+                        ShimmerText(text: waiting)
+                            .padding(.horizontal, 12)
+                    } else {
+                        PanelWaveform(state: state)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(phaseLabel)
+                            .accessibilityValue("Input level \(Int(state.level * 100)) percent")
+                    }
                 }
+                .frame(minWidth: minimumPillWidth)
+                .frame(height: pillHeight)
+                .background(.regularMaterial, in: .capsule)
+                .modifier(DictationPanelGlass())
+            }
+            if state.showsPreview {
+                HStack {
+                    Text(state.problem.isEmpty ? state.preview : state.problem)
+                        .font(.body)
+                        .lineLimit(1)
+                        .truncationMode(state.problem.isEmpty ? .head : .tail)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    if !state.problem.isEmpty {
+                        Button("Dismiss", action: dismiss)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .frame(height: pillHeight)
+                .background(.regularMaterial, in: .capsule)
+                .modifier(DictationPanelGlass())
             }
         }
-        .scenePadding()
-        .frame(height: pillHeight)
-        .background(.regularMaterial, in: .capsule)
-        .modifier(DictationPanelGlass())
     }
 
-    /// One symbol and one label per phase, from the same mapping, so what a
-    /// sighted user sees and what VoiceOver reads for it never disagree — the
-    /// panel can present before the first status lands, when state.status is
-    /// still empty. The session ends a delivery on a free-form outcome from the
-    /// delivery back end ("Copied to clipboard"), so an unrecognised non-empty
-    /// status is a finished one.
-    private var phase: (symbol: String, label: String, finished: Bool) {
-        if !state.problem.isEmpty {
-            return ("exclamationmark.triangle.fill", "Dictation problem", false)
-        }
-        switch state.status.lowercased() {
-        case "", "preparing", "starting":
-            return ("arrow.triangle.2.circlepath", state.status.isEmpty ? "Dictating" : state.status, false)
-        case "listening": return ("mic.fill", state.status, false)
-        case "stopping": return ("waveform", state.status, false)
-        case "refining": return ("sparkles", state.status, false)
-        // Set by the OAuth refresh callback in wire(): ongoing work, not an
-        // outcome, so it must not present as a finished delivery.
-        case "refreshing sign-in…":
-            return ("arrow.triangle.2.circlepath", state.status, false)
-        default: return ("paperplane.fill", state.status, true)
-        }
-    }
-
-    private var symbol: String { phase.symbol }
+    private var symbol: String { state.presentation.symbol }
 
     /// Whether the dictation has ended in an outcome ("Input sent") rather
     /// than a live phase, so the panel shows the receipt and nothing live.
-    private var finished: Bool { phase.finished }
+    private var finished: Bool { state.finished }
 
     /// The phase in words, for the screen reader that can't see the symbol.
-    private var phaseLabel: String { phase.label }
+    private var phaseLabel: String { state.presentation.label }
 
     /// The shimmer's label while there is nothing to show where the preview
     /// goes: the provider is still turning audio into words, or the refiner
@@ -242,9 +220,82 @@ struct DictationPanelView: View {
     private var waitingLabel: String? {
         switch state.phase {
         case .transcribing: return "Transcribing…"
-        case .refining: return state.preview.isEmpty ? "Refining…" : nil
+        case .refining: return "Refining…"
         case .live: return nil
         }
+    }
+}
+
+/// The Linux waveform's fifteen dots, adaptive level and one-second travelling crest.
+private struct PanelWaveform: View {
+    @ObservedObject var state: DictationPanelState
+    @State private var floor: Float = 0
+    @State private var sum: Float = 0
+    @State private var chunks = 0
+    @State private var target: Float = 0
+    @State private var smoothed: Float = 0
+    @State private var windowStart = Date.now
+    @State private var lastFrame = Date.now
+    @State private var phase: Double = 0
+    private let timer = Timer.publish(every: 0.016, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Canvas { context, size in
+            for index in 0..<15 {
+                let bulge = 1 - abs(7 - Double(index)) / 24
+                let offset = phase - Double(index) / 15
+                let wave = multiplier(offset - Foundation.floor(offset))
+                let height = 3.2 * Double(max(1, smoothed * 5)) * bulge * wave
+                let rect = CGRect(x: (size.width - 92.8) / 2 + Double(index) * 6.4,
+                                  y: (size.height - height) / 2, width: 3.2, height: height)
+                context.fill(Path(roundedRect: rect, cornerSize: CGSize(width: 0.8, height: height / 4)),
+                             with: .foreground)
+            }
+        }
+        .frame(width: minimumPillWidth, height: pillHeight)
+        .onReceive(state.$level) { value in
+            var mapped: Float = 0
+            if value > 0 {
+                let db = 20 * log10(value)
+                floor = max(-46, min(floor, db))
+                mapped = min(1, max(0, (db - floor) / 20))
+            }
+            sum += mapped
+            chunks += 1
+        }
+        .onReceive(timer) { now in
+            let elapsed = now.timeIntervalSince(lastFrame)
+            lastFrame = now
+            guard !state.frozen else { return }
+            phase = (phase + elapsed).truncatingRemainder(dividingBy: 1)
+            if now.timeIntervalSince(windowStart) >= 0.15 {
+                if chunks > 0 { target = sum / Float(chunks) }
+                sum = 0
+                chunks = 0
+                windowStart = now
+            }
+            smoothed = Foundation.floor((smoothed * 0.85 + target * 0.15) * 100) / 100
+        }
+    }
+
+    private func multiplier(_ phase: Double) -> Double {
+        let frames: [(Double, Double)] = [(0, 1), (0.2, 1.2), (0.4, 1.5),
+                                          (0.8, 1.1), (0.9, 1.3), (1, 1)]
+        for index in 1..<frames.count where phase <= frames[index].0 {
+            let (start, from) = frames[index - 1]
+            let (end, to) = frames[index]
+            let progress = (phase - start) / (end - start)
+            var t = progress
+            for _ in 0..<6 {
+                let inverse = 1 - t
+                let x = 1.26 * t * inverse * inverse + 1.74 * t * t * inverse + t * t * t
+                let dx = 1.26 * (1 - 4 * t + 3 * t * t) + 1.74 * (2 * t - 3 * t * t) + 3 * t * t
+                guard dx > 0 else { break }
+                t = min(1, max(0, t - (x - progress) / dx))
+            }
+            return from + (to - from) * t * t * (3 - 2 * t)
+        }
+        return 1
     }
 }
 
@@ -378,11 +429,13 @@ final class SpeecherDictationPanel {
                 state.phase = .transcribing
                 state.preview = ""
             }
+            syncFrameHeight()
         }
         bridge.popupPreviewChanged = { [weak self] preview in self?.setPreview(preview) }
         bridge.popupFrozenChanged = { [weak self] frozen in
             guard let self else { return }
             self.frozen = frozen
+            state.frozen = frozen
             if !frozen { state.phase = .live }
         }
         bridge.popupRefiningChanged = { [weak self] refining in
@@ -394,6 +447,7 @@ final class SpeecherDictationPanel {
             } else {
                 state.phase = .live
             }
+            syncFrameHeight()
         }
         bridge.popupRefinementPreviewChanged = { [weak self] preview in
             guard let self, state.phase == .refining else { return }
@@ -403,6 +457,7 @@ final class SpeecherDictationPanel {
         bridge.popupOAuthRefreshRequested = { [weak self] in
             self?.state.status = "Refreshing sign-in…"
             self?.state.preview = "Refreshing sign-in…"
+            self?.syncFrameHeight()
         }
         bridge.popupListeningIndicatorRequested = { [weak self] in
             self?.state.status = "Listening"
@@ -444,6 +499,7 @@ final class SpeecherDictationPanel {
         // state for the next show to flash.
         state.preview = ""
         state.problem = problem
+        applyPreview("")
         state.phase = .live
         present()
         problemAutoDismiss?.invalidate()
@@ -486,19 +542,9 @@ final class SpeecherDictationPanel {
     /// The one line of type and the pill's width around it, shared by the live
     /// speech preview and the streamed refinement text.
     private func applyPreview(_ preview: String) {
-        state.preview = preview
-        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        let textWidth = (preview as NSString).size(withAttributes: [.font: font]).width
-        let availableWidth = (panel.screen ?? NSScreen.main)?.visibleFrame.width
-            ?? minimumPillWidth + screenEdgeMargin
-        let maximumWidth = max(minimumPillWidth, availableWidth - screenEdgeMargin)
-        let width = min(max(minimumPillWidth, textWidth + previewChromeWidth), maximumWidth)
-        guard abs(panel.frame.width - width) >= 1 else { return }
+        state.preview = preview.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        syncFrameHeight()
 
-        var frame = panel.frame
-        frame.origin.x -= (width - frame.width) / 2
-        frame.size.width = width
-        panel.setFrame(frame, display: true)
     }
 
     /// Scratch-branch-only E2E seam: with SPEECHER_E2E_PANEL_CAPTURE_DIR set,
@@ -597,10 +643,21 @@ final class SpeecherDictationPanel {
     private func syncFrameHeight() {
         let banners = (state.updateMessage.isEmpty ? 0 : 1)
             + (state.whatsNewMessage.isEmpty ? 0 : 1)
-        let height = pillHeight + CGFloat(banners) * (bannerHeight + bannerSpacing)
-        guard abs(panel.frame.height - height) >= 1 else { return }
+        let hasPreview = state.problem.isEmpty && state.showsPreview
+        let height = pillHeight + (hasPreview ? pillHeight + bannerSpacing : 0)
+            + CGFloat(banners) * (bannerHeight + bannerSpacing)
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let message = !state.problem.isEmpty ? state.problem : state.finished ? state.status : state.preview
+        let textWidth = (message as NSString).size(withAttributes: [.font: font]).width
+        let availableWidth = (panel.screen ?? NSScreen.main)?.visibleFrame.width
+            ?? maximumPreviewWidth + screenEdgeMargin
+        let maximumWidth = max(minimumPillWidth, min(maximumPreviewWidth, availableWidth - screenEdgeMargin))
+        let chrome = state.problem.isEmpty ? previewChromeWidth : 150
+        let contentWidth = min(max(minimumPillWidth, textWidth + chrome), maximumWidth)
+        let width = max(contentWidth, banners > 0 ? 420 : minimumPillWidth)
         var frame = panel.frame
-        frame.size.height = height
+        frame.origin.x -= (width - frame.width) / 2
+        frame.size = NSSize(width: width, height: height)
         panel.setFrame(frame, display: true)
     }
 

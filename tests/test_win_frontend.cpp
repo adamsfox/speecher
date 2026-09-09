@@ -194,7 +194,7 @@ private slots:
         frontEnd->showPanelForTest(11);
         // Ten animated bars, the Qt popup's waveform, instead of the accent
         // ProgressBar that read as a loading indicator.
-        QCOMPARE(frontEnd->dictationPanelForTest()->levelBarCountForTest(), 10);
+        QCOMPARE(frontEnd->dictationPanelForTest()->levelBarCountForTest(), 15);
         frontEnd->dismissPanelForTest();
     }
 
