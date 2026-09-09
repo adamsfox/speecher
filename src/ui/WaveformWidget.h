@@ -43,6 +43,7 @@ public:
     };
 
     explicit WaveformWidget(QWidget *parent = nullptr);
+    void setBackgroundVisible(bool visible);
 
 public slots:
     void setLevel(float level);
@@ -72,6 +73,7 @@ private:
     float m_wavePhase = 0.0f;
     float m_idlePhase = 0.0f;
     Mode m_mode = Mode::Waveform;
+    bool m_backgroundVisible = true;
 };
 
 } // namespace speecher

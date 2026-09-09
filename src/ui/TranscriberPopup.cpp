@@ -186,11 +186,12 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     m_previewPill->setAutoFillBackground(false);
     m_previewPill->setFixedHeight(48);
     m_previewPill->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    // Hidden until the first words arrive: before this popup showed a tiny
-    // "---" capsule under the waveform while there was nothing to preview.
-    m_previewPill->hide();
+    // The waveform and preview share one capsule. Without words, only the
+    // waveform occupies it. Its own background stays on for the Dictation page.
+    m_waveform->setBackgroundVisible(false);
+    m_preview->hide();
     m_pillLayout = new QVBoxLayout(m_previewPill);
-    m_pillLayout->setContentsMargins(24, 0, 24, 0);
+    m_pillLayout->setContentsMargins(0, 0, 0, 0);
     m_pillLayout->setSpacing(0);
 
     m_preview->setWordWrap(false);
@@ -199,6 +200,7 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     auto *previewRow = new QHBoxLayout;
     previewRow->setContentsMargins(0, 0, 0, 0);
     previewRow->setSpacing(10);
+    previewRow->addWidget(m_waveform, 0, Qt::AlignVCenter);
     previewRow->addWidget(m_preview, 1);
     // An error's explicit way out, beside the auto-dismiss countdown, matching
     // the Dismiss buttons on the mac and Windows panels.
@@ -291,7 +293,6 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     // No settings prompts here: the overlay cannot take focus and shows while
     // the user is speaking. Desktop accessibility is offered on the Dictation
     // page and in the setup assistant.
-    m_layout->addWidget(m_waveform, 0, Qt::AlignHCenter);
     m_layout->addWidget(m_previewPill, 0, Qt::AlignHCenter);
 }
 
@@ -304,7 +305,7 @@ QSize TranscriberPopup::sizeHint() const
         return !banner || banner->isHidden() ? 0
                                              : banner->sizeHint().height() + spacing;
     };
-    return QSize(620, 110 + bannerHeight(m_updateBanner) + bannerHeight(m_whatsNewRow));
+    return QSize(620, 52 + bannerHeight(m_updateBanner) + bannerHeight(m_whatsNewRow));
 }
 
 void TranscriberPopup::setStatus(const QString &status)
@@ -315,7 +316,6 @@ void TranscriberPopup::setStatus(const QString &status)
     if (status == QStringLiteral("Stopping")) {
         m_phase = Phase::Transcribing;
         restoreStandardLayout();
-        setRefreshLayout(false);
         hidePreview();
         m_waveform->setStatusText(QStringLiteral("Transcribing…"));
     }
@@ -329,7 +329,6 @@ void TranscriberPopup::setPreview(const QString &preview)
         return;
     }
     restoreStandardLayout();
-    setRefreshLayout(false);
     m_waveform->setMode(WaveformWidget::Mode::Waveform);
     applyPreviewText(preview);
 }
@@ -346,12 +345,12 @@ void TranscriberPopup::applyPreviewText(const QString &preview)
 {
     QString visible = preview.simplified();
     if (visible.isEmpty()) {
-        // Nothing to preview means no pill, not a placeholder capsule.
+        // Keep the waveform capsule when there are no words to preview.
         hidePreview();
         return;
     }
     const QFontMetrics metrics(m_preview->font());
-    constexpr int maxTextWidth = 520;
+    const int maxTextWidth = 520 - m_waveform->width() - 10;
     if (metrics.horizontalAdvance(visible) > maxTextWidth) {
         // A live transcript overflows from the front: the words just spoken
         // stay visible, and the ellipsis says something came before them,
@@ -372,17 +371,16 @@ void TranscriberPopup::applyPreviewText(const QString &preview)
     m_preview->setText(visible);
     m_preview->setVisible(true);
     m_previewPill->setVisible(true);
-    m_preview->setMaximumWidth(520);
-    m_previewPill->resize(m_previewPill->sizeHint().width(), 48);
+    m_preview->setMaximumWidth(maxTextWidth);
+    m_pillLayout->setContentsMargins(0, 0, 24, 0);
     adjustSize();
     updateWindowMask();
 }
 
 void TranscriberPopup::hidePreview()
 {
-    setRefreshLayout(false);
-    m_previewPill->hide();
     m_preview->hide();
+    m_pillLayout->setContentsMargins(0, 0, 0, 0);
     adjustSize();
     updateWindowMask();
 }
@@ -394,7 +392,6 @@ void TranscriberPopup::setLevel(float level)
 
 void TranscriberPopup::setRefining(bool refining)
 {
-    setRefreshLayout(false);
     if (refining) {
         m_phase = Phase::Refining;
         restoreStandardLayout();
@@ -408,7 +405,6 @@ void TranscriberPopup::setRefining(bool refining)
 
 void TranscriberPopup::setFrozen(bool frozen)
 {
-    setRefreshLayout(false);
     if (frozen) {
         // Between "Transcribing…" and "Refining…" the session freezes the
         // popup; keep the shimmer rather than flashing a stilled waveform.
@@ -425,12 +421,11 @@ void TranscriberPopup::showOAuthRefreshIndicator()
 {
     m_phase = Phase::Live;
     restoreStandardLayout();
-    setRefreshLayout(true);
     m_preview->setText(QStringLiteral("Renewing sign-in…"));
     m_preview->setVisible(true);
     m_previewPill->setVisible(true);
     m_preview->setMaximumWidth(520);
-    m_previewPill->resize(m_previewPill->sizeHint().width(), 48);
+    m_pillLayout->setContentsMargins(0, 0, 24, 0);
     m_waveform->setMode(WaveformWidget::Mode::Dots);
     adjustSize();
     updateWindowMask();
@@ -440,7 +435,6 @@ void TranscriberPopup::showListeningIndicator()
 {
     m_phase = Phase::Live;
     restoreStandardLayout();
-    setRefreshLayout(false);
     m_waveform->setMode(WaveformWidget::Mode::Waveform);
     adjustSize();
     updateWindowMask();
@@ -449,17 +443,17 @@ void TranscriberPopup::showListeningIndicator()
 void TranscriberPopup::showMessage(const QString &message)
 {
     m_phase = Phase::Live;
-    // The outcome is the whole popup: without this the transcript pill stays
-    // under the receipt with the last preview words in it.
+    // The receipt replaces the waveform and any last preview words.
+    restoreStandardLayout();
     hidePreview();
     m_waveform->setMessage(message);
+    adjustSize();
     updateWindowMask();
 }
 
 void TranscriberPopup::showErrorMessage(const QString &message)
 {
     m_phase = Phase::Live;
-    setRefreshLayout(false);
     m_errorDismissAnimation->stop();
     m_waveform->hide();
     const QString text = message.simplified();
@@ -612,36 +606,12 @@ void TranscriberPopup::restoreStandardLayout()
     m_errorDismissAnimation->stop();
     m_errorDismissProgress->hide();
     m_errorDismiss->hide();
-    m_pillLayout->setContentsMargins(24, 0, 24, 0);
+    m_pillLayout->setContentsMargins(0, 0, m_preview->isHidden() ? 0 : 24, 0);
     m_waveform->show();
     m_preview->setWordWrap(false);
     m_preview->setMinimumWidth(0);
     m_preview->setMaximumWidth(520);
     m_previewPill->setFixedHeight(48);
-}
-
-void TranscriberPopup::setRefreshLayout(bool refreshLayout)
-{
-    if (!m_layout) {
-        return;
-    }
-
-    const int previewIndex = m_layout->indexOf(m_previewPill);
-    const int waveformIndex = m_layout->indexOf(m_waveform);
-    const bool isRefreshLayout = previewIndex >= 0 && waveformIndex >= 0 && previewIndex < waveformIndex;
-    if (isRefreshLayout == refreshLayout) {
-        return;
-    }
-
-    m_layout->removeWidget(m_previewPill);
-    m_layout->removeWidget(m_waveform);
-    if (refreshLayout) {
-        m_layout->addWidget(m_previewPill, 0, Qt::AlignHCenter);
-        m_layout->addWidget(m_waveform, 0, Qt::AlignHCenter);
-    } else {
-        m_layout->addWidget(m_waveform, 0, Qt::AlignHCenter);
-        m_layout->addWidget(m_previewPill, 0, Qt::AlignHCenter);
-    }
 }
 
 void TranscriberPopup::updateWindowMask()

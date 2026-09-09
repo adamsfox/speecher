@@ -68,7 +68,6 @@ private:
     void applyTheme();
     void applyPreviewText(const QString &preview);
     void restoreStandardLayout();
-    void setRefreshLayout(bool refreshLayout);
     void updateWindowMask();
 
     QVBoxLayout *m_layout = nullptr;

@@ -159,22 +159,34 @@ private slots:
         QVERIFY(!popup.findChild<QPushButton *>(QStringLiteral("enableAccessibilityButton")));
     }
 
-    void popupHidesThePreviewPillUntilWordsArrive()
+    void popupKeepsWaveformAndPreviewInsideOnePill()
     {
         TranscriberPopup popup(new SizingPopupPositioner);
         popup.showListeningIndicator();
+        popup.show();
         auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
-        QVERIFY(pill);
-        // No words yet: the waveform alone says "listening", with no
-        // placeholder capsule under it.
-        QVERIFY(pill->isHidden());
+        auto *preview = popup.findChild<QLabel *>(QStringLiteral("rawTranscript"));
+        auto *waveform = popup.findChild<WaveformWidget *>();
+        QVERIFY(pill && preview && waveform);
+        QVERIFY(pill->isVisible());
+        QVERIFY(waveform->isVisible());
+        QVERIFY(!preview->isVisible());
 
         popup.setPreview(QStringLiteral("hello there"));
-        QVERIFY(!pill->isHidden());
+        QTRY_VERIFY(waveform->mapTo(pill, QPoint()).x() + waveform->width()
+                    < preview->mapTo(pill, QPoint()).x());
+        QVERIFY(preview->isVisible());
+        const QRect waveRect(waveform->mapTo(pill, QPoint()), waveform->size());
+        const QRect textRect(preview->mapTo(pill, QPoint()), preview->size());
+        QVERIFY(pill->rect().contains(waveRect));
+        QVERIFY(pill->rect().contains(textRect));
+        QVERIFY(waveRect.right() < textRect.left());
+        QCOMPARE(waveRect.center().y(), textRect.center().y());
 
-        // Silence clears the preview; the empty pill goes with it.
-        popup.setPreview(QString());
-        QVERIFY(pill->isHidden());
+        popup.hidePreview();
+        QVERIFY(!preview->isVisible());
+        QVERIFY(pill->isVisible());
+        QVERIFY(waveform->isVisible());
     }
 
     void popupTrimsThePreviewFromTheFrontWithAnEllipsis()
@@ -250,7 +262,8 @@ private slots:
         // The next dictation starts while that countdown is still draining.
         popup.showPopup(1);
         QVERIFY(dismiss->isHidden());
-        QVERIFY(pill->isHidden());
+        QVERIFY(!pill->isHidden());
+        QVERIFY(popup.findChild<QLabel *>(QStringLiteral("rawTranscript"))->isHidden());
         QCOMPARE(pill->height(), 48);
         // Left running it would hide this dictation's popup when it finished,
         // and report a dismissal against a session that had moved on.

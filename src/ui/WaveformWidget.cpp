@@ -266,6 +266,12 @@ void WaveformWidget::setMessage(const QString &message)
     update();
 }
 
+void WaveformWidget::setBackgroundVisible(bool visible)
+{
+    m_backgroundVisible = visible;
+    update();
+}
+
 void WaveformWidget::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
@@ -283,7 +289,9 @@ void WaveformWidget::paintEvent(QPaintEvent *)
     painter.setPen(QPen(stroke, penWidth));
     painter.setBrush(pill);
     const QRectF pillRect = QRectF(rect()).adjusted(inset, inset, -inset, -inset);
-    painter.drawRoundedRect(pillRect, pillRect.height() / 2.0, pillRect.height() / 2.0);
+    if (m_backgroundVisible) {
+        painter.drawRoundedRect(pillRect, pillRect.height() / 2.0, pillRect.height() / 2.0);
+    }
 
     if (m_mode == Mode::Message) {
         paintMessage(painter, bar);
