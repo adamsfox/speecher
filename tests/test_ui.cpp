@@ -27,6 +27,7 @@
 #include <QLineEdit>
 #include <QPropertyAnimation>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QStyleHints>
@@ -187,6 +188,40 @@ private slots:
         QVERIFY(!preview->isVisible());
         QVERIFY(pill->isVisible());
         QVERIFY(waveform->isVisible());
+    }
+
+    void popupContainsLargeFontStatusAndReceipt()
+    {
+        const QFont originalFont = QApplication::font();
+        QFont largeFont = originalFont;
+        largeFont.setPointSizeF(std::max(48.0, originalFont.pointSizeF() * 3));
+        QApplication::setFont(largeFont);
+        const auto restoreFont = qScopeGuard([originalFont] {
+            QApplication::setFont(originalFont);
+        });
+
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.show();
+        auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
+        auto *waveform = popup.findChild<WaveformWidget *>();
+        QVERIFY(pill && waveform);
+
+        const auto verifyContained = [&] {
+            QCoreApplication::processEvents();
+            const QRect waveformRect(waveform->mapTo(pill, QPoint()), waveform->size());
+            const QString geometry = QStringLiteral("pill=%1,%2 %3x%4 waveform=%5,%6 %7x%8")
+                                         .arg(pill->x()).arg(pill->y())
+                                         .arg(pill->width()).arg(pill->height())
+                                         .arg(waveformRect.x()).arg(waveformRect.y())
+                                         .arg(waveformRect.width()).arg(waveformRect.height());
+            QVERIFY2(pill->rect().contains(waveformRect), qPrintable(geometry));
+            QVERIFY(popup.sizeHint().height() >= pill->height() + 4);
+        };
+
+        popup.setStatus(QStringLiteral("Stopping"));
+        verifyContained();
+        popup.showMessage(QStringLiteral("Input sent"));
+        verifyContained();
     }
 
     void popupTrimsThePreviewFromTheFrontWithAnEllipsis()

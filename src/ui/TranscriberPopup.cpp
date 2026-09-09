@@ -184,7 +184,7 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     m_previewPill->setObjectName(QStringLiteral("previewPill"));
     m_previewPill->setFrameShape(QFrame::NoFrame);
     m_previewPill->setAutoFillBackground(false);
-    m_previewPill->setFixedHeight(48);
+    m_previewPill->setFixedHeight(m_waveform->height());
     m_previewPill->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     // The waveform and preview share one capsule. Without words, only the
     // waveform occupies it. Its own background stays on for the Dictation page.
@@ -305,7 +305,9 @@ QSize TranscriberPopup::sizeHint() const
         return !banner || banner->isHidden() ? 0
                                              : banner->sizeHint().height() + spacing;
     };
-    return QSize(620, 52 + bannerHeight(m_updateBanner) + bannerHeight(m_whatsNewRow));
+    const int pillHeight = m_pillLayout ? m_previewPill->sizeHint().height()
+                                        : m_waveform->height();
+    return QSize(620, pillHeight + 4 + bannerHeight(m_updateBanner) + bannerHeight(m_whatsNewRow));
 }
 
 void TranscriberPopup::setStatus(const QString &status)
@@ -318,6 +320,7 @@ void TranscriberPopup::setStatus(const QString &status)
         restoreStandardLayout();
         hidePreview();
         m_waveform->setStatusText(QStringLiteral("Transcribing…"));
+        m_previewPill->adjustSize();
     }
     adjustSize();
     updateWindowMask();
@@ -421,14 +424,8 @@ void TranscriberPopup::showOAuthRefreshIndicator()
 {
     m_phase = Phase::Live;
     restoreStandardLayout();
-    m_preview->setText(QStringLiteral("Renewing sign-in…"));
-    m_preview->setVisible(true);
-    m_previewPill->setVisible(true);
-    m_preview->setMaximumWidth(520);
-    m_pillLayout->setContentsMargins(0, 0, 24, 0);
     m_waveform->setMode(WaveformWidget::Mode::Dots);
-    adjustSize();
-    updateWindowMask();
+    applyPreviewText(QStringLiteral("Renewing sign-in…"));
 }
 
 void TranscriberPopup::showListeningIndicator()
@@ -447,6 +444,7 @@ void TranscriberPopup::showMessage(const QString &message)
     restoreStandardLayout();
     hidePreview();
     m_waveform->setMessage(message);
+    m_previewPill->adjustSize();
     adjustSize();
     updateWindowMask();
 }
@@ -611,7 +609,7 @@ void TranscriberPopup::restoreStandardLayout()
     m_preview->setWordWrap(false);
     m_preview->setMinimumWidth(0);
     m_preview->setMaximumWidth(520);
-    m_previewPill->setFixedHeight(48);
+    m_previewPill->setFixedHeight(m_waveform->height());
 }
 
 void TranscriberPopup::updateWindowMask()
