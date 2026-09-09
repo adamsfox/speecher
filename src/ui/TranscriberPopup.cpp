@@ -305,8 +305,7 @@ QSize TranscriberPopup::sizeHint() const
         return !banner || banner->isHidden() ? 0
                                              : banner->sizeHint().height() + spacing;
     };
-    const int pillHeight = m_pillLayout ? m_previewPill->sizeHint().height()
-                                        : m_waveform->height();
+    const int pillHeight = m_pillLayout ? m_previewPill->height() : m_waveform->height();
     return QSize(620, pillHeight + 4 + bannerHeight(m_updateBanner) + bannerHeight(m_whatsNewRow));
 }
 
@@ -483,6 +482,9 @@ void TranscriberPopup::showErrorMessage(const QString &message)
         qMax(48, textHeight + 24 + 2 * (3 + kErrorBarInset)));
     m_previewPill->resize(m_previewPill->sizeHint());
     adjustSize();
+    if (isVisible()) {
+        m_positioner->positionBottomCenter(m_surface);
+    }
     updateWindowMask();
     m_errorDismissAnimation->start();
 }

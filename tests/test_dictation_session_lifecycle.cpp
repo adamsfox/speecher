@@ -863,8 +863,8 @@ private slots:
         QVERIFY(waveform);
         QVERIFY(!popup.findChild<QLabel *>(QStringLiteral("popupStatus")));
         QVERIFY(!popup.findChild<QLabel *>(QStringLiteral("popupMetadata")));
-        QCOMPARE(previewPill->minimumHeight(), 48);
-        QCOMPARE(previewPill->maximumHeight(), 48);
+        QCOMPARE(previewPill->minimumHeight(), waveform->height());
+        QCOMPARE(previewPill->maximumHeight(), waveform->height());
         QVERIFY(!rawTranscript->wordWrap());
 
         popup.showOAuthRefreshIndicator();

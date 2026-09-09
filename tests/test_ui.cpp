@@ -28,6 +28,7 @@
 #include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScopeGuard>
+#include <QScreen>
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QStyleHints>
@@ -260,6 +261,27 @@ private slots:
         const QFontMetrics metrics(preview->font());
         const int textWidth = metrics.horizontalAdvance(QStringLiteral("Microphone unavailable"));
         QCOMPARE(preview->width(), textWidth);
+    }
+
+    void popupRepositionsAfterShowingALongError()
+    {
+        TranscriberPopup popup;
+        popup.showPopup(0);
+        const int initialHeight = popup.height();
+        popup.showErrorMessage(QStringLiteral(
+            "Microphone access is off. Allow Speecher under Privacy & Security > "
+            "Microphone, then try again."));
+
+        const QScreen *screen = QGuiApplication::primaryScreen();
+        QVERIFY(screen);
+        QVERIFY(popup.height() > initialHeight);
+        const int clearance = screen->availableGeometry().bottom() - popup.geometry().bottom();
+        QVERIFY(screen->availableGeometry().contains(popup.geometry()));
+        QVERIFY2(clearance >= 28,
+                 qPrintable(QStringLiteral("clearance=%1 popup=%2x%3 hint=%4x%5")
+                                .arg(clearance)
+                                .arg(popup.width()).arg(popup.height())
+                                .arg(popup.sizeHint().width()).arg(popup.sizeHint().height())));
     }
 
     void popupErrorCanBeDismissedEarly()
