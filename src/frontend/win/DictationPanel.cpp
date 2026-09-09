@@ -30,6 +30,7 @@
 #include <QImage>
 #include <QElapsedTimer>
 #include <QTimer>
+#include <QTextBoundaryFinder>
 
 #include <algorithm>
 #include <array>
@@ -218,6 +219,7 @@ struct DictationPanel::Native : QObject {
         connect(session, &DictationSession::popupFrozenChanged, this,
                 [this](bool value) {
                     frozen = value;
+                    if (bars) { bars.Opacity(frozen ? 0.4 : 1.0); }
                     // Unfreezing at session start returns to the live phase,
                     // like the Qt and mac panels, so a preview clear emitted
                     // before show() is never dropped by a stale phase.
@@ -668,7 +670,7 @@ struct DictationPanel::Native : QObject {
     void animateBars()
     {
         const qint64 now = barClock.elapsed();
-        const float elapsed = (now - lastFrame) / 1000.0f;
+        const float elapsed = std::clamp((now - lastFrame) / 1000.0f, 0.0f, 0.1f);
         lastFrame = now;
         if (frozen) {
             return;
@@ -680,7 +682,8 @@ struct DictationPanel::Native : QObject {
             }
             levelSum = 0;
             levelChunks = 0;
-            levelWindow = now;
+            levelWindow += 150;
+            if (now - levelWindow >= 150) { levelWindow = now; }
         }
         smoothedLevel = std::floor((smoothedLevel * 0.85f + barTarget * 0.15f) * 100) / 100;
         for (int i = 0; i < int(barRects.size()); ++i) {
@@ -773,11 +776,12 @@ struct DictationPanel::Native : QObject {
         GetCursorPos(&pointer);
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
-        const int maximumWidth = std::max(panelWidth, std::min(maximumPreviewWidth,
-            int((monitor.rcWork.right - monitor.rcWork.left) / scale()) - screenEdgeMargin));
+        const int minimumWidth = hasProblem ? 420 : panelWidth;
+        const int maximumWidth = std::max(minimumWidth,
+            int((monitor.rcWork.right - monitor.rcWork.left) / scale()) - screenEdgeMargin);
         const int wantedWidth = listening ? panelWidth
             : std::clamp(measuredTextWidth(shown) + (hasProblem ? 150 : finished ? 68 : previewChromeWidth),
-                         panelWidth, maximumWidth);
+                         minimumWidth, maximumWidth);
         text.Text(hstring(shown.toStdWString()));
         text.Visibility(listening ? Visibility::Collapsed : Visibility::Visible);
         text.Width(std::max(1, wantedWidth - (hasProblem ? 150 : finished ? 68 : 24)));
@@ -785,6 +789,7 @@ struct DictationPanel::Native : QObject {
         row.HorizontalAlignment(HorizontalAlignment::Center);
         glyph.Visibility(hasProblem || finished ? Visibility::Visible : Visibility::Collapsed);
         bars.Visibility(listening ? Visibility::Visible : Visibility::Collapsed);
+        bars.Opacity(frozen ? 0.4 : 1.0);
         if (listening && !barTimer.isActive()) {
             lastFrame = barClock.elapsed();
             barTimer.start();
@@ -795,16 +800,11 @@ struct DictationPanel::Native : QObject {
         if (showPreview) {
             ensurePreview();
             previewChrome.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
-            QString visible = preview;
-            while (visible.size() > 1 && measuredTextWidth(visible) > maximumWidth - previewChromeWidth) {
-                visible.remove(0, 1);
-            }
-            if (visible != preview) {
-                visible = QString::fromUtf16(u"\u2026") + visible.mid(1);
-            }
+            const int transcriptMaximum = std::min(maximumPreviewWidth, maximumWidth);
+            const QString visible = fitPreview(preview, transcriptMaximum - previewChromeWidth);
             previewText.Text(hstring(visible.toStdWString()));
             previewWidth = std::clamp(measuredTextWidth(visible) + previewChromeWidth,
-                                      panelWidth, maximumWidth);
+                                      panelWidth, transcriptMaximum);
         }
         previewVisible = showPreview;
         if (previewWindow && !showPreview) {
@@ -837,6 +837,31 @@ struct DictationPanel::Native : QObject {
         probe.Measure({unbounded, unbounded});
         const int measured = int(std::ceil(probe.DesiredSize().Width));
         return measured > 0 ? measured + 2 : int(value.size()) * 7;
+    }
+
+    QString fitPreview(const QString &value, int maximumWidth)
+    {
+        if (measuredTextWidth(value) <= maximumWidth) {
+            return value;
+        }
+        std::vector<qsizetype> boundaries;
+        QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, value);
+        for (qsizetype position = finder.toNextBoundary(); position >= 0;
+             position = finder.toNextBoundary()) {
+            boundaries.push_back(position);
+        }
+        const QString ellipsis = QString::fromUtf16(u"\u2026");
+        size_t first = 0;
+        size_t last = boundaries.size() - 1;
+        while (first < last) {
+            const size_t middle = first + (last - first) / 2;
+            if (measuredTextWidth(ellipsis + value.mid(boundaries[middle])) <= maximumWidth) {
+                last = middle;
+            } else {
+                first = middle + 1;
+            }
+        }
+        return ellipsis + value.mid(boundaries[first]);
     }
 
     void resize(int newWidth)
@@ -1009,6 +1034,16 @@ QRect DictationPanel::previewGeometryForTest() const
     RECT rect{};
     GetWindowRect(m_native->previewWindow, &rect);
     return QRect(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+}
+
+QString DictationPanel::previewTextForTest() const
+{
+    return QString::fromStdWString(std::wstring(m_native->previewText.Text()));
+}
+
+bool DictationPanel::previewTextFitsForTest() const
+{
+    return m_native->measuredTextWidth(previewTextForTest()) <= m_native->previewChrome.ActualWidth() - previewChromeWidth;
 }
 
 // Copies the panel's screen rectangle, DWM-composed, so the picture carries

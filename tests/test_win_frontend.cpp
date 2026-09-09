@@ -233,6 +233,34 @@ private slots:
         QVERIFY(panel->previewGeometryForTest().isEmpty());
     }
 
+    void nativePreviewKeepsNewestWordsWithinItsWidth_data()
+    {
+        QTest::addColumn<QString>("prefix");
+        QTest::newRow("narrow-letters") << QString(300, QLatin1Char('i'));
+        QTest::newRow("emoji-graphemes") << QString::fromUtf8("👩‍💻é").repeated(100);
+    }
+
+    void nativePreviewKeepsNewestWordsWithinItsWidth()
+    {
+        if (!nativeUiAvailable()) {
+            QSKIP("WinUI islands require an interactive desktop");
+        }
+        QFETCH(QString, prefix);
+        auto *panel = frontEnd->dictationPanelForTest();
+        const QString newest = QString::fromUtf8(" Newest words 👩‍💻 arrive intact.");
+        panel->showForTest(15);
+        panel->drivePreviewForTest(prefix + newest);
+        QTRY_VERIFY(panel->previewTextFitsForTest());
+        const QString rendered = panel->previewTextForTest();
+        QVERIFY(rendered.startsWith(QChar(0x2026)));
+        QVERIFY(rendered.endsWith(newest));
+        const QChar first = rendered.at(1);
+        QVERIFY(!first.isLowSurrogate());
+        QVERIFY(first != QChar(0x200d));
+        QVERIFY(first.category() != QChar::Mark_NonSpacing);
+        panel->dismissForTest();
+    }
+
     void nativeDictationProblemAutoDismissesLikeTheQtPopup()
     {
         if (!nativeUiAvailable()) {
@@ -263,6 +291,10 @@ private slots:
             QTest::qWait(24);
         }
         QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-listening.png")));
+        controller->session()->popupFrozenChanged(true);
+        QTest::qWait(150);
+        QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-frozen.png")));
+        controller->session()->popupFrozenChanged(false);
         panel->drivePreviewForTest(QStringLiteral(
             "and then we should probably move the meeting to Thursday afternoon"));
         QTest::qWait(150);

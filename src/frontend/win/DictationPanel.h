@@ -57,6 +57,8 @@ private:
     int levelBarCountForTest() const;
     QRect waveformGeometryForTest() const;
     QRect previewGeometryForTest() const;
+    QString previewTextForTest() const;
+    bool previewTextFitsForTest() const;
     struct Native;
     std::unique_ptr<Native> m_native;
 };
