@@ -552,13 +552,19 @@ QWidget *SchemaSettingsPage::makeControl(const SettingsRow &descriptor, QWidget 
     switch (descriptor.kind) {
     case RowKind::Choice: {
         auto *combo = new QComboBox(card);
-        if (descriptor.contentWidthHint > 0) {
-            combo->setMinimumContentsLength(descriptor.contentWidthHint);
-        }
         if (descriptor.expensive) {
             // Its choices land after the page is on screen, so hold the width
-            // the hint asked for instead of growing to fit whatever arrives.
+            // the hint asked for instead of growing to fit whatever arrives —
+            // but never more than half the card, or the reserve crushes the
+            // description into wrapping while the combo sits empty. A combo
+            // whose choices are already known needs no reserve at all: its
+            // natural size fits every item, and hint width beyond that only
+            // steals room from the description.
+            if (descriptor.contentWidthHint > 0) {
+                combo->setMinimumContentsLength(descriptor.contentWidthHint);
+            }
             combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+            combo->setMaximumWidth(settings::cardMaximumWidth() / 2);
         }
         connect(combo, &QComboBox::currentIndexChanged, this, announce);
         row.value = [combo] { return combo->currentData(); };

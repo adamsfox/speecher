@@ -596,13 +596,15 @@ QLabel *makePageTitle(const QString &text, QWidget *parent)
     auto *title = new QLabel(text, parent);
     title->setObjectName(QStringLiteral("pageTitle"));
     title->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    // Kirigami Heading level 1: 1.35× the base size at demibold weight, the
+    // typography System Settings uses for the page name in its header.
     QFont font = QApplication::font();
     if (font.pointSizeF() > 0) {
-        font.setPointSizeF(font.pointSizeF() * 1.4);
+        font.setPointSizeF(font.pointSizeF() * 1.35);
     } else if (font.pixelSize() > 0) {
-        font.setPixelSize(qRound(font.pixelSize() * 1.4));
+        font.setPixelSize(qRound(font.pixelSize() * 1.35));
     }
-    font.setBold(false);
+    font.setWeight(QFont::DemiBold);
     title->setFont(font);
     return title;
 }
