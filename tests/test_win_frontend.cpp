@@ -55,6 +55,9 @@ private slots:
     {
         SettingsStore settings;
         settings.raw().clear();
+        if (qEnvironmentVariableIsSet("SPEECHER_TEST_PANEL_BANNERS")) {
+            settings.setUpdatesPendingWhatsNewVersion(QStringLiteral("0.0.1"));
+        }
         existingQtPopups = widgetCount<TranscriberPopup>();
         controller = std::make_unique<ApplicationController>(false);
         frontEnd = std::make_unique<WinFrontEnd>(controller.get(), std::move(host));
@@ -192,10 +195,42 @@ private slots:
             QSKIP("WinUI islands require an interactive desktop");
         }
         frontEnd->showPanelForTest(11);
-        // Ten animated bars, the Qt popup's waveform, instead of the accent
-        // ProgressBar that read as a loading indicator.
+        // Fifteen dots at the same thickness and spacing as the Linux waveform.
         QCOMPARE(frontEnd->dictationPanelForTest()->levelBarCountForTest(), 15);
         frontEnd->dismissPanelForTest();
+    }
+
+    void nativeDictationPanelSeparatesAndClearsPreview()
+    {
+        if (!nativeUiAvailable()) {
+            QSKIP("WinUI islands require an interactive desktop");
+        }
+        auto *panel = frontEnd->dictationPanelForTest();
+        panel->showForTest(13);
+        QVERIFY(panel->previewGeometryForTest().isEmpty());
+        panel->drivePreviewForTest(QStringLiteral("The meeting is on Thursday afternoon"));
+        const QRect waveform = panel->waveformGeometryForTest();
+        const QRect preview = panel->previewGeometryForTest();
+        QVERIFY(preview.top() > waveform.bottom());
+        QVERIFY(std::abs(preview.center().x() - waveform.center().x()) <= 1);
+        QCOMPARE(preview.height(), waveform.height());
+        QVERIFY(preview.width() > waveform.width());
+        controller->session()->popupFrozenChanged(true);
+        panel->drivePreviewForTest(QStringLiteral("This preview must be ignored while frozen"));
+        QCOMPARE(panel->previewGeometryForTest(), preview);
+        controller->session()->popupFrozenChanged(false);
+        panel->drivePreviewForTest(QString());
+        QVERIFY(panel->previewGeometryForTest().isEmpty());
+        panel->drivePreviewForTest(QStringLiteral("Clear this when audio stops"));
+        panel->driveStatusForTest(QStringLiteral("Stopping"));
+        QVERIFY(panel->previewGeometryForTest().isEmpty());
+        controller->session()->popupFrozenChanged(false);
+        panel->showForTest(14);
+        QVERIFY(panel->previewGeometryForTest().isEmpty());
+        panel->drivePreviewForTest(QStringLiteral("A new Dictation Session"));
+        QVERIFY(!panel->previewGeometryForTest().isEmpty());
+        panel->dismissForTest();
+        QVERIFY(panel->previewGeometryForTest().isEmpty());
     }
 
     void nativeDictationProblemAutoDismissesLikeTheQtPopup()
@@ -222,6 +257,7 @@ private slots:
         DictationPanel *panel = frontEnd->dictationPanelForTest();
         panel->showForTest(12);
         panel->driveStatusForTest(QStringLiteral("Listening"));
+        panel->driveLevelForTest(0.02f);
         for (int i = 0; i < 40; ++i) {
             panel->driveLevelForTest(0.7f);
             QTest::qWait(24);
@@ -231,6 +267,16 @@ private slots:
             "and then we should probably move the meeting to Thursday afternoon"));
         QTest::qWait(150);
         QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-preview.png")));
+        panel->driveStatusForTest(QStringLiteral("Stopping"));
+        QTest::qWait(150);
+        QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-transcribing.png")));
+        controller->session()->popupRefiningChanged(true);
+        controller->session()->popupRefinementPreviewChanged(QStringLiteral("The meeting is on Thursday."));
+        QTest::qWait(150);
+        QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-refining.png")));
+        controller->session()->popupMessageRequested(QStringLiteral("Copied to clipboard"));
+        QTest::qWait(150);
+        QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-outcome.png")));
         panel->dismissForTest();
 
         frontEnd->showDictationError(QStringLiteral(

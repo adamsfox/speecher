@@ -21,6 +21,7 @@
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
+#include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
@@ -301,7 +302,7 @@ struct DictationPanel::Native : QObject {
         windowClass.lpszClassName = windowClassName;
         RegisterClassW(&windowClass);
         window = CreateWindowExW(
-            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
             windowClassName, L"Speecher dictation", WS_POPUP,
             0, 0, panelWidth, panelHeight, nullptr, nullptr,
             windowClass.hInstance, this);
@@ -313,7 +314,9 @@ struct DictationPanel::Native : QObject {
         source = DesktopWindowXamlSource();
         source.Initialize(Microsoft::UI::GetWindowIdFromWindow(window));
 
-        chrome = Border();
+        chrome = Microsoft::UI::Xaml::Markup::XamlReader::Load(
+            LR"(<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" CornerRadius="24" Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"/>)")
+            .as<Border>();
         chrome.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
         chrome.Padding({12, 0, 12, 0});
         row = StackPanel();
@@ -374,7 +377,6 @@ struct DictationPanel::Native : QObject {
             });
         });
         source.Content(chrome);
-        source.SystemBackdrop(DesktopAcrylicBackdrop());
         resize(panelWidth);
     }
 
@@ -384,12 +386,14 @@ struct DictationPanel::Native : QObject {
             return;
         }
         previewWindow = CreateWindowExW(
-            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
             windowClassName, L"Speecher transcript", WS_POPUP,
             0, 0, panelWidth, panelHeight, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
         previewSource = DesktopWindowXamlSource();
         previewSource.Initialize(Microsoft::UI::GetWindowIdFromWindow(previewWindow));
-        previewChrome = Border();
+        previewChrome = Microsoft::UI::Xaml::Markup::XamlReader::Load(
+            LR"(<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" CornerRadius="24" Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"/>)")
+            .as<Border>();
         previewChrome.Padding({24, 0, 24, 0});
         previewText = TextBlock();
         previewText.VerticalAlignment(VerticalAlignment::Center);
@@ -398,7 +402,6 @@ struct DictationPanel::Native : QObject {
         previewText.TextTrimming(TextTrimming::CharacterEllipsis);
         previewChrome.Child(previewText);
         previewSource.Content(previewChrome);
-        previewSource.SystemBackdrop(DesktopAcrylicBackdrop());
     }
 
     // The notices live in their own rounded acrylic surface floating above
@@ -861,8 +864,6 @@ struct DictationPanel::Native : QObject {
         const int y = monitor.rcWork.bottom - physicalHeight - px(bottomMargin) - previewHeight;
         SetWindowPos(window, HWND_TOPMOST, x, y, physicalWidth, physicalHeight,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        SetWindowRgn(window, CreateRoundRectRgn(0, 0, physicalWidth + 1, physicalHeight + 1,
-                                               physicalHeight, physicalHeight), TRUE);
         if (previewVisible) {
             const int transcriptWidth = px(previewWidth);
             const int transcriptX = monitor.rcWork.left
@@ -871,8 +872,6 @@ struct DictationPanel::Native : QObject {
                          y + physicalHeight + px(previewGap), transcriptWidth, physicalHeight,
                          SWP_NOACTIVATE | SWP_SHOWWINDOW);
             previewSource.SiteBridge().MoveAndResize({0, 0, transcriptWidth, physicalHeight});
-            SetWindowRgn(previewWindow, CreateRoundRectRgn(0, 0, transcriptWidth + 1,
-                         physicalHeight + 1, physicalHeight, physicalHeight), TRUE);
         }
         if (banner && IsWindowVisible(banner)) {
             positionBanner();
@@ -995,6 +994,23 @@ int DictationPanel::levelBarCountForTest() const
     return int(m_native->barRects.size());
 }
 
+QRect DictationPanel::waveformGeometryForTest() const
+{
+    RECT rect{};
+    GetWindowRect(m_native->window, &rect);
+    return QRect(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+}
+
+QRect DictationPanel::previewGeometryForTest() const
+{
+    if (!m_native->previewWindow || !IsWindowVisible(m_native->previewWindow)) {
+        return {};
+    }
+    RECT rect{};
+    GetWindowRect(m_native->previewWindow, &rect);
+    return QRect(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+}
+
 // Copies the panel's screen rectangle, DWM-composed, so the picture carries
 // the acrylic backdrop and rounded corners the user actually sees. The panel
 // is topmost, so nothing can sit in front of it.
@@ -1010,6 +1026,12 @@ bool DictationPanel::saveGrabForTest(const QString &path) const
         RECT transcript{};
         GetWindowRect(m_native->previewWindow, &transcript);
         UnionRect(&rect, &rect, &transcript);
+    }
+    if (qEnvironmentVariableIsSet("SPEECHER_TEST_PANEL_BANNERS")
+        && m_native->banner && IsWindowVisible(m_native->banner)) {
+        RECT notices{};
+        GetWindowRect(m_native->banner, &notices);
+        UnionRect(&rect, &rect, &notices);
     }
     const int width = rect.right - rect.left;
     const int height = rect.bottom - rect.top;

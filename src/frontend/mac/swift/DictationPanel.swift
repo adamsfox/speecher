@@ -64,6 +64,8 @@ final class DictationPanelState: ObservableObject {
     @Published var level: Float = 0
     @Published var phase = Phase.live
     @Published var frozen = false
+    @Published var previewWidth: CGFloat = minimumPillWidth
+    var waveformFloor: Float = 0
     @Published var problem = ""
     /// The update banner's message, empty while there is nothing to offer, and
     /// the label of the button beside it, empty for a passive progress state.
@@ -89,7 +91,6 @@ final class DictationPanelState: ObservableObject {
         default: return ("paperplane.fill", status, true)
         }
     }
-
 
     var finished: Bool { presentation.finished }
 
@@ -198,7 +199,7 @@ struct DictationPanelView: View {
                     }
                 }
                 .padding(.horizontal, 24)
-                .frame(height: pillHeight)
+                .frame(width: state.previewWidth, height: pillHeight)
                 .background(.regularMaterial, in: .capsule)
                 .modifier(DictationPanelGlass())
             }
@@ -229,7 +230,6 @@ struct DictationPanelView: View {
 /// The Linux waveform's fifteen dots, adaptive level and one-second travelling crest.
 private struct PanelWaveform: View {
     @ObservedObject var state: DictationPanelState
-    @State private var floor: Float = 0
     @State private var sum: Float = 0
     @State private var chunks = 0
     @State private var target: Float = 0
@@ -257,8 +257,8 @@ private struct PanelWaveform: View {
             var mapped: Float = 0
             if value > 0 {
                 let db = 20 * log10(value)
-                floor = max(-46, min(floor, db))
-                mapped = min(1, max(0, (db - floor) / 20))
+                state.waveformFloor = max(-46, min(state.waveformFloor, db))
+                mapped = min(1, max(0, (db - state.waveformFloor) / 20))
             }
             sum += mapped
             chunks += 1
@@ -652,8 +652,9 @@ final class SpeecherDictationPanel {
         let availableWidth = (panel.screen ?? NSScreen.main)?.visibleFrame.width
             ?? maximumPreviewWidth + screenEdgeMargin
         let maximumWidth = max(minimumPillWidth, min(maximumPreviewWidth, availableWidth - screenEdgeMargin))
-        let chrome = state.problem.isEmpty ? previewChromeWidth : 150
+        let chrome = !state.problem.isEmpty ? 150 : state.finished ? 78 : previewChromeWidth
         let contentWidth = min(max(minimumPillWidth, textWidth + chrome), maximumWidth)
+        state.previewWidth = contentWidth
         let width = max(contentWidth, banners > 0 ? 420 : minimumPillWidth)
         var frame = panel.frame
         frame.origin.x -= (width - frame.width) / 2
