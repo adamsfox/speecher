@@ -237,7 +237,7 @@ private struct PanelWaveform: View {
     @State private var windowStart = Date.now
     @State private var lastFrame = Date.now
     @State private var phase: Double = 0
-    private let timer = Timer.publish(every: 0.016, on: .main, in: .common).autoconnect()
+    @State private var timer = Timer.publish(every: 0.016, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Canvas { context, size in
@@ -252,6 +252,7 @@ private struct PanelWaveform: View {
                              with: .foreground)
             }
         }
+        .opacity(state.frozen ? 0.4 : 1)
         .frame(width: minimumPillWidth, height: pillHeight)
         .onReceive(state.$level) { value in
             var mapped: Float = 0
@@ -264,7 +265,7 @@ private struct PanelWaveform: View {
             chunks += 1
         }
         .onReceive(timer) { now in
-            let elapsed = now.timeIntervalSince(lastFrame)
+            let elapsed = min(0.1, max(0, now.timeIntervalSince(lastFrame)))
             lastFrame = now
             guard !state.frozen else { return }
             phase = (phase + elapsed).truncatingRemainder(dividingBy: 1)
@@ -272,7 +273,8 @@ private struct PanelWaveform: View {
                 if chunks > 0 { target = sum / Float(chunks) }
                 sum = 0
                 chunks = 0
-                windowStart = now
+                windowStart = windowStart.addingTimeInterval(0.15)
+                if now.timeIntervalSince(windowStart) >= 0.15 { windowStart = now }
             }
             smoothed = Foundation.floor((smoothed * 0.85 + target * 0.15) * 100) / 100
         }
@@ -657,6 +659,7 @@ final class SpeecherDictationPanel {
         state.previewWidth = contentWidth
         let width = max(contentWidth, banners > 0 ? 420 : minimumPillWidth)
         var frame = panel.frame
+        guard abs(frame.width - width) >= 1 || abs(frame.height - height) >= 1 else { return }
         frame.origin.x -= (width - frame.width) / 2
         frame.size = NSSize(width: width, height: height)
         panel.setFrame(frame, display: true)
