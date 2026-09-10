@@ -4,6 +4,7 @@
 #include "app/PlatformComposition.h"
 #include "app/UpdateController.h"
 #include "core/SecretStore.h"
+#include "core/ShortcutBinding.h"
 #include "core/SettingsStore.h"
 #include "core/settings/SettingsSchema.h"
 #include "dictation/DictationSession.h"
@@ -1028,6 +1029,57 @@ Qt::KeyboardModifiers qtModifiersForFlags(NSUInteger flags)
         return nil;
     }
     return error.isEmpty() ? @"That shortcut could not be bound." : error.toNSString();
+}
+
+- (NSString *)currentSingleKeyCode
+{
+    const speecher::ShortcutBinding binding = _state->controller->globalShortcut();
+    return binding.isSingleKey() ? binding.keyCode().toNSString() : nil;
+}
+
+- (NSString *)keyCodeNameForMacKeyCode:(unsigned short)keyCode
+{
+    const speecher::PhysicalKey *key = speecher::physicalKeyForMac(keyCode);
+    return key ? [NSString stringWithUTF8String:key->code] : nil;
+}
+
+- (NSString *)displayForSingleKeyCode:(NSString *)code
+{
+    return speecher::ShortcutBinding::singleKey(QString::fromNSString(code))
+        .displayText()
+        .toNSString();
+}
+
+- (NSString *)unsupportedReasonForSingleKeyCode:(NSString *)code
+{
+    const QString reason = _state->controller->globalShortcutUnsupportedBindingReason(
+        speecher::ShortcutBinding::singleKey(QString::fromNSString(code)));
+    return reason.isEmpty() ? nil : reason.toNSString();
+}
+
+- (NSString *)bindSingleKeyCode:(NSString *)code
+{
+    QString error;
+    if (_state->controller->setGlobalShortcut(
+            speecher::ShortcutBinding::singleKey(QString::fromNSString(code)), &error)) {
+        return nil;
+    }
+    return error.isEmpty() ? @"That key could not be bound." : error.toNSString();
+}
+
+- (NSString *)warningForSingleKeyCode:(NSString *)code
+{
+    const speecher::ShortcutBinding binding =
+        speecher::ShortcutBinding::singleKey(QString::fromNSString(code));
+    // The monitor cannot consume the key, and Option's normal job is
+    // composing accents — worth a caveat even though it types nothing alone.
+    if (binding.keyCode().startsWith(QStringLiteral("Alt"))) {
+        return QStringLiteral("Heads up: %1 is still the accent key, so holding it while "
+                              "typing composes special characters.")
+            .arg(binding.displayText())
+            .toNSString();
+    }
+    return speecher::singleKeyTypingWarning(binding).toNSString();
 }
 
 - (void)beginShortcutRecording

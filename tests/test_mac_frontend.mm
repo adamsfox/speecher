@@ -388,6 +388,44 @@ private slots:
         QVERIFY(error.length > 0);
     }
 
+    // The single-key half of the bridge: keycode-to-name mapping, display,
+    // the non-blocking warnings, and the per-binding refusal. Binding is
+    // asserted both ways because the answer follows the Accessibility grant:
+    // CI seeds it, a bare runner does not, and either way silence is wrong.
+    void singleKeyBridgeSurfaceMapsWarnsAndBinds()
+    {
+        ApplicationController controller(false);
+        SpeecherBridge *bridge = [[SpeecherBridge alloc] initWithController:&controller];
+
+        QCOMPARE(QString::fromNSString([bridge keyCodeNameForMacKeyCode:kVK_RightOption]),
+                 QStringLiteral("AltRight"));
+        QVERIFY([bridge keyCodeNameForMacKeyCode:0x7FFF] == nil);
+        QCOMPARE(QString::fromNSString([bridge displayForSingleKeyCode:@"AltRight"]),
+                 QStringLiteral("Right Option"));
+
+        // Option's caveat is accents, a typing key's is that it still types,
+        // and a silent key carries none. All of them would save.
+        QVERIFY([[bridge warningForSingleKeyCode:@"AltRight"] containsString:@"accent"]);
+        QVERIFY([bridge warningForSingleKeyCode:@"KeyE"].length > 0);
+        QCOMPARE([bridge warningForSingleKeyCode:@"F13"].length, NSUInteger(0));
+
+        // A key Mac keyboards lack is refused whatever the grant says.
+        QVERIFY([bridge unsupportedReasonForSingleKeyCode:@"PrintScreen"] != nil);
+
+        NSString *reason = [bridge unsupportedReasonForSingleKeyCode:@"AltRight"];
+        if (AXIsProcessTrusted()) {
+            QVERIFY(reason == nil);
+            QVERIFY([bridge bindSingleKeyCode:@"AltRight"] == nil);
+            QCOMPARE(QString::fromNSString(bridge.shortcutDisplay),
+                     QStringLiteral("Right Option"));
+            QVERIFY(controller.globalShortcut().isSingleKey());
+        } else {
+            QVERIFY(reason != nil);
+            QVERIFY([bridge bindSingleKeyCode:@"AltRight"] != nil);
+            QVERIFY(!controller.globalShortcut().isSingleKey());
+        }
+    }
+
     // The Sparkle user driver's callbacks arrive through the public driver
     // seam, so the state machine walks here without an appcast.
     void sparkleDriverSeamMapsStates()

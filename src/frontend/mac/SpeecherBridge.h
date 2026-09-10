@@ -268,6 +268,33 @@ typedef NS_ENUM(NSInteger, SpeecherUpdateState) {
 - (void)beginShortcutRecording;
 - (nullable NSString *)endShortcutRecording;
 
+// The single-key half of the binding: one physical key on its own, which
+// Speecher watches itself rather than registers as a hotkey. The recorder
+// reaches it by macOS virtual keycode; the stable identity across the core is
+// the W3C KeyboardEvent.code name.
+// The code name of the bound single key, or nil while a combination holds
+// the binding.
+@property (nonatomic, readonly, copy, nullable) NSString *currentSingleKeyCode;
+// The code name for a macOS virtual keycode, or nil for a key outside the
+// vocabulary (a media key), which a recorder ignores.
+- (nullable NSString *)keyCodeNameForMacKeyCode:(unsigned short)keyCode
+    NS_SWIFT_NAME(keyCodeName(forMacKeyCode:));
+// What the UI calls the key, such as "Right Option".
+- (NSString *)displayForSingleKeyCode:(NSString *)code
+    NS_SWIFT_NAME(display(forSingleKeyCode:));
+// nil when the backend can honour the key; otherwise why not, the missing
+// Accessibility grant being the common case. Asking does not save.
+- (nullable NSString *)unsupportedReasonForSingleKeyCode:(NSString *)code
+    NS_SWIFT_NAME(unsupportedReason(forSingleKeyCode:));
+// Binds and stores the key. nil once bound, otherwise why it was refused.
+- (nullable NSString *)bindSingleKeyCode:(NSString *)code
+    NS_SWIFT_NAME(bindSingleKey(code:));
+// The non-blocking caveat recording this key earns: a key that types keeps
+// typing, and Option keys are how macOS composes accents. Empty for a key
+// that carries no text. The binding saves regardless.
+- (NSString *)warningForSingleKeyCode:(NSString *)code
+    NS_SWIFT_NAME(warning(forSingleKeyCode:));
+
 @property (nonatomic, readonly) BOOL accessibilitySupported;
 @property (nonatomic, readonly) BOOL accessibilityEnabled;
 // nil once the grant was asked for; otherwise why it could not be.

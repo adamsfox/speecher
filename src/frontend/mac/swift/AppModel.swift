@@ -46,6 +46,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var anthropicCredentialStatus: String
     @Published private(set) var shortcut: String
     @Published private(set) var shortcutProblem = ""
+    /// The non-blocking caveat the last single-key binding earned, such as
+    /// "E still types". Saved anyway; this only informs.
+    @Published private(set) var shortcutWarning = ""
+    /// The last single-key binding was refused for the missing Accessibility
+    /// grant, which is what makes the grant call-to-action appear.
+    @Published private(set) var shortcutNeedsAccessibility = false
     /// The pane the sidebar is on, remembered between openings because people
     /// adjust related settings more than once.
     @Published var pane: String {
@@ -338,7 +344,32 @@ final class AppModel: ObservableObject {
     func bindShortcut(characters: String, modifierFlags: NSEvent.ModifierFlags) {
         shortcutProblem = bridge.bindShortcut(characters: characters,
                                              modifierFlags: modifierFlags.rawValue) ?? ""
+        shortcutWarning = ""
+        shortcutNeedsAccessibility = false
         shortcut = bridge.shortcutDisplay
+    }
+
+    /// The vocabulary name for a key the recorder caught, or nil for a key
+    /// outside it (a media key), which the recorder ignores.
+    func keyCodeName(forMacKeyCode keyCode: UInt16) -> String? {
+        bridge.keyCodeName(forMacKeyCode: keyCode)
+    }
+
+    /// Binds one physical key on its own. A refusal is shown, never saved;
+    /// a save can still carry a non-blocking warning that the key keeps its
+    /// normal job.
+    func bindSingleKey(code: String) {
+        shortcutProblem = bridge.bindSingleKey(code: code) ?? ""
+        shortcutWarning = shortcutProblem.isEmpty ? bridge.warning(forSingleKeyCode: code) : ""
+        shortcutNeedsAccessibility = !shortcutProblem.isEmpty && !bridge.accessibilityEnabled
+        shortcut = bridge.shortcutDisplay
+    }
+
+    /// The recorder's entry point; says whether the key was one it could take.
+    func bindSingleKey(macKeyCode keyCode: UInt16) -> Bool {
+        guard let code = keyCodeName(forMacKeyCode: keyCode) else { return false }
+        bindSingleKey(code: code)
+        return true
     }
 
     /// Registers the sequence the binder already reports — the stored one, or
@@ -346,6 +377,7 @@ final class AppModel: ObservableObject {
     /// without recording a new shortcut means.
     func bindCurrentShortcut() {
         shortcutProblem = bridge.bindCurrentShortcut() ?? ""
+        shortcutWarning = ""
         shortcut = bridge.shortcutDisplay
     }
 

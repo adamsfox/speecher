@@ -10,7 +10,10 @@ import SwiftUI
 /// menu, and a monitor sees it before the menu does.
 @MainActor
 final class ShortcutRecorder: ObservableObject {
-    @Published private(set) var recording = false
+    enum Mode { case combination, singleKey }
+
+    @Published private(set) var mode: Mode?
+    var recording: Bool { mode != nil }
     private var monitor: Any?
     /// Restores the hotkey registration recording suspended. The bound
     /// combination is consumed system-wide while registered, so the monitor
@@ -21,10 +24,7 @@ final class ShortcutRecorder: ObservableObject {
 
     func record(suspending model: AppModel,
                 _ bind: @escaping (String, NSEvent.ModifierFlags) -> Void) {
-        stop()
-        model.beginShortcutRecording()
-        restoreShortcut = { model.endShortcutRecording() }
-        recording = true
+        begin(.combination, suspending: model)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             stop()
@@ -37,12 +37,64 @@ final class ShortcutRecorder: ObservableObject {
         }
     }
 
+    /// Catches the next key of any kind — a bare modifier included, which
+    /// keyDown never reports, so the mask adds flagsChanged. Escape still
+    /// abandons. The callback says whether it took the key; one it does not
+    /// know (a media key) leaves the recorder armed, as the Qt capture
+    /// button does.
+    func recordSingleKey(suspending model: AppModel,
+                         _ bind: @escaping (UInt16) -> Bool) {
+        begin(.singleKey, suspending: model)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) {
+            [weak self] event in
+            guard let self else { return event }
+            if event.type == .flagsChanged {
+                // Only a press records; the release of a modifier that was
+                // already down when recording started passes by. Modifier
+                // flag changes are not swallowed — hiding one from AppKit
+                // would desync its idea of what is held.
+                guard Self.modifierIsDown(event) else { return event }
+                if bind(event.keyCode) { stop() }
+                return event
+            }
+            if event.keyCode == escapeKeyCode {
+                stop()
+                return nil
+            }
+            if bind(event.keyCode) { stop() }
+            return nil
+        }
+    }
+
+    /// Whether this flagsChanged event is the press edge of the modifier its
+    /// keyCode names, read from the flag rather than assumed from the edge.
+    private static func modifierIsDown(_ event: NSEvent) -> Bool {
+        let family: NSEvent.ModifierFlags
+        switch event.keyCode {
+        case 54, 55: family = .command
+        case 56, 60: family = .shift
+        case 58, 61: family = .option
+        case 59, 62: family = .control
+        case 57: family = .capsLock
+        case 63: family = .function
+        default: return false
+        }
+        return event.modifierFlags.contains(family)
+    }
+
+    private func begin(_ newMode: Mode, suspending model: AppModel) {
+        stop()
+        model.beginShortcutRecording()
+        restoreShortcut = { model.endShortcutRecording() }
+        mode = newMode
+    }
+
     func stop() {
         if let monitor {
             NSEvent.removeMonitor(monitor)
         }
         monitor = nil
-        recording = false
+        mode = nil
         restoreShortcut?()
         restoreShortcut = nil
     }
@@ -78,6 +130,20 @@ struct ShortcutPane: View {
                     Text("Hold it to dictate while it is down, or press and release to "
                          + "start and press again to stop.")
                 }
+                LabeledContent {
+                    Button(singleKeyCaption) {
+                        recorder.recordSingleKey(suspending: model) { keyCode in
+                            model.bindSingleKey(macKeyCode: keyCode)
+                        }
+                    }
+                    .disabled(!model.shortcutSupported)
+                } label: {
+                    Text("Single key")
+                    Text("One key on its own, such as Right Option or F13.")
+                }
+                if model.shortcutNeedsAccessibility, !model.accessibilityEnabled {
+                    Button("Grant Accessibility Access") { model.requestAccessibility() }
+                }
             } header: {
                 Text("Shortcut")
             } footer: {
@@ -89,13 +155,24 @@ struct ShortcutPane: View {
     }
 
     private var caption: String {
-        if recorder.recording { return "Type a shortcut…" }
+        if recorder.mode == .combination { return "Type a shortcut…" }
         return model.shortcut.isEmpty ? "Record Shortcut" : model.shortcut
     }
 
+    private var singleKeyCaption: String {
+        recorder.mode == .singleKey ? "Press a key…" : "Record a Single Key"
+    }
+
     private var footnote: String {
+        if recorder.mode == .combination {
+            return "Press the keys you want, or Escape to keep the current one."
+        }
+        if recorder.mode == .singleKey {
+            return "Press any single key — a bare modifier like Right Option works — "
+                + "or Escape to keep the current one."
+        }
         if !model.shortcutProblem.isEmpty { return model.shortcutProblem }
-        if recorder.recording { return "Press the keys you want, or Escape to keep the current one." }
+        if !model.shortcutWarning.isEmpty { return model.shortcutWarning }
         return "macOS keeps no desktop-wide shortcut registry, so this binding is Speecher's own."
     }
 }
