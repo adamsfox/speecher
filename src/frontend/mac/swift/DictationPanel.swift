@@ -286,8 +286,6 @@ struct DictationPanelView: View {
 
     /// The phase in words, for the screen reader that can't see the symbol.
     private var phaseLabel: String { state.presentation.label }
-
-
 }
 
 /// The Linux waveform's fifteen dots, adaptive level and one-second travelling crest.
@@ -520,11 +518,13 @@ final class SpeecherDictationPanel {
             applyPreview(preview)
         }
         bridge.popupOAuthRefreshRequested = { [weak self] in
+            self?.state.phase = .live
             self?.state.status = "Renewing sign-in…"
             self?.state.preview = ""
             self?.syncFrameHeight()
         }
         bridge.popupListeningIndicatorRequested = { [weak self] in
+            self?.state.phase = .live
             self?.state.status = "Listening"
             self?.syncFrameHeight()
         }
