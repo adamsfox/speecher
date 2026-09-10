@@ -1,21 +1,21 @@
 # Native popup layout evidence
 
-Windows PNGs were captured from the composited Windows 11 VM desktop using `panelEvidenceGrabsForDocumentation` in `tests/test_win_frontend.cpp`. Both versions received a quiet level of 0.02 followed by forty levels of 0.7. Both captures receive identical preview text. The new compact layout elides older text when needed to retain the latest words.
+Both platforms use the new Linux layout from PR95: waveform or processing status on the left and latest preview text on the right, inside one capsule. Empty previews leave a compact waveform pill. Original native before images use `b67b7fc`.
 
-- Before: production popup source from `b67b7fc`, rebuilt with the current capture driver and read-only geometry probes.
-- After: `313b255`, built with MSVC and Qt 6.8.3. WinUI draws the rounded borders using its theme acrylic brush. The VM renders a flat fallback fill, so these captures do not establish desktop translucency. The waveform and latest words share one horizontal capsule. Empty previews leave only the compact waveform.
-- The notice screenshot enables the existing What's New state in temporary test preferences. It includes the notice's own window above the waveform.
+## Windows
 
-The after build passed all 21 CTest suites. On the interactive desktop, 21 native frontend tests passed, with one intentionally gated visual driver skipped. The banner-enabled run had the same result. The shared-capsule geometry assertion failed against the preceding stacked layout, then passed after the change. Unicode preview cases remained passing.
+After PNGs were captured from the composited Windows 11 VM desktop using final Windows source `313b255`, MSVC and Qt 6.8.3. Before and after received the same quiet input followed by forty speech-level samples and identical preview text. Temporary test preferences keep captures separate from the installed app.
 
-The captures cover speaking with and without preview, frozen bars at 40% opacity, transcribing, streamed refinement, the delivery receipt, an error with Dismiss, and the notice banner. Test preferences are temporary and separate from the installed application's settings.
+WinUI draws the rounded Border with its theme-aware in-app acrylic brush. The VM renders a flat fill, so these images establish layout and shape, not desktop translucency. The visible blue corners are desktop wallpaper.
 
-The reviewed Windows checks also cover long previews containing narrow letters and emoji sequences. The complete ellipsis and retained suffix must fit the capsule, and the newest words must remain intact. Error capsules retain the available screen-width budget.
+The build and all 21 CTest suites passed. Native desktop tests passed 21 cases with one deliberately gated visual driver skipped, both with and without notices. The new shared-capsule containment check fails against the stacked layout and passes against the final source. Long previews with narrow letters and emoji retain their newest text and fit the available width.
 
-## macOS captures
+Captures cover listening, preview, frozen bars, transcribing, streamed refinement, receipt, error with Dismiss and notices.
 
-The macOS PNGs are native panel captures from the existing macOS 26 panel-flow workflow. Baseline run [34398156576](https://github.com/firemonster612/speecher/actions/runs/34398156576) used `b67b7fc`; after run [34400730082](https://github.com/firemonster612/speecher/actions/runs/34400730082) used `d513ed2`, the final Swift source. Both workflows succeeded. The final panel-flow, banner-stack and Dictation-pane verdicts all passed.
+## macOS
 
-`macos-comparison.png` pairs listening, speech preview, transcribing, refining, streamed refinement and receipt. Frames were selected by state from the same scripted flow; animation timing and receipt delivery details differ between runs. The original transparent PNGs are included. Comparison sheets composite transparency onto a blue-grey background for readability; that colour is not an app change.
+The final Swift source is `1ea9262`. Native macOS 26 captures come from [workflow34461408821](https://github.com/firemonster612/speecher/actions/runs/34461408821), on commit `313b255`. The build, tests and capture workflow passed; panel-flow, banner-stack and Dictation-pane verdicts all passed. Baseline captures come from [workflow34398156576](https://github.com/firemonster612/speecher/actions/runs/34398156576) at `b67b7fc`.
 
-Final macOS frames were inspected alongside the baseline. Windows comparison pairs cover the gauge replacement and the shared waveform/transcript capsule; the remaining Windows after frames document processing, errors, frozen waveform and notices.
+The comparison pairs listening, speech preview, transcribing, refining, streamed refinement and receipt. Original transparent PNGs are included. Frames match states from the same scripted flow; animation timing and delivery details differ between runs. Comparison sheets preserve the source pixel scale and composite transparency onto a blue-grey background for readability. That background is not an app colour.
+
+All final captures and both comparison sheets were inspected.
