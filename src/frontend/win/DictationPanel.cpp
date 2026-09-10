@@ -51,8 +51,9 @@ using namespace Microsoft::UI::Xaml::Media;
 // every HWND move and resize scales them by the window's DPI.
 constexpr int panelWidth = 126;
 constexpr int panelHeight = 48;
-constexpr int previewChromeWidth = panelWidth + 10 + 24;
-constexpr int maximumPreviewWidth = 544;
+constexpr int previewChromeWidth = 48;
+constexpr int compactStripHeight = 28;
+constexpr int maximumPreviewWidth = 488;
 constexpr int screenEdgeMargin = 80;
 constexpr int bottomMargin = 28;
 constexpr int bannerGap = 12;
@@ -229,11 +230,13 @@ struct DictationPanel::Native : QObject {
         connect(session, &DictationSession::popupRefiningChanged, this,
                 [this](bool value) { setRefining(value); });
         connect(session, &DictationSession::popupOAuthRefreshRequested, this, [this] {
-            status = QStringLiteral("Refreshing sign-in...");
-            preview = status;
+            phase = Phase::Live;
+            status = QStringLiteral("Renewing sign-in…");
+            preview.clear();
             refresh();
         });
         connect(session, &DictationSession::popupListeningIndicatorRequested, this, [this] {
+            phase = Phase::Live;
             setStatus(QStringLiteral("Listening"));
         });
         connect(session, &DictationSession::popupMessageRequested, this,
@@ -276,7 +279,7 @@ struct DictationPanel::Native : QObject {
                 // change.
                 QTimer::singleShot(0, native, [native] {
                     native->refresh();
-                    native->resize(native->width);
+                    native->resize(native->width, native->height);
                     if (IsWindowVisible(native->window)) {
                         native->reposition();
                     }
@@ -310,9 +313,16 @@ struct DictationPanel::Native : QObject {
         source.Initialize(Microsoft::UI::GetWindowIdFromWindow(window));
 
         chrome = Microsoft::UI::Xaml::Markup::XamlReader::Load(
-            LR"(<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" CornerRadius="24" Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"/>)")
+            LR"(<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" />)")
             .as<Border>();
         chrome.RequestedTheme(win::requestedTheme(controller->settings()->theme()));
+        outline = Microsoft::UI::Xaml::Markup::XamlReader::Load(
+            LR"(<Path xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Fill="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"/>)")
+            .as<Microsoft::UI::Xaml::Shapes::Path>();
+        outline.HorizontalAlignment(HorizontalAlignment::Left);
+        outline.VerticalAlignment(VerticalAlignment::Top);
+        content = StackPanel();
+        content.VerticalAlignment(VerticalAlignment::Center);
         row = StackPanel();
         row.Orientation(Orientation::Horizontal);
         row.Spacing(10);
@@ -359,7 +369,8 @@ struct DictationPanel::Native : QObject {
         previewText.TextAlignment(TextAlignment::Center);
         previewText.MaxLines(1);
         previewText.TextTrimming(TextTrimming::CharacterEllipsis);
-        row.Children().Append(previewText);
+        previewText.Margin({24, 8, 24, 0});
+        content.Children().Append(previewText);
 
         dismiss = Button();
         dismiss.Content(box_value(L"Dismiss"));
@@ -369,7 +380,11 @@ struct DictationPanel::Native : QObject {
         });
         row.Children().Append(dismiss);
 
-        chrome.Child(row);
+        content.Children().Append(row);
+        Grid layers;
+        layers.Children().Append(outline);
+        layers.Children().Append(content);
+        chrome.Child(layers);
         chrome.Loaded([this](const auto &, const auto &) {
             loaded = true;
             if (!pendingGeneration) {
@@ -741,12 +756,13 @@ struct DictationPanel::Native : QObject {
                                  ? QString::fromUtf16(u"\uE8A9")
                                  : phaseGlyph(status, hasProblem))
                                 .toStdWString()));
-        const bool waiting = !hasProblem && !finished && phase != Phase::Live;
+        const bool renewing = status == QStringLiteral("Renewing sign-in…");
+        const bool waiting = !hasProblem && !finished && (phase != Phase::Live || renewing);
         const bool listening = !hasProblem && !finished && !waiting;
         const bool showPreview = !hasProblem && !finished && !preview.isEmpty();
         setShimmer(waiting);
         QString shown = hasProblem ? problem : finished ? status
-            : phase == Phase::Transcribing ? QStringLiteral("Transcribing…")
+            : renewing ? status : phase == Phase::Transcribing ? QStringLiteral("Transcribing…")
             : waiting ? QStringLiteral("Refining…") : QString();
         POINT pointer{};
         GetCursorPos(&pointer);
@@ -758,20 +774,21 @@ struct DictationPanel::Native : QObject {
         int wantedWidth = hasProblem || finished
             ? std::clamp(measuredTextWidth(shown) + (hasProblem ? 150 : 68),
                          minimumWidth, maximumWidth)
-            : panelWidth;
+            : waiting ? std::max(panelWidth, measuredTextWidth(shown) + 32) : panelWidth;
         if (showPreview) {
             const int transcriptMaximum = std::min(maximumPreviewWidth, maximumWidth);
             const QString visible = fitPreview(preview, transcriptMaximum - previewChromeWidth);
-            wantedWidth = measuredTextWidth(visible) + previewChromeWidth;
+            wantedWidth = std::max(panelWidth + previewChromeWidth,
+                                   measuredTextWidth(visible) + previewChromeWidth);
             previewText.Text(hstring(visible.toStdWString()));
             previewText.Width(wantedWidth - previewChromeWidth);
         }
         previewText.Visibility(showPreview ? Visibility::Visible : Visibility::Collapsed);
-        chrome.Padding(hasProblem || finished ? Thickness{12, 0, 12, 0}
-                                              : Thickness{0, 0, showPreview ? 24.0 : 0.0, 0});
+        row.Padding(hasProblem || finished ? Thickness{12, 0, 12, 0} : Thickness{});
+        content.Padding({0, 0, 0, showPreview ? 4.0 : 0.0});
         text.Text(hstring(shown.toStdWString()));
         text.Visibility(listening ? Visibility::Collapsed : Visibility::Visible);
-        text.Width(hasProblem ? wantedWidth - 150 : finished ? wantedWidth - 68 : panelWidth);
+        text.Width(hasProblem ? wantedWidth - 150 : finished ? wantedWidth - 68 : wantedWidth);
         text.TextAlignment(TextAlignment::Center);
         row.HorizontalAlignment(HorizontalAlignment::Center);
         glyph.Visibility(hasProblem || finished ? Visibility::Visible : Visibility::Collapsed);
@@ -784,7 +801,17 @@ struct DictationPanel::Native : QObject {
             barTimer.stop();
         }
         dismiss.Visibility(hasProblem ? Visibility::Visible : Visibility::Collapsed);
-        resize(wantedWidth);
+        // Measure the native font so both the contour and strip clear its ink.
+        probe.Text(L"Ag");
+        probe.Measure({std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity()});
+        const int lineHeight = int(std::ceil(probe.DesiredSize().Height));
+        const int stripHeight = showPreview ? waiting ? lineHeight + 6 : compactStripHeight : panelHeight;
+        row.Height(stripHeight);
+        bars.Height(stripHeight);
+        const int wantedHeight = showPreview ? 8 + lineHeight + stripHeight + 4 : panelHeight;
+        resize(wantedWidth, wantedHeight);
+        updateOutline(showPreview ? 8 + lineHeight + 6 : 0,
+                      waiting ? measuredTextWidth(shown) : 92.8);
         if (IsWindowVisible(window)) {
             reposition();
         }
@@ -838,11 +865,72 @@ struct DictationPanel::Native : QObject {
         return ellipsis + value.mid(boundaries[first]);
     }
 
-    void resize(int newWidth)
+    // Same circular end caps and concave joins as the accepted Qt preview.
+    void updateOutline(double shoulder, double inkWidth)
+    {
+        const double cap = shoulder / 2;
+        const double half = inkWidth / 2 + 10;
+        const double left = width / 2.0 - half;
+        const double right = width / 2.0 + half;
+        const double lobeHeight = height - shoulder;
+        double fillet = std::min(12.0, left - cap);
+        double radius = std::min(24.0, half);
+        if (fillet + radius > lobeHeight) {
+            const double scale = lobeHeight / (fillet + radius);
+            fillet *= scale;
+            radius *= scale;
+        }
+        PathFigure figure;
+        figure.IsClosed(true);
+        const auto line = [&](double x, double y) {
+            LineSegment segment;
+            segment.Point({float(x), float(y)});
+            figure.Segments().Append(segment);
+        };
+        const auto arc = [&](double x, double y, double r, SweepDirection direction) {
+            ArcSegment segment;
+            segment.Point({float(x), float(y)});
+            segment.Size({float(r), float(r)});
+            segment.SweepDirection(direction);
+            figure.Segments().Append(segment);
+        };
+        if (shoulder <= 0 || lobeHeight <= 0 || fillet < 4) {
+            radius = std::min(24.0, height / 2.0);
+            figure.StartPoint({float(radius), 0});
+            line(width - radius, 0);
+            arc(width, radius, radius, SweepDirection::Clockwise);
+            line(width, height - radius);
+            arc(width - radius, height, radius, SweepDirection::Clockwise);
+            line(radius, height);
+            arc(0, height - radius, radius, SweepDirection::Clockwise);
+            line(0, radius);
+            arc(radius, 0, radius, SweepDirection::Clockwise);
+        } else {
+            figure.StartPoint({float(cap), 0});
+            line(width - cap, 0);
+            arc(width - cap, shoulder, cap, SweepDirection::Clockwise);
+            line(right + fillet, shoulder);
+            arc(right, shoulder + fillet, fillet, SweepDirection::Counterclockwise);
+            line(right, height - radius);
+            arc(right - radius, height, radius, SweepDirection::Clockwise);
+            line(left + radius, height);
+            arc(left, height - radius, radius, SweepDirection::Clockwise);
+            line(left, shoulder + fillet);
+            arc(left - fillet, shoulder, fillet, SweepDirection::Counterclockwise);
+            line(cap, shoulder);
+            arc(cap, 0, cap, SweepDirection::Clockwise);
+        }
+        PathGeometry geometry;
+        geometry.Figures().Append(figure);
+        outline.Data(geometry);
+    }
+
+    void resize(int newWidth, int newHeight = panelHeight)
     {
         width = newWidth;
+        height = newHeight;
         if (source) {
-            source.SiteBridge().MoveAndResize({0, 0, px(width), px(panelHeight)});
+            source.SiteBridge().MoveAndResize({0, 0, px(width), px(height)});
         }
     }
 
@@ -856,7 +944,7 @@ struct DictationPanel::Native : QObject {
         MONITORINFO monitor{sizeof(monitor)};
         GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor);
         const int physicalWidth = px(width);
-        const int physicalHeight = px(panelHeight);
+        const int physicalHeight = px(height);
         const int x = monitor.rcWork.left
             + (monitor.rcWork.right - monitor.rcWork.left - physicalWidth) / 2;
         const int y = monitor.rcWork.bottom - physicalHeight - px(bottomMargin);
@@ -890,6 +978,8 @@ struct DictationPanel::Native : QObject {
     DesktopWindowXamlSource source{nullptr};
     DesktopWindowXamlSource bannerSource{nullptr};
     Border chrome{nullptr};
+    Microsoft::UI::Xaml::Shapes::Path outline{nullptr};
+    StackPanel content{nullptr};
     StackPanel bannerRoot{nullptr};
     StackPanel updateRow{nullptr};
     TextBlock updateText{nullptr};
@@ -920,6 +1010,7 @@ struct DictationPanel::Native : QObject {
     QString preview;
     QString problem;
     int width = panelWidth;
+    int height = panelHeight;
     quint64 pendingGeneration = 0;
     quint64 presentedGeneration = 0;
     StackPanel row{nullptr};
