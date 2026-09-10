@@ -142,6 +142,7 @@ private:
     bool m_shortcutStartedSession = false;
     bool m_shortcutDown = false;
     bool m_shortcutReleaseSeen = false;
+    QTimer *m_pushToTalkStart = nullptr;
     quint64 m_microphoneStartGeneration = 0;
     bool m_microphoneStartPending = false;
 };

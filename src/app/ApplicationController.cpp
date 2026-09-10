@@ -38,9 +38,14 @@
 namespace speecher {
 namespace {
 
-// A shortcut held longer than this is push-to-talk and ends with the key;
-// anything shorter is a tap and stays a plain toggle.
-constexpr qint64 pushToTalkHoldMs = 400;
+// Hybrid: a press toggles, and a hold longer than this is push-to-talk that
+// ends with the key. 400 ms suited a two-hand chord; a one-finger tap on a
+// single key lands and lifts in about 100 ms, and a deliberate hold is past
+// 250 ms before the first word is out, so this sits clear of both gestures.
+constexpr qint64 hybridHoldMs = 250;
+// Push-to-talk: a press that lifts inside this window is a brush of the key,
+// not a dictation, and must leave no trace.
+constexpr int pushToTalkMisfireMs = 200;
 #ifdef Q_OS_MACOS
 constexpr int accessibilityPollMs = 5000;
 #endif
@@ -58,6 +63,7 @@ ApplicationController::ApplicationController(bool popupOnly,
     , m_providers(new ProviderRegistry(this))
     , m_shortcutBinder(m_platform->createGlobalShortcutBinder(this))
     , m_ipc(new SingleInstanceIpc(m_platform, this))
+    , m_pushToTalkStart(new QTimer(this))
 {
     const QString currentVersion = QStringLiteral(SPEECHER_VERSION);
     const qint64 currentBuildNumber = SPEECHER_BUILD_NUMBER;
@@ -94,6 +100,9 @@ ApplicationController::ApplicationController(bool popupOnly,
             &GlobalShortcutBinder::deactivated,
             this,
             &ApplicationController::handleShortcutReleased);
+    m_pushToTalkStart->setSingleShot(true);
+    m_pushToTalkStart->setInterval(pushToTalkMisfireMs);
+    connect(m_pushToTalkStart, &QTimer::timeout, this, &ApplicationController::startListening);
     connect(m_shortcutBinder,
             &GlobalShortcutBinder::bindingChanged,
             this,
@@ -444,8 +453,8 @@ bool ApplicationController::sessionActive() const
     return state == DictationState::Starting || state == DictationState::Listening;
 }
 
-// Binders that report key release (macOS) drive both gestures from one binding:
-// the press toggles, and a long enough hold ends the session it started.
+// One binding drives every activation mode; the mode decides what a press and
+// a release do. The auto-repeat guard below applies to all of them.
 void ApplicationController::handleShortcutPressed()
 {
     // Key auto-repeat while held must not toggle again. A second press with no
@@ -464,6 +473,17 @@ void ApplicationController::handleShortcutPressed()
     m_shortcutDown = true;
     m_shortcutPress.start();
     m_shortcutStartedSession = !sessionActive() && !m_microphoneStartPending;
+    if (m_shortcutStartedSession
+        && m_settings->shortcutActivationMode() == ShortcutActivationMode::PushToTalk) {
+        // Deferred rather than started and cancelled: cancelling a Starting
+        // session still opens the microphone and shows the popup for an
+        // instant, which is a trace. On a desktop that never reports release
+        // the timer still fires, and the next press ends the session as in
+        // every mode, so push-to-talk degrades to toggle there instead of
+        // wedging.
+        m_pushToTalkStart->start();
+        return;
+    }
     toggle();
 }
 
@@ -475,9 +495,22 @@ void ApplicationController::handleShortcutReleased()
         return;
     }
     m_shortcutStartedSession = false;
-    if ((sessionActive() || m_microphoneStartPending)
-        && m_shortcutPress.elapsed() > pushToTalkHoldMs) {
-        stopListening();
+    const bool starting = sessionActive() || m_microphoneStartPending;
+    switch (m_settings->shortcutActivationMode()) {
+    case ShortcutActivationMode::Toggle:
+        return;
+    case ShortcutActivationMode::PushToTalk:
+        if (m_pushToTalkStart->isActive()) {
+            m_pushToTalkStart->stop();
+        } else if (starting) {
+            stopListening();
+        }
+        return;
+    case ShortcutActivationMode::Hybrid:
+        if (starting && m_shortcutPress.elapsed() > hybridHoldMs) {
+            stopListening();
+        }
+        return;
     }
 }
 
@@ -503,6 +536,7 @@ void ApplicationController::startListening()
 
 void ApplicationController::stopListening()
 {
+    m_pushToTalkStart->stop();
     ++m_microphoneStartGeneration;
     m_microphoneStartPending = false;
     m_session->stopListening();

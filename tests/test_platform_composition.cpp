@@ -386,6 +386,61 @@ private slots:
         QCOMPARE(controller.session()->state(), DictationState::Idle);
     }
 
+    // Push-to-talk starts nothing for a brush of the key, and a real hold
+    // dictates until the key comes up.
+    void pushToTalkIgnoresABrushAndEndsWithTheKey()
+    {
+        const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
+        ApplicationController controller(true, platform);
+        const bool setupCompleted = controller.settings()->setupCompleted();
+        const ShortcutActivationMode mode = controller.settings()->shortcutActivationMode();
+        const auto restore = qScopeGuard([&] {
+            controller.settings()->setSetupCompleted(setupCompleted);
+            controller.settings()->setShortcutActivationMode(mode);
+        });
+        controller.settings()->setSetupCompleted(true);
+        controller.settings()->setShortcutActivationMode(ShortcutActivationMode::PushToTalk);
+
+        emit platform->binder->activated();
+        QTest::qSleep(50);
+        emit platform->binder->deactivated();
+        QTest::qWait(300);
+        QVERIFY(!platform->microphoneAnswer);
+        QCOMPARE(controller.session()->state(), DictationState::Idle);
+
+        emit platform->binder->activated();
+        QTRY_VERIFY(platform->microphoneAnswer);
+        platform->microphoneAnswer(true);
+        QCOMPARE(controller.session()->state(), DictationState::Starting);
+        emit platform->binder->deactivated();
+        QCOMPARE(controller.session()->state(), DictationState::Idle);
+    }
+
+    void toggleModeIgnoresReleaseAndTogglesOnEveryPress()
+    {
+        const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
+        ApplicationController controller(true, platform);
+        const bool setupCompleted = controller.settings()->setupCompleted();
+        const ShortcutActivationMode mode = controller.settings()->shortcutActivationMode();
+        const auto restore = qScopeGuard([&] {
+            controller.settings()->setSetupCompleted(setupCompleted);
+            controller.settings()->setShortcutActivationMode(mode);
+        });
+        controller.settings()->setSetupCompleted(true);
+        controller.settings()->setShortcutActivationMode(ShortcutActivationMode::Toggle);
+
+        emit platform->binder->activated();
+        QVERIFY(platform->microphoneAnswer);
+        platform->microphoneAnswer(true);
+        QCOMPARE(controller.session()->state(), DictationState::Starting);
+        // A hold that hybrid would treat as push-to-talk changes nothing here.
+        QTest::qSleep(300);
+        emit platform->binder->deactivated();
+        QCOMPARE(controller.session()->state(), DictationState::Starting);
+        emit platform->binder->activated();
+        QCOMPARE(controller.session()->state(), DictationState::Idle);
+    }
+
     void stopCancelsPendingMicrophoneStart()
     {
         const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
