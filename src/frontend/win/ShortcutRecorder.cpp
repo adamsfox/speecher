@@ -142,7 +142,7 @@ void ShortcutRecorder::appendPane(const StackPanel &column, PaneHost &host)
         return header;
     }());
 
-    const QString display = host.controller->globalShortcut().toString(QKeySequence::NativeText);
+    const QString display = host.controller->globalShortcut().displayText();
     Button recorder;
     recorder.Content(box_value(host.shortcutRecording
                                    ? hstring(L"Type a shortcut…")

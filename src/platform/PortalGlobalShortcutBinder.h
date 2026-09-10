@@ -31,9 +31,9 @@ public:
     QString unsupportedReason() const override;
     void bind() override;
     void registerShortcut() override;
-    QKeySequence shortcut() const override;
+    ShortcutBinding shortcut() const override;
     QString shortcutDisplay() const override;
-    bool setShortcut(const QKeySequence &shortcut, QString *error = nullptr) override;
+    bool setShortcut(const ShortcutBinding &shortcut, QString *error = nullptr) override;
 
 private slots:
     void handleRequestResponse(uint response, const QVariantMap &results);

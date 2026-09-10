@@ -342,7 +342,7 @@ bool ApplicationController::globalShortcutUsesDesktopChooser() const
     return m_shortcutBinder->usesDesktopShortcutChooser();
 }
 
-QKeySequence ApplicationController::globalShortcut() const
+ShortcutBinding ApplicationController::globalShortcut() const
 {
     return m_shortcutBinder->shortcut();
 }
@@ -352,7 +352,7 @@ QString ApplicationController::globalShortcutDisplay() const
     return m_shortcutBinder->shortcutDisplay();
 }
 
-bool ApplicationController::setGlobalShortcut(const QKeySequence &shortcut, QString *error)
+bool ApplicationController::setGlobalShortcut(const ShortcutBinding &shortcut, QString *error)
 {
     return m_shortcutBinder->setShortcut(shortcut, error);
 }

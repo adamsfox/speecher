@@ -137,14 +137,21 @@ void WinGlobalShortcutBinder::bind()
     }
 }
 
-QKeySequence WinGlobalShortcutBinder::shortcut() const
+ShortcutBinding WinGlobalShortcutBinder::shortcut() const
 {
     return m_shortcut;
 }
 
-bool WinGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString *error)
+bool WinGlobalShortcutBinder::setShortcut(const ShortcutBinding &shortcut, QString *error)
 {
-    if (!registerShortcut(shortcut, error)) {
+    const QString reason = unsupportedBindingReason(shortcut);
+    if (!reason.isEmpty()) {
+        if (error) {
+            *error = reason;
+        }
+        return false;
+    }
+    if (!registerShortcut(shortcut.combination(), error)) {
         return false;
     }
     if (m_suspensionCount > 0) {
@@ -152,8 +159,8 @@ bool WinGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString 
         m_resumeBinding = true;
         unregisterShortcut();
     }
-    m_shortcut = shortcut;
-    storeShortcut(shortcut);
+    m_shortcut = shortcut.combination();
+    storeShortcut(m_shortcut);
     emit bindingChanged();
     return true;
 }

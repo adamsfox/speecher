@@ -5,9 +5,9 @@
 
 #include <QElapsedTimer>
 #include <QObject>
-#include <QKeySequence>
 
 #include "app/SingleInstanceIpc.h"
+#include "core/ShortcutBinding.h"
 
 class QLocalSocket;
 class QTimer;
@@ -66,9 +66,9 @@ public:
     bool globalShortcutsSupported() const;
     bool globalShortcutSupportKnown() const;
     bool globalShortcutUsesDesktopChooser() const;
-    QKeySequence globalShortcut() const;
+    ShortcutBinding globalShortcut() const;
     QString globalShortcutDisplay() const;
-    bool setGlobalShortcut(const QKeySequence &shortcut, QString *error = nullptr);
+    bool setGlobalShortcut(const ShortcutBinding &shortcut, QString *error = nullptr);
     // Lets a shortcut recorder see the bound combination as a key event.
     void suspendGlobalShortcut();
     QString resumeGlobalShortcut();

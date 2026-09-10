@@ -15,8 +15,8 @@ public:
     bool supported() const override;
     QString unsupportedReason() const override;
     void bind() override;
-    QKeySequence shortcut() const override;
-    bool setShortcut(const QKeySequence &shortcut, QString *error = nullptr) override;
+    ShortcutBinding shortcut() const override;
+    bool setShortcut(const ShortcutBinding &shortcut, QString *error = nullptr) override;
     bool removeRegistration(QString *error = nullptr) override;
 
 private:

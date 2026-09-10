@@ -176,7 +176,7 @@ LinuxGlobalShortcutSetupPage::LinuxGlobalShortcutSetupPage(
             m_setShortcut,
             [this](const QKeySequence &sequence) {
                 m_setShortcut->setEnabled(
-                    !sequence.isEmpty() && sequence != m_controller.globalShortcut());
+                    !sequence.isEmpty() && sequence != m_controller.globalShortcut().combination());
             });
     connect(m_setShortcut, &QPushButton::clicked, this, [this] { setShortcut(); });
     connect(m_chooseShortcut, &QPushButton::clicked, this, [this] { chooseShortcut(); });
@@ -365,11 +365,11 @@ void LinuxGlobalShortcutSetupPage::refreshControls()
 
     if (!m_sequence->hasFocus()) {
         const QSignalBlocker blocker(m_sequence);
-        m_sequence->setKeySequence(m_controller.globalShortcut());
+        m_sequence->setKeySequence(m_controller.globalShortcut().combination());
     }
     m_setShortcut->setEnabled(
         !m_sequence->keySequence().isEmpty()
-        && m_sequence->keySequence() != m_controller.globalShortcut());
+        && m_sequence->keySequence() != m_controller.globalShortcut().combination());
 }
 
 void LinuxGlobalShortcutSetupPage::showRegistrationResult(bool bound,

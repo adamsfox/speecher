@@ -184,14 +184,21 @@ void MacGlobalShortcutBinder::bind()
     }
 }
 
-QKeySequence MacGlobalShortcutBinder::shortcut() const
+ShortcutBinding MacGlobalShortcutBinder::shortcut() const
 {
     return m_shortcut;
 }
 
-bool MacGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString *error)
+bool MacGlobalShortcutBinder::setShortcut(const ShortcutBinding &shortcut, QString *error)
 {
-    if (!registerHotKey(shortcut, error)) {
+    const QString reason = unsupportedBindingReason(shortcut);
+    if (!reason.isEmpty()) {
+        if (error) {
+            *error = reason;
+        }
+        return false;
+    }
+    if (!registerHotKey(shortcut.combination(), error)) {
         return false;
     }
     if (m_suspensionCount > 0) {
@@ -199,8 +206,8 @@ bool MacGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString 
         m_resumeBinding = true;
         unregisterHotKey();
     }
-    m_shortcut = shortcut;
-    storeShortcut(shortcut);
+    m_shortcut = shortcut.combination();
+    storeShortcut(m_shortcut);
     return true;
 }
 

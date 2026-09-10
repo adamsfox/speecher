@@ -998,7 +998,7 @@ Qt::KeyboardModifiers qtModifiersForFlags(NSUInteger flags)
 
 - (NSString *)shortcutDisplay
 {
-    return _state->controller->globalShortcut().toString(QKeySequence::NativeText).toNSString();
+    return _state->controller->globalShortcut().displayText().toNSString();
 }
 
 - (NSString *)bindShortcutWithCharacters:(NSString *)characters modifierFlags:(NSUInteger)flags

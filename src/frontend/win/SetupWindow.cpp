@@ -611,11 +611,11 @@ struct SetupWindow::Native {
         TextBox recorder;
         recorder.IsReadOnly(true);
         recorder.PlaceholderText(L"Press a shortcut");
-        QKeySequence current = controller->globalShortcut();
+        ShortcutBinding current = controller->globalShortcut();
         if (current.isEmpty()) {
             current = WinGlobalShortcutBinder::defaultShortcut();
         }
-        recorder.Text(hstring(current.toString(QKeySequence::NativeText).toStdWString()));
+        recorder.Text(hstring(current.displayText().toStdWString()));
         shortcutStatus = textBlock(QStringLiteral("The default is Ctrl+Alt+D."));
         recorder.KeyDown([this, recorder](const auto &, const Input::KeyRoutedEventArgs &event) {
             const int virtualKey = static_cast<int>(event.Key());

@@ -364,7 +364,7 @@ private slots:
                                                    | NSEventModifierFlagOption] == nil);
         [bridge endShortcutRecording];
 
-        QCOMPARE(controller.globalShortcut(),
+        QCOMPARE(controller.globalShortcut().combination(),
                  QKeySequence(Qt::META | Qt::ALT | Qt::Key_G));
         QVERIFY(hotKeyComboIsFree());
     }

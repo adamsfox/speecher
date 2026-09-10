@@ -229,6 +229,7 @@ set(SPEECHER_DOMAIN_SOURCES
   src/core/OutputFormat.cpp
   src/core/PasteRules.cpp
   src/core/SettingsStore.cpp
+  src/core/ShortcutBinding.cpp
   src/core/settings/CorrectionSettingsCodec.cpp
   src/core/settings/SettingsCodecs.cpp
   src/core/settings/SettingsSchema.cpp
@@ -253,6 +254,7 @@ set(SPEECHER_DOMAIN_HEADERS
   src/core/OutputFormat.h
   src/core/PasteRules.h
   src/core/SettingsStore.h
+  src/core/ShortcutBinding.h
   src/core/settings/CorrectionSettingsCodec.h
   src/core/settings/SettingsCodecs.h
   src/core/settings/SettingsKeys.h
@@ -620,7 +622,8 @@ qt_add_resources(speecher_domain release_history
   FILES "${SPEECHER_RELEASE_HISTORY_DIR}/history.log"
 )
 target_include_directories(speecher_domain PUBLIC src)
-target_link_libraries(speecher_domain PUBLIC Qt6::Core)
+# Gui for QKeySequence, which ShortcutBinding carries for key combinations.
+target_link_libraries(speecher_domain PUBLIC Qt6::Core Qt6::Gui)
 
 add_library(speecher_workflow STATIC
   ${SPEECHER_WORKFLOW_SOURCES}

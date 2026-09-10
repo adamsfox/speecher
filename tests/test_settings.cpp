@@ -1,6 +1,7 @@
 #include "common/test_prelude.h"
 #ifdef SPEECHER_WITH_QKEYCHAIN
 #include "core/KeyringResult.h"
+#include "core/ShortcutBinding.h"
 #endif
 
 using namespace speecher;
@@ -50,6 +51,33 @@ private slots:
         newSettings.remove(QStringLiteral("output/method"));
         QVERIFY2(migrateSettingsIdentity(newSettings, oldSettings, &error), qPrintable(error));
         QVERIFY(!newSettings.contains(QStringLiteral("output/method")));
+    }
+
+    // Old installs hold QKeySequence text under shortcuts/toggleDictation, so
+    // that form must keep reading as a combination while a single key gets its
+    // own prefix.
+    void shortcutBindingRoundTripsBothFormsAndTheLegacyValue()
+    {
+        const ShortcutBinding combo(QKeySequence(Qt::META | Qt::ALT | Qt::Key_D));
+        QCOMPARE(combo.toString(), QStringLiteral("Meta+Alt+D"));
+        QCOMPARE(ShortcutBinding::fromString(QStringLiteral("Meta+Alt+D")), combo);
+        QVERIFY(!combo.isSingleKey());
+
+        const ShortcutBinding rightAlt = ShortcutBinding::singleKey(QStringLiteral("AltRight"));
+        QVERIFY(rightAlt.isSingleKey());
+        QCOMPARE(rightAlt.toString(), QStringLiteral("key:AltRight"));
+        QCOMPARE(ShortcutBinding::fromString(QStringLiteral("key:AltRight")), rightAlt);
+        QCOMPARE(rightAlt.keyCode(), QStringLiteral("AltRight"));
+#ifdef Q_OS_MACOS
+        QCOMPARE(rightAlt.displayText(), QStringLiteral("Right Option"));
+#else
+        QCOMPARE(rightAlt.displayText(), QStringLiteral("Right Alt"));
+#endif
+        QVERIFY(rightAlt.combination().isEmpty());
+
+        QVERIFY(ShortcutBinding().isEmpty());
+        QVERIFY(ShortcutBinding::singleKey(QStringLiteral("NotAKey")).isEmpty());
+        QVERIFY(ShortcutBinding::fromString(QString()).isEmpty());
     }
 
     void settingsDefaults()

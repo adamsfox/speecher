@@ -106,7 +106,9 @@ private slots:
         QCOMPARE(shortcut.m_hotKeyId, 0);
         QCOMPARE(shortcut.resume(), QString());
         QVERIFY(shortcut.m_hotKeyId != 0);
-        QCOMPARE(shortcut.shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F24));
+        QCOMPARE(shortcut.shortcut().combination(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F24));
+        QVERIFY(!shortcut.setShortcut(ShortcutBinding::singleKey(QStringLiteral("AltRight")), &error));
+        QVERIFY(!error.isEmpty());
     }
 
     void keyboardBreakReleasesSuspendedShortcutOnce()

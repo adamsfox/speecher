@@ -11,7 +11,9 @@
 #include "platform/mac/MacMediaController.h"
 #include "platform/GlobalShortcutBinder.h"
 #ifdef Q_OS_LINUX
+#include "platform/KGlobalAccelShortcutBinder.h"
 #include "platform/LinuxDesktopIntegration.h"
+#include "platform/PortalGlobalShortcutBinder.h"
 #include "ui/SetupAssistant.h"
 #include "ui/setup/LinuxGlobalShortcutSetupPage.h"
 #include "ui/setup/SetupPages.h"
@@ -70,12 +72,12 @@ public:
         bindCount += 1;
     }
 
-    QKeySequence shortcut() const override
+    ShortcutBinding shortcut() const override
     {
         return m_shortcut;
     }
 
-    bool setShortcut(const QKeySequence &shortcut, QString *error) override
+    bool setShortcut(const ShortcutBinding &shortcut, QString *error) override
     {
         if (!setShortcutError.isEmpty()) {
             if (error) {
@@ -98,7 +100,7 @@ public:
         registerCount += 1;
     }
 
-    void publishShortcut(const QKeySequence &shortcut)
+    void publishShortcut(const ShortcutBinding &shortcut)
     {
         m_shortcut = shortcut;
         emit bindingChanged();
@@ -125,7 +127,7 @@ public:
     QString setShortcutError;
 
 private:
-    QKeySequence m_shortcut;
+    ShortcutBinding m_shortcut;
 };
 
 // Answers for itself everything the seam added, and delegates the ports it does
@@ -568,7 +570,7 @@ private slots:
         platform->binder->publishShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
         QCOMPARE(sequence->keySequence(), chosen);
         setShortcut->click();
-        QCOMPARE(controller.globalShortcut(), chosen);
+        QCOMPARE(controller.globalShortcut().combination(), chosen);
         QVERIFY(!setShortcut->isEnabled());
 
         bool hasStatus = false;
@@ -1329,8 +1331,29 @@ private slots:
 
         const QKeySequence chosen(Qt::META | Qt::ALT | Qt::Key_D);
         QVERIFY(controller.setGlobalShortcut(chosen));
-        QCOMPARE(controller.globalShortcut(), chosen);
+        QCOMPARE(controller.globalShortcut().combination(), chosen);
     }
+
+#ifdef Q_OS_LINUX
+    // No shipped binder watches a bare key yet, so each turns a single-key
+    // binding away with a reason the UI can show, while combinations pass the
+    // per-binding check as before.
+    void bindersRefuseASingleKeyWithAReason()
+    {
+        const ShortcutBinding rightAlt = ShortcutBinding::singleKey(QStringLiteral("AltRight"));
+        const ShortcutBinding combo(QKeySequence(Qt::META | Qt::ALT | Qt::Key_D));
+        QList<GlobalShortcutBinder *> binders{new KGlobalAccelShortcutBinder(nullptr),
+                                              new PortalGlobalShortcutBinder(nullptr)};
+        for (GlobalShortcutBinder *binder : binders) {
+            const std::unique_ptr<GlobalShortcutBinder> owned(binder);
+            QVERIFY(binder->unsupportedBindingReason(combo).isEmpty());
+            QVERIFY(!binder->unsupportedBindingReason(rightAlt).isEmpty());
+            QString error;
+            QVERIFY(!binder->setShortcut(rightAlt, &error));
+            QVERIFY(!error.isEmpty());
+        }
+    }
+#endif
 
     void deferredStartupBindsTheShortcutAndPublishesAccessibility()
     {
