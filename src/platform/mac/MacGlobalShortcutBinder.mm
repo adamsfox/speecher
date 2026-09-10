@@ -118,8 +118,11 @@ QKeySequence savedShortcut()
     QSettings settings(QSettings::defaultFormat(), QSettings::UserScope,
                        QString::fromLatin1(SettingsKeys::Organization),
                        QString::fromLatin1(SettingsKeys::Application));
-    const QString stored = settings.value(SettingsKeys::GlobalShortcut).toString();
-    return stored.isEmpty() ? defaultShortcut() : QKeySequence(stored);
+    // The stored value can be a single key ("key:…"), which belongs to the
+    // single-key binder and must not parse as a sequence here.
+    const ShortcutBinding stored =
+        ShortcutBinding::fromString(settings.value(SettingsKeys::GlobalShortcut).toString());
+    return stored.combination().isEmpty() ? defaultShortcut() : stored.combination();
 }
 
 void storeShortcut(const QKeySequence &shortcut)
@@ -231,8 +234,24 @@ QString MacGlobalShortcutBinder::resume()
     return error;
 }
 
+// The router calls this when a single key replaces the combination: the
+// Carbon hotkey has to go now, not at the next launch, or both would fire.
+bool MacGlobalShortcutBinder::removeRegistration(QString *)
+{
+    m_resumeBinding = false;
+    unregisterHotKey();
+    return true;
+}
+
 void MacGlobalShortcutBinder::refreshKeyboardLayout()
 {
+    // A layout change can move an unchanged logical shortcut to another key,
+    // but only a live (or suspension-parked) registration should follow it:
+    // while a single key holds the binding, the router left this binder
+    // unbound and a layout change must not sneak the combination back.
+    if (!m_hotKey && !m_resumeBinding) {
+        return;
+    }
     bind();
 }
 

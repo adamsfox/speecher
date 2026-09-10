@@ -4,9 +4,11 @@
 #include "core/SettingsStore.h"
 #include "output/TextDelivery.h"
 #include "output/mac/MacPasteDelivery.h"
+#include "platform/RoutingShortcutBinder.h"
 #include "platform/audio/QtAudioInput.h"
 #include "platform/mac/MacGlobalShortcutBinder.h"
 #include "platform/mac/MacMediaController.h"
+#include "platform/mac/MacSingleKeyShortcutBinder.h"
 #include "platform/mac/MacPopupPositioner.h"
 #include "platform/mac/MacScreenshotContextProvider.h"
 #include "platform/mac/MacTargetProvider.h"
@@ -225,7 +227,11 @@ PopupPositioner *MacComposition::createPopupPositioner(QObject *parent) const
 
 GlobalShortcutBinder *MacComposition::createGlobalShortcutBinder(QObject *parent) const
 {
-    return new MacGlobalShortcutBinder(parent);
+    // Carbon hot keys take the combinations; the NSEvent monitor binder takes
+    // a single key, which no hotkey API accepts.
+    return new RoutingShortcutBinder(new MacGlobalShortcutBinder,
+                                     new MacSingleKeyShortcutBinder,
+                                     parent);
 }
 
 AccessibilityState MacComposition::accessibilityState() const

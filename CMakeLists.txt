@@ -335,7 +335,9 @@ set(SPEECHER_PLATFORM_SOURCES
   src/output/QtClipboardDelivery.cpp
   src/output/TextDelivery.cpp
   src/platform/CorrectionDiff.cpp
+  src/platform/RoutingShortcutBinder.cpp
   src/platform/ScreenshotImage.cpp
+  src/platform/SingleKeyShortcutBinder.cpp
   src/platform/audio/AudioPcmConverter.cpp
   src/platform/audio/QtAudioInput.cpp
   src/platform/audio/WavFileAudioInput.cpp
@@ -353,7 +355,9 @@ set(SPEECHER_PLATFORM_HEADERS
   src/platform/GlobalShortcutBinder.h
   src/platform/PopupPositioner.h
   src/platform/PopupSurface.h
+  src/platform/RoutingShortcutBinder.h
   src/platform/ScreenshotImage.h
+  src/platform/SingleKeyShortcutBinder.h
   src/platform/audio/AudioPcmConverter.h
   src/platform/audio/QtAudioInput.h
   src/platform/audio/WavFileAudioInput.h
@@ -375,8 +379,6 @@ set(SPEECHER_PLATFORM_LINUX_SOURCES
   src/platform/MediaPauseController.cpp
   src/platform/PortalScreenshotContextProvider.cpp
   src/platform/PortalGlobalShortcutBinder.cpp
-  src/platform/RoutingShortcutBinder.cpp
-  src/platform/SingleKeyShortcutBinder.cpp
   src/platform/WaylandLayerShell.cpp
   src/platform/XInput2ShortcutBinder.cpp
   src/platform/atspi/AtSpiAccess.cpp
@@ -401,8 +403,6 @@ set(SPEECHER_PLATFORM_LINUX_HEADERS
   src/platform/MediaPauseController.h
   src/platform/PortalScreenshotContextProvider.h
   src/platform/PortalGlobalShortcutBinder.h
-  src/platform/RoutingShortcutBinder.h
-  src/platform/SingleKeyShortcutBinder.h
   src/platform/WaylandLayerShell.h
   src/platform/XInput2ShortcutBinder.h
   src/setup/KeywatchProtocol.h
@@ -420,6 +420,7 @@ set(SPEECHER_PLATFORM_MAC_SOURCES
   src/platform/mac/MacMediaController.mm
   src/platform/mac/MacPopupPositioner.mm
   src/platform/mac/MacScreenshotContextProvider.mm
+  src/platform/mac/MacSingleKeyShortcutBinder.mm
   src/platform/mac/MacTargetProvider.mm
 )
 
@@ -431,6 +432,7 @@ set(SPEECHER_PLATFORM_MAC_HEADERS
   src/platform/mac/MacMediaController.h
   src/platform/mac/MacPopupPositioner.h
   src/platform/mac/MacScreenshotContextProvider.h
+  src/platform/mac/MacSingleKeyShortcutBinder.h
   src/platform/mac/MacTargetProvider.h
 )
 

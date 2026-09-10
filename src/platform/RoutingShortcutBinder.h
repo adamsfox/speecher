@@ -4,10 +4,11 @@
 
 namespace speecher {
 
-// The Linux binder: a key combination goes to the desktop's shortcut service
-// (KGlobalAccel or the portal), a single key to the backend that watches the
-// key itself (XInput2 on X11, the key-watch helper on Wayland). There is one
-// binding, so setting either kind lets go of the other.
+// One binder over two backends: a key combination goes to the platform's
+// shortcut service (KGlobalAccel or the portal on Linux, Carbon hot keys on
+// macOS), a single key to the backend that watches the key itself (XInput2 on
+// X11, the key-watch helper on Wayland, NSEvent monitors on macOS). There is
+// one binding, so setting either kind lets go of the other.
 class RoutingShortcutBinder final : public GlobalShortcutBinder {
     Q_OBJECT
 

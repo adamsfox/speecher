@@ -22,6 +22,7 @@ public:
     bool setShortcut(const ShortcutBinding &shortcut, QString *error = nullptr) override;
     void suspend() override;
     QString resume() override;
+    bool removeRegistration(QString *error = nullptr) override;
 
 private:
     bool registerHotKey(const QKeySequence &shortcut, QString *error);
