@@ -8,8 +8,8 @@ import SwiftUI
 
 private let pillHeight: CGFloat = 48
 private let minimumPillWidth: CGFloat = 126
-private let previewChromeWidth: CGFloat = minimumPillWidth + 10 + 24
-private let maximumPreviewWidth: CGFloat = 544
+private let previewChromeWidth: CGFloat = 48
+private let maximumPreviewWidth: CGFloat = 488
 private let screenEdgeMargin: CGFloat = 80
 /// The update and what's-new banners stacked above the pill.
 private let bannerHeight: CGFloat = 36
@@ -42,11 +42,61 @@ private enum E2EPanelEvidence {
     }
 }
 
+/// The preview bar and its compact status strip share one outline.
+private struct PanelContour: Shape {
+    var shoulder: CGFloat
+    var inkWidth: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let cap = shoulder / 2
+        let half = inkWidth / 2 + 10
+        let left = rect.midX - half
+        let right = rect.midX + half
+        let lobeHeight = rect.height - shoulder
+        var fillet = min(12, left - rect.minX - cap)
+        var radius = min(24, half)
+        if fillet + radius > lobeHeight {
+            let scale = lobeHeight / (fillet + radius)
+            fillet *= scale
+            radius *= scale
+        }
+        guard shoulder > 0, lobeHeight > 0, fillet >= 4 else {
+            let radius = min(24, rect.height / 2)
+            return Path(roundedRect: rect, cornerSize: CGSize(width: radius, height: radius))
+        }
+        let top = rect.minY
+        let shelf = top + shoulder
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + cap, y: top))
+        path.addLine(to: CGPoint(x: rect.maxX - cap, y: top))
+        path.addArc(center: CGPoint(x: rect.maxX - cap, y: top + cap), radius: cap,
+                    startAngle: .degrees(-90), endAngle: .degrees(90), clockwise: false)
+        path.addLine(to: CGPoint(x: right + fillet, y: shelf))
+        path.addArc(center: CGPoint(x: right + fillet, y: shelf + fillet), radius: fillet,
+                    startAngle: .degrees(-90), endAngle: .degrees(-180), clockwise: true)
+        path.addLine(to: CGPoint(x: right, y: rect.maxY - radius))
+        path.addArc(center: CGPoint(x: right - radius, y: rect.maxY - radius), radius: radius,
+                    startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
+        path.addLine(to: CGPoint(x: left + radius, y: rect.maxY))
+        path.addArc(center: CGPoint(x: left + radius, y: rect.maxY - radius), radius: radius,
+                    startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+        path.addLine(to: CGPoint(x: left, y: shelf + fillet))
+        path.addArc(center: CGPoint(x: left - fillet, y: shelf + fillet), radius: fillet,
+                    startAngle: .degrees(0), endAngle: .degrees(-90), clockwise: true)
+        path.addLine(to: CGPoint(x: rect.minX + cap, y: shelf))
+        path.addArc(center: CGPoint(x: rect.minX + cap, y: top + cap), radius: cap,
+                    startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
+        path.closeSubpath()
+        return path
+    }
+}
+
 private struct DictationPanelGlass: ViewModifier {
+    let shape: PanelContour
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
-            content.glassEffect(in: .capsule)
+            content.glassEffect(in: shape)
         } else {
             content
         }
@@ -86,7 +136,7 @@ final class DictationPanelState: ObservableObject {
         case "refining": return ("sparkles", status, false)
         // Set by the OAuth refresh callback in wire(): ongoing work, not an
         // outcome, so it must not present as a finished delivery.
-        case "refreshing sign-in…":
+        case "renewing sign-in…":
             return ("arrow.triangle.2.circlepath", status, false)
         default: return ("paperplane.fill", status, true)
         }
@@ -94,7 +144,29 @@ final class DictationPanelState: ObservableObject {
 
     var finished: Bool { presentation.finished }
 
-    var showsPreview: Bool { !problem.isEmpty || (!finished && !preview.isEmpty) }
+    var showsPreview: Bool { problem.isEmpty && !finished && !preview.isEmpty }
+
+    var waitingLabel: String? {
+        if status == "Renewing sign-in…" { return status }
+        switch phase {
+        case .transcribing: return "Transcribing…"
+        case .refining: return "Refining…"
+        case .live: return nil
+        }
+    }
+
+    var lineHeight: CGFloat {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        return ceil(font.ascender - font.descender + font.leading)
+    }
+    var stripHeight: CGFloat { showsPreview ? waitingLabel == nil ? 28 : lineHeight + 6 : pillHeight }
+    var height: CGFloat { showsPreview ? 8 + lineHeight + stripHeight + 4 : pillHeight }
+    var inkWidth: CGFloat {
+        guard let label = waitingLabel else { return 92.8 }
+        return (label as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
+        ]).width
+    }
 }
 
 /// One banner capsule above the pill, on the pill's own material: a plain
@@ -164,17 +236,32 @@ struct DictationPanelView: View {
     }
 
     private var pill: some View {
-        HStack(spacing: 10) {
-            if state.problem.isEmpty {
-                if finished {
+        let shape = PanelContour(shoulder: state.showsPreview ? 8 + state.lineHeight + 6 : 0,
+                                 inkWidth: state.inkWidth)
+        return VStack(spacing: 0) {
+            if state.showsPreview {
+                Text(state.preview)
+                    .font(.body)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .frame(height: state.lineHeight)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+            }
+            HStack(spacing: 10) {
+                if !state.problem.isEmpty {
+                    Text(state.problem)
+                        .font(.body)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                    Button("Dismiss", action: dismiss)
+                } else if finished {
                     Label(state.status, systemImage: symbol)
                         .font(.body)
                         .lineLimit(1)
-                        .padding(.horizontal, 24)
-                        .frame(minWidth: minimumPillWidth)
-                } else if let waiting = waitingLabel {
+                } else if let waiting = state.waitingLabel {
                     ShimmerText(text: waiting)
-                        .frame(width: minimumPillWidth)
+                        .fixedSize()
                 } else {
                     PanelWaveform(state: state)
                         .accessibilityElement(children: .ignore)
@@ -182,24 +269,13 @@ struct DictationPanelView: View {
                         .accessibilityValue("Input level \(Int(state.level * 100)) percent")
                 }
             }
-            if state.showsPreview {
-                HStack {
-                    Text(state.problem.isEmpty ? state.preview : state.problem)
-                        .font(.body)
-                        .lineLimit(1)
-                        .truncationMode(state.problem.isEmpty ? .head : .tail)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                    if !state.problem.isEmpty {
-                        Button("Dismiss", action: dismiss)
-                    }
-                }
-                .padding(.leading, state.problem.isEmpty ? 0 : 24)
-                .padding(.trailing, 24)
-            }
+            .padding(.horizontal, state.problem.isEmpty && !finished ? 0 : 24)
+            .frame(height: state.stripHeight)
+            .padding(.bottom, state.showsPreview ? 4 : 0)
         }
-        .frame(width: state.pillWidth, height: pillHeight)
-        .background(.regularMaterial, in: .capsule)
-        .modifier(DictationPanelGlass())
+        .frame(width: state.pillWidth, height: state.height)
+        .background(.regularMaterial, in: shape)
+        .modifier(DictationPanelGlass(shape: shape))
     }
 
     private var symbol: String { state.presentation.symbol }
@@ -211,16 +287,7 @@ struct DictationPanelView: View {
     /// The phase in words, for the screen reader that can't see the symbol.
     private var phaseLabel: String { state.presentation.label }
 
-    /// The shimmer's label while there is nothing to show where the preview
-    /// goes: the provider is still turning audio into words, or the refiner
-    /// has not streamed any yet.
-    private var waitingLabel: String? {
-        switch state.phase {
-        case .transcribing: return "Transcribing…"
-        case .refining: return "Refining…"
-        case .live: return nil
-        }
-    }
+
 }
 
 /// The Linux waveform's fifteen dots, adaptive level and one-second travelling crest.
@@ -249,7 +316,7 @@ private struct PanelWaveform: View {
             }
         }
         .opacity(state.frozen ? 0.4 : 1)
-        .frame(width: minimumPillWidth, height: pillHeight)
+        .frame(width: minimumPillWidth, height: state.stripHeight)
         .onReceive(state.$level) { value in
             var mapped: Float = 0
             if value > 0 {
@@ -453,12 +520,13 @@ final class SpeecherDictationPanel {
             applyPreview(preview)
         }
         bridge.popupOAuthRefreshRequested = { [weak self] in
-            self?.state.status = "Refreshing sign-in…"
-            self?.state.preview = "Refreshing sign-in…"
+            self?.state.status = "Renewing sign-in…"
+            self?.state.preview = ""
             self?.syncFrameHeight()
         }
         bridge.popupListeningIndicatorRequested = { [weak self] in
             self?.state.status = "Listening"
+            self?.syncFrameHeight()
         }
         bridge.popupErrorRequested = { [weak self] message in
             self?.show(problem: message)
@@ -641,17 +709,18 @@ final class SpeecherDictationPanel {
     private func syncFrameHeight() {
         let banners = (state.updateMessage.isEmpty ? 0 : 1)
             + (state.whatsNewMessage.isEmpty ? 0 : 1)
-        let height = pillHeight + CGFloat(banners) * (bannerHeight + bannerSpacing)
+        let height = state.height + CGFloat(banners) * (bannerHeight + bannerSpacing)
         let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        let message = !state.problem.isEmpty ? state.problem : state.finished ? state.status : state.preview
+        let message = !state.problem.isEmpty ? state.problem : state.finished ? state.status : state.showsPreview ? state.preview : state.waitingLabel ?? ""
         let textWidth = (message as NSString).size(withAttributes: [.font: font]).width
         let availableWidth = (panel.screen ?? NSScreen.main)?.visibleFrame.width
             ?? maximumPreviewWidth + screenEdgeMargin
         let widthLimit: CGFloat = state.problem.isEmpty && state.showsPreview ? maximumPreviewWidth : 568
         let maximumWidth = max(minimumPillWidth, min(widthLimit, availableWidth - screenEdgeMargin))
         let chrome = !state.problem.isEmpty ? 150 : state.finished ? 78
-            : state.preview.isEmpty ? 0 : previewChromeWidth
-        let contentWidth = min(max(minimumPillWidth, textWidth + chrome), maximumWidth)
+            : state.showsPreview ? previewChromeWidth : state.waitingLabel == nil ? 0 : 32
+        let minimumWidth = state.showsPreview ? minimumPillWidth + previewChromeWidth : minimumPillWidth
+        let contentWidth = min(max(minimumWidth, textWidth + chrome), maximumWidth)
         state.pillWidth = contentWidth
         let width = max(contentWidth, banners > 0 ? 420 : minimumPillWidth)
         var frame = panel.frame
