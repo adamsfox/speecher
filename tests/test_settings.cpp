@@ -3,6 +3,8 @@
 #include "core/KeyringResult.h"
 #include "core/ShortcutBinding.h"
 #include "core/settings/SettingsKeys.h"
+
+#include <QSet>
 #endif
 
 using namespace speecher;
@@ -91,6 +93,48 @@ private slots:
         QCOMPARE(physicalKeyForEvdev(100)->code, "AltRight");
         QCOMPARE(physicalKeyForEvdev(58)->code, "CapsLock");
         QVERIFY(physicalKeyForEvdev(9999) == nullptr);
+    }
+
+    // The macOS backend maps a code onto a Carbon virtual keycode. Values are
+    // from HIToolbox/Events.h (kVK_*), not recomputed the way the table is;
+    // -1 marks keys Mac keyboards do not have, which the lookup must never
+    // match. Note evdev 58 is Caps Lock while mac 58 is Left Option — the
+    // columns are independent.
+    void vocabularyCarriesMacKeycodes()
+    {
+        QCOMPARE(physicalKey(QStringLiteral("AltRight"))->mac, 61);
+        QCOMPARE(physicalKey(QStringLiteral("AltLeft"))->mac, 58);
+        QCOMPARE(physicalKey(QStringLiteral("KeyE"))->mac, 14);
+        QCOMPARE(physicalKey(QStringLiteral("F13"))->mac, 105);
+        QCOMPARE(physicalKey(QStringLiteral("Fn"))->mac, 63);
+        QCOMPARE(physicalKey(QStringLiteral("PrintScreen"))->mac, -1);
+        QCOMPARE(physicalKeyForMac(61)->code, "AltRight");
+        QCOMPARE(physicalKeyForMac(57)->code, "CapsLock");
+        QCOMPARE(physicalKeyForMac(0)->code, "KeyA");
+        QVERIFY(physicalKeyForMac(-1) == nullptr);
+        QVERIFY(physicalKeyForMac(9999) == nullptr);
+
+        // Every assigned mac keycode names one key, so the watcher can never
+        // read an event as two different bindings.
+        QSet<int> seen;
+        for (const char *code : {"ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight",
+                                 "AltLeft", "AltRight", "MetaLeft", "MetaRight", "CapsLock", "Fn"}) {
+            const int mac = physicalKey(QLatin1String(code))->mac;
+            QVERIFY(!seen.contains(mac));
+            seen.insert(mac);
+        }
+    }
+
+    // The warning is the same sentence on every platform; the keys that carry
+    // no text stay silent.
+    void singleKeyWarningNamesTypingKeysOnly()
+    {
+        QVERIFY(singleKeyTypingWarning(ShortcutBinding::singleKey(QStringLiteral("AltRight")))
+                    .isEmpty());
+        QVERIFY(singleKeyTypingWarning(ShortcutBinding::singleKey(QStringLiteral("F13")))
+                    .isEmpty());
+        QVERIFY(singleKeyTypingWarning(ShortcutBinding::singleKey(QStringLiteral("KeyE")))
+                    .contains(QStringLiteral("E")));
     }
 
     void settingsDefaults()

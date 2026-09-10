@@ -19,7 +19,14 @@ void storeBinding(const ShortcutBinding &binding)
     QSettings settings(QString::fromLatin1(SettingsKeys::Organization),
                        QString::fromLatin1(SettingsKeys::Application));
     if (binding.isEmpty()) {
-        settings.remove(SettingsKeys::GlobalShortcut);
+        // Only clear what this binder owns: on macOS the combination binder
+        // stores its sequence under the same key, and a router clearing the
+        // single key right after a combination was set must not erase it.
+        const ShortcutBinding stored =
+            ShortcutBinding::fromString(settings.value(SettingsKeys::GlobalShortcut).toString());
+        if (stored.isSingleKey()) {
+            settings.remove(SettingsKeys::GlobalShortcut);
+        }
     } else {
         settings.setValue(SettingsKeys::GlobalShortcut, binding.toString());
     }

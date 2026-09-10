@@ -6,18 +6,23 @@
 namespace speecher {
 
 // One row of the physical-key vocabulary: the W3C KeyboardEvent.code name,
-// what the UI calls that key, and the Linux evdev keycode. X11 keycodes are
-// evdev + 8, so X11 needs no column of its own.
+// what the UI calls that key, and the platform keycodes. X11 keycodes are
+// evdev + 8, so X11 needs no column of its own. The mac column holds the
+// macOS virtual keycode (Carbon's kVK_* values, which are positional like the
+// code names); -1 marks a key Mac keyboards do not have.
 struct PhysicalKey {
     const char *code;
     const char *label;
     int evdev;
+    int mac;
 };
 
 // The row for a KeyboardEvent.code name, or nullptr when no key has that name.
 const PhysicalKey *physicalKey(const QString &code);
 // The row for a Linux evdev keycode, or nullptr when the vocabulary lacks it.
 const PhysicalKey *physicalKeyForEvdev(int evdev);
+// The row for a macOS virtual keycode, or nullptr when the vocabulary lacks it.
+const PhysicalKey *physicalKeyForMac(int mac);
 
 // The Global Shortcut: a key combination, which every desktop shortcut service
 // accepts, or one physical key, which none does and a platform backend has to
@@ -47,5 +52,10 @@ private:
     QKeySequence m_combination;
     QString m_keyCode;
 };
+
+// What binding this key costs, or empty for a key that carries no text: a key
+// that types keeps typing after it is bound, which the user has to be told.
+// Inline and non-blocking on every platform's recorder.
+QString singleKeyTypingWarning(const ShortcutBinding &binding);
 
 } // namespace speecher

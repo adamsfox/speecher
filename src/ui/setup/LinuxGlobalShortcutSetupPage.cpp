@@ -21,7 +21,6 @@
 #include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QSet>
 #include <QSignalBlocker>
 #include <QSystemTrayIcon>
 #include <QThread>
@@ -45,29 +44,6 @@ QLabel *guidanceLabel(const QString &text, QWidget *parent)
 QString shortcutSetStatus(const QString &display)
 {
     return QStringLiteral("Shortcut set to %1. Try it now.").arg(display);
-}
-
-// A key that types text keeps typing after it is bound, which the user has to
-// be told. Modifiers, Caps Lock and the F13-F24 block carry no text, so they
-// bind without a caveat.
-QString singleKeyTypingWarning(const ShortcutBinding &binding)
-{
-    static const QSet<QString> silentPrefixes{
-        QStringLiteral("Shift"), QStringLiteral("Control"), QStringLiteral("Alt"),
-        QStringLiteral("Meta"), QStringLiteral("CapsLock"), QStringLiteral("Fn")};
-    const QString code = binding.keyCode();
-    for (const QString &prefix : silentPrefixes) {
-        if (code.startsWith(prefix)) {
-            return QString();
-        }
-    }
-    if (code.startsWith(QLatin1Char('F')) && code.size() > 1 && code.at(1).isDigit()) {
-        return QString();
-    }
-    return QStringLiteral(
-        "Heads up: %1 still does its normal job and now also starts dictation, "
-        "so pressing it types as well.")
-        .arg(binding.displayText());
 }
 
 bool isWaylandSession()
