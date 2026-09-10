@@ -91,14 +91,17 @@ private struct PanelContour: Shape {
     }
 }
 
-private struct DictationPanelGlass: ViewModifier {
+private struct DictationPanelBackground: View {
     let shape: PanelContour
+
     @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.glassEffect(in: shape)
+    var body: some View {
+        // Liquid Glass cannot render the concave preview contour reliably.
+        // Only the background branches, so waveform state survives preview changes.
+        if #available(macOS 26.0, *), shape.shoulder == 0 {
+            Capsule().fill(.regularMaterial).glassEffect(in: .capsule)
         } else {
-            content
+            shape.fill(.regularMaterial)
         }
     }
 }
@@ -274,8 +277,7 @@ struct DictationPanelView: View {
             .padding(.bottom, state.showsPreview ? 4 : 0)
         }
         .frame(width: state.pillWidth, height: state.height)
-        .background(.regularMaterial, in: shape)
-        .modifier(DictationPanelGlass(shape: shape))
+        .background(DictationPanelBackground(shape: shape))
     }
 
     private var symbol: String { state.presentation.symbol }
