@@ -647,7 +647,8 @@ final class SpeecherDictationPanel {
         let textWidth = (message as NSString).size(withAttributes: [.font: font]).width
         let availableWidth = (panel.screen ?? NSScreen.main)?.visibleFrame.width
             ?? maximumPreviewWidth + screenEdgeMargin
-        let maximumWidth = max(minimumPillWidth, min(maximumPreviewWidth, availableWidth - screenEdgeMargin))
+        let widthLimit: CGFloat = state.problem.isEmpty && state.showsPreview ? maximumPreviewWidth : 568
+        let maximumWidth = max(minimumPillWidth, min(widthLimit, availableWidth - screenEdgeMargin))
         let chrome = !state.problem.isEmpty ? 150 : state.finished ? 78
             : state.preview.isEmpty ? 0 : previewChromeWidth
         let contentWidth = min(max(minimumPillWidth, textWidth + chrome), maximumWidth)
