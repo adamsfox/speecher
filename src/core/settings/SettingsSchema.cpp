@@ -513,7 +513,7 @@ SettingsPage generalPage(const SchemaContext &context)
         QStringLiteral("Global Shortcut"),
         QStringLiteral("Start or stop dictation from anywhere.")));
 #endif
-    systemRows.append(choiceRow(
+    SettingsRow activationMode = choiceRow(
         QStringLiteral("activationMode"),
         QStringLiteral("Shortcut behaviour"),
         QStringLiteral("What pressing the Global Shortcut does."),
@@ -533,7 +533,9 @@ SettingsPage generalPage(const SchemaContext &context)
         },
         [](AppSettings &settings, const QString &value) {
             settings.shortcutActivationMode = shortcutActivationModeFromName(value);
-        }));
+        });
+    activationMode.sinceVersion = QStringLiteral("0.1.6");
+    systemRows.append(activationMode);
     // No clipboard status row here: the Output page's Method choice says how
     // text is delivered, and a platform's "clipboard path" is not a setting.
 

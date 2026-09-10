@@ -66,6 +66,10 @@ public:
     bool globalShortcutsSupported() const;
     bool globalShortcutSupportKnown() const;
     bool globalShortcutUsesDesktopChooser() const;
+    // Empty when the bound backend can honour this binding, otherwise what to
+    // tell the user. Recorders ask before saving so a refusal is explained
+    // rather than silently never firing.
+    QString globalShortcutUnsupportedBindingReason(const ShortcutBinding &binding) const;
     ShortcutBinding globalShortcut() const;
     QString globalShortcutDisplay() const;
     bool setGlobalShortcut(const ShortcutBinding &shortcut, QString *error = nullptr);

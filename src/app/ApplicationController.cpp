@@ -351,6 +351,12 @@ bool ApplicationController::globalShortcutUsesDesktopChooser() const
     return m_shortcutBinder->usesDesktopShortcutChooser();
 }
 
+QString ApplicationController::globalShortcutUnsupportedBindingReason(
+    const ShortcutBinding &binding) const
+{
+    return m_shortcutBinder->unsupportedBindingReason(binding);
+}
+
 ShortcutBinding ApplicationController::globalShortcut() const
 {
     return m_shortcutBinder->shortcut();
