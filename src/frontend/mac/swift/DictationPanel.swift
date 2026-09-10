@@ -9,6 +9,11 @@ import SwiftUI
 private let pillHeight: CGFloat = 48
 private let minimumPillWidth: CGFloat = 126
 private let previewChromeWidth: CGFloat = 48
+private let compactStripHeight: CGFloat = 28
+private let previewTopPadding: CGFloat = 12
+private let previewStripSpacing: CGFloat = 8
+private let previewBottomPadding: CGFloat = 8
+private let previewShoulderDrop: CGFloat = 4
 private let maximumPreviewWidth: CGFloat = 488
 private let screenEdgeMargin: CGFloat = 80
 /// The update and what's-new banners stacked above the pill.
@@ -162,8 +167,12 @@ final class DictationPanelState: ObservableObject {
         let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         return ceil(font.ascender - font.descender + font.leading)
     }
-    var stripHeight: CGFloat { showsPreview ? waitingLabel == nil ? 28 : lineHeight + 6 : pillHeight }
-    var height: CGFloat { showsPreview ? 8 + lineHeight + stripHeight + 4 : pillHeight }
+    var stripHeight: CGFloat { showsPreview ? waitingLabel == nil ? compactStripHeight : lineHeight + 6 : pillHeight }
+    var height: CGFloat {
+        showsPreview
+            ? previewTopPadding + lineHeight + previewStripSpacing + stripHeight + previewBottomPadding
+            : pillHeight
+    }
     var inkWidth: CGFloat {
         guard let label = waitingLabel else { return 92.8 }
         return (label as NSString).size(withAttributes: [
@@ -239,7 +248,7 @@ struct DictationPanelView: View {
     }
 
     private var pill: some View {
-        let shape = PanelContour(shoulder: state.showsPreview ? 8 + state.lineHeight + 6 : 0,
+        let shape = PanelContour(shoulder: state.showsPreview ? previewTopPadding + state.lineHeight + previewShoulderDrop : 0,
                                  inkWidth: state.inkWidth)
         return VStack(spacing: 0) {
             if state.showsPreview {
@@ -249,7 +258,7 @@ struct DictationPanelView: View {
                     .truncationMode(.head)
                     .frame(height: state.lineHeight)
                     .padding(.horizontal, 24)
-                    .padding(.top, 8)
+                    .padding(.top, previewTopPadding)
             }
             HStack(spacing: 10) {
                 if !state.problem.isEmpty {
@@ -274,7 +283,8 @@ struct DictationPanelView: View {
             }
             .padding(.horizontal, state.problem.isEmpty && !finished ? 0 : 24)
             .frame(height: state.stripHeight)
-            .padding(.bottom, state.showsPreview ? 4 : 0)
+            .padding(.top, state.showsPreview ? previewStripSpacing : 0)
+            .padding(.bottom, state.showsPreview ? previewBottomPadding : 0)
         }
         .frame(width: state.pillWidth, height: state.height)
         .background(DictationPanelBackground(shape: shape))
