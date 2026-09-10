@@ -15,7 +15,7 @@ class WaveformWidget : public QWidget {
     Q_OBJECT
 
 public:
-    enum class Mode { Waveform, Dots, Frozen, Message, Status };
+    enum class Mode { Waveform, Frozen, Message, Status };
 
     // The audio half of Wispr Flow's waveform, kept apart from the painting so
     // the mapping can be tested without a widget: every capture chunk is
@@ -45,7 +45,7 @@ public:
     explicit WaveformWidget(QWidget *parent = nullptr);
     void setBackgroundVisible(bool visible);
     // The width of what paintEvent actually draws in the current mode — the
-    // bar row, the dots, or the message text — as opposed to the fixed widget
+    // bar row or the message text — as opposed to the fixed widget
     // bounds. The popup carves its contour around this.
     int contentWidth() const;
     // Low-strip geometry for the popup capsule, where the waveform sits under
@@ -67,7 +67,6 @@ protected:
 private:
     void applyGeometry();
     void paintWaveform(QPainter &painter, const QColor &bar);
-    void paintDots(QPainter &painter, const QColor &bar);
     void paintMessage(QPainter &painter, const QColor &bar);
     void paintStatus(QPainter &painter, const QColor &bar);
 

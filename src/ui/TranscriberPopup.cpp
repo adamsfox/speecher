@@ -117,7 +117,7 @@ private:
         }
         const qreal shoulderY = m_strip->y() + kShoulderDrop;
         const qreal capR = (shoulderY - pillRect.top()) / 2.0;
-        // The lobe hugs what the strip paints — the bar row, the dots or the
+        // The lobe hugs what the strip paints — the bar row or the
         // status text — not the strip's fixed widget bounds, which are much
         // wider than the ink they hold.
         const qreal stripCenter = m_strip->x() + m_strip->width() / 2.0;
@@ -565,8 +565,11 @@ void TranscriberPopup::showOAuthRefreshIndicator()
 {
     m_phase = Phase::Live;
     restoreStandardLayout();
-    m_waveform->setMode(WaveformWidget::Mode::Dots);
-    applyPreviewText(QStringLiteral("Renewing sign-in…"));
+    hidePreview();
+    m_waveform->setStatusText(QStringLiteral("Renewing sign-in…"));
+    m_previewPill->adjustSize();
+    adjustSize();
+    updateWindowMask();
 }
 
 void TranscriberPopup::showListeningIndicator()

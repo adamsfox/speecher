@@ -868,8 +868,7 @@ private slots:
         QVERIFY(!rawTranscript->wordWrap());
 
         popup.showOAuthRefreshIndicator();
-        QCOMPARE(rawTranscript->text(), QStringLiteral("Renewing sign-in…"));
-        QVERIFY(!rawTranscript->isHidden());
+        QVERIFY(rawTranscript->isHidden());
         QVERIFY(!waveform->isHidden());
 
         popup.setPreview(QStringLiteral("hello world"));

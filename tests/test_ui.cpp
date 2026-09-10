@@ -226,6 +226,8 @@ private slots:
         verifyContained();
         popup.showMessage(QStringLiteral("Input sent"));
         verifyContained();
+        popup.showOAuthRefreshIndicator();
+        verifyContained();
     }
 
     void popupTrimsThePreviewFromTheFrontWithAnEllipsis()
@@ -1425,12 +1427,6 @@ private slots:
         const QSize resting = waveform.size();
         QCOMPARE(resting.width(), 126);
         QVERIFY(resting.height() >= 48);
-
-        waveform.setMode(speecher::WaveformWidget::Mode::Dots);
-        QCOMPARE(waveform.size(), resting);
-
-        waveform.setMode(speecher::WaveformWidget::Mode::Waveform);
-        QCOMPARE(waveform.size(), resting);
 
         waveform.setMessage(QStringLiteral("Input sent"));
         QVERIFY(waveform.width() >= resting.width());
