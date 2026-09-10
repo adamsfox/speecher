@@ -397,6 +397,12 @@ void TranscriberPopup::applyPreviewText(const QString &preview)
     m_preview->setMaximumWidth(maxTextWidth);
     applyPillGeometry();
     adjustSize();
+    // The capsule grows upward and shrinks back as words come and go; on
+    // fallback positioning the window would otherwise keep its top edge and
+    // push the taller capsule past the screen's bottom margin.
+    if (isVisible()) {
+        m_positioner->positionBottomCenter(m_surface);
+    }
     updateWindowMask();
 }
 
@@ -405,6 +411,9 @@ void TranscriberPopup::hidePreview()
     m_preview->hide();
     applyPillGeometry();
     adjustSize();
+    if (isVisible()) {
+        m_positioner->positionBottomCenter(m_surface);
+    }
     updateWindowMask();
 }
 

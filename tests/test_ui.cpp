@@ -288,6 +288,56 @@ private slots:
                                 .arg(popup.sizeHint().width()).arg(popup.sizeHint().height())));
     }
 
+    void popupStaysBottomAnchoredWhilePreviewHeightChanges()
+    {
+        // A large font exaggerates every height change, so a popup that grew
+        // downward instead of upward would leave the screen's bottom margin.
+        const QFont originalFont = QApplication::font();
+        QFont largeFont = originalFont;
+        largeFont.setPointSizeF(std::max(48.0, originalFont.pointSizeF() * 3));
+        QApplication::setFont(largeFont);
+        const auto restoreFont = qScopeGuard([originalFont] {
+            QApplication::setFont(originalFont);
+        });
+
+        // The real fallback positioner: it anchors the window's bottom edge,
+        // so every height change must re-place the window, not just resize it.
+        TranscriberPopup popup;
+        popup.showListeningIndicator();
+        popup.showPopup(0);
+        QCoreApplication::processEvents();
+        const QScreen *screen = QGuiApplication::primaryScreen();
+        QVERIFY(screen);
+        const int anchoredBottom = popup.geometry().bottom();
+        QVERIFY(screen->availableGeometry().contains(popup.geometry()));
+
+        const auto verifyAnchored = [&] {
+            QCoreApplication::processEvents();
+            const QString geometry = QStringLiteral("popup=%1,%2 %3x%4 anchored=%5")
+                                         .arg(popup.x()).arg(popup.y())
+                                         .arg(popup.width()).arg(popup.height())
+                                         .arg(anchoredBottom);
+            QVERIFY2(screen->availableGeometry().contains(popup.geometry()),
+                     qPrintable(geometry));
+            QCOMPARE(popup.geometry().bottom(), anchoredBottom);
+        };
+
+        // The live preview grows the capsule upward.
+        popup.setPreview(QStringLiteral("the very last words"));
+        verifyAnchored();
+        // Words go away for "Transcribing…" and the popup shrinks back.
+        popup.setStatus(QStringLiteral("Stopping"));
+        verifyAnchored();
+        // The refinement preview grows it again over the "Refining…" strip.
+        popup.setRefining(true);
+        popup.setRefinementPreview(QStringLiteral("the very last words"));
+        verifyAnchored();
+        // And back to the bare waveform pill.
+        popup.setRefining(false);
+        popup.hidePreview();
+        verifyAnchored();
+    }
+
     void popupErrorCanBeDismissedEarly()
     {
         TranscriberPopup popup(new SizingPopupPositioner);
