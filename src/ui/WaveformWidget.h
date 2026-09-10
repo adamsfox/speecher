@@ -44,6 +44,10 @@ public:
 
     explicit WaveformWidget(QWidget *parent = nullptr);
     void setBackgroundVisible(bool visible);
+    // Low-strip geometry for the popup capsule, where the waveform sits under
+    // the transcript line rather than standing alone. Off by default; the
+    // Dictation page keeps the full-height pill.
+    void setCompact(bool compact);
 
 public slots:
     void setLevel(float level);
@@ -74,6 +78,7 @@ private:
     float m_idlePhase = 0.0f;
     Mode m_mode = Mode::Waveform;
     bool m_backgroundVisible = true;
+    bool m_compact = false;
 };
 
 } // namespace speecher

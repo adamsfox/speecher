@@ -67,6 +67,7 @@ private:
 
     void applyTheme();
     void applyPreviewText(const QString &preview);
+    void applyPillGeometry();
     void restoreStandardLayout();
     void updateWindowMask();
 

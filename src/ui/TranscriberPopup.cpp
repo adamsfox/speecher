@@ -34,6 +34,23 @@ namespace {
 // it otherwise sits on as a square-ended strip crossing the hairline.
 constexpr int kErrorBarInset = 9;
 
+// Half the 48px waveform capsule: the listening pill is a true stadium, and
+// every taller capsule (transcript over the waveform strip, wrapped errors)
+// keeps this same corner radius so it reads as the same pill grown taller,
+// not a different widget with bulging semicircular ends.
+constexpr qreal kPillCornerRadius = 24.0;
+
+// One line of live transcript. Narrower than the 520px error wrap on purpose:
+// while speaking, the capsule should stay a compact pill rather than a
+// screen-wide banner, and the tail-trimming keeps the newest words visible
+// whatever the width.
+constexpr int kMaxPreviewWidth = 440;
+
+// The air between the transcript line and the capsule: sides clear the 24px
+// corners, the top holds the text off the stroke, and the bottom is smaller
+// because the waveform strip brings its own air above the resting bars.
+constexpr QMargins kPreviewMargins{24, 8, 24, 4};
+
 // Paints the pill instead of a stylesheet border: Qt's QSS rounded borders
 // render with uneven thickness at fractional display scales, which reads as
 // blur around the edge. This draws a one-device-pixel hairline aligned to the
@@ -59,7 +76,8 @@ protected:
         painter.setPen(QPen(stroke, penWidth));
         painter.setBrush(p.color(QPalette::Base));
         const QRectF pillRect = QRectF(rect()).adjusted(inset, inset, -inset, -inset);
-        painter.drawRoundedRect(pillRect, pillRect.height() / 2.0, pillRect.height() / 2.0);
+        const qreal radius = std::min(pillRect.height() / 2.0, kPillCornerRadius);
+        painter.drawRoundedRect(pillRect, radius, radius);
 #endif
     }
 };
@@ -197,10 +215,12 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     m_preview->setWordWrap(false);
     m_preview->setAlignment(Qt::AlignCenter);
     m_preview->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    // The transcript line sits above a low waveform strip, both centred, so
+    // the capsule keeps one symmetric silhouette: a plain waveform pill while
+    // listening that grows upward once there are words.
     auto *previewRow = new QHBoxLayout;
     previewRow->setContentsMargins(0, 0, 0, 0);
     previewRow->setSpacing(10);
-    previewRow->addWidget(m_waveform, 0, Qt::AlignVCenter);
     previewRow->addWidget(m_preview, 1);
     // An error's explicit way out, beside the auto-dismiss countdown, matching
     // the Dismiss buttons on the mac and Windows panels.
@@ -215,6 +235,7 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     });
     previewRow->addWidget(m_errorDismiss, 0, Qt::AlignVCenter);
     m_pillLayout->addLayout(previewRow, 1);
+    m_pillLayout->addWidget(m_waveform, 0, Qt::AlignHCenter);
 
     m_errorDismissProgress->setObjectName(QStringLiteral("errorDismissProgress"));
     m_errorDismissProgress->setRange(0, 1000);
@@ -352,7 +373,7 @@ void TranscriberPopup::applyPreviewText(const QString &preview)
         return;
     }
     const QFontMetrics metrics(m_preview->font());
-    const int maxTextWidth = 520 - m_waveform->width() - 10;
+    const int maxTextWidth = kMaxPreviewWidth;
     if (metrics.horizontalAdvance(visible) > maxTextWidth) {
         // A live transcript overflows from the front: the words just spoken
         // stay visible, and the ellipsis says something came before them,
@@ -374,7 +395,7 @@ void TranscriberPopup::applyPreviewText(const QString &preview)
     m_preview->setVisible(true);
     m_previewPill->setVisible(true);
     m_preview->setMaximumWidth(maxTextWidth);
-    m_pillLayout->setContentsMargins(0, 0, 24, 0);
+    applyPillGeometry();
     adjustSize();
     updateWindowMask();
 }
@@ -382,9 +403,26 @@ void TranscriberPopup::applyPreviewText(const QString &preview)
 void TranscriberPopup::hidePreview()
 {
     m_preview->hide();
-    m_pillLayout->setContentsMargins(0, 0, 0, 0);
+    applyPillGeometry();
     adjustSize();
     updateWindowMask();
+}
+
+// The capsule's two standard shapes: the bare waveform pill while there are
+// no words, and the grown capsule holding the transcript line over the
+// compact waveform strip. Errors size themselves in showErrorMessage.
+void TranscriberPopup::applyPillGeometry()
+{
+    const bool hasWords = !m_preview->isHidden();
+    m_waveform->setCompact(hasWords);
+    if (!hasWords) {
+        m_pillLayout->setContentsMargins(0, 0, 0, 0);
+        m_previewPill->setFixedHeight(m_waveform->height());
+        return;
+    }
+    m_pillLayout->setContentsMargins(kPreviewMargins);
+    m_previewPill->setFixedHeight(kPreviewMargins.top() + m_preview->sizeHint().height()
+                                  + m_waveform->height() + kPreviewMargins.bottom());
 }
 
 void TranscriberPopup::setLevel(float level)
@@ -606,12 +644,11 @@ void TranscriberPopup::restoreStandardLayout()
     m_errorDismissAnimation->stop();
     m_errorDismissProgress->hide();
     m_errorDismiss->hide();
-    m_pillLayout->setContentsMargins(0, 0, m_preview->isHidden() ? 0 : 24, 0);
     m_waveform->show();
     m_preview->setWordWrap(false);
     m_preview->setMinimumWidth(0);
-    m_preview->setMaximumWidth(520);
-    m_previewPill->setFixedHeight(m_waveform->height());
+    m_preview->setMaximumWidth(kMaxPreviewWidth);
+    applyPillGeometry();
 }
 
 void TranscriberPopup::updateWindowMask()

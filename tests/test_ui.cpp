@@ -175,15 +175,18 @@ private slots:
         QVERIFY(!preview->isVisible());
 
         popup.setPreview(QStringLiteral("hello there"));
-        QTRY_VERIFY(waveform->mapTo(pill, QPoint()).x() + waveform->width()
-                    < preview->mapTo(pill, QPoint()).x());
+        // The transcript line sits above a compact waveform strip, both
+        // centred on the capsule's vertical axis.
+        QTRY_VERIFY(preview->mapTo(pill, QPoint()).y() + preview->height()
+                    <= waveform->mapTo(pill, QPoint()).y());
         QVERIFY(preview->isVisible());
         const QRect waveRect(waveform->mapTo(pill, QPoint()), waveform->size());
         const QRect textRect(preview->mapTo(pill, QPoint()), preview->size());
         QVERIFY(pill->rect().contains(waveRect));
         QVERIFY(pill->rect().contains(textRect));
-        QVERIFY(waveRect.right() < textRect.left());
-        QCOMPARE(waveRect.center().y(), textRect.center().y());
+        QVERIFY(textRect.bottom() < waveRect.top());
+        QVERIFY(qAbs(waveRect.center().x() - textRect.center().x()) <= 1);
+        QVERIFY(waveform->height() < 48);
 
         popup.hidePreview();
         QVERIFY(!preview->isVisible());
@@ -239,7 +242,8 @@ private slots:
         QVERIFY(preview->text().startsWith(QStringLiteral("…")));
         QVERIFY(preview->text().endsWith(QStringLiteral("the very last words")));
         const QFontMetrics metrics(preview->font());
-        QVERIFY(metrics.horizontalAdvance(preview->text()) <= 520);
+        // One line capped at the popup's preview width (kMaxPreviewWidth).
+        QVERIFY(metrics.horizontalAdvance(preview->text()) <= 440);
 
         // A short preview is shown whole, with nothing implied before it.
         popup.setPreview(QStringLiteral("short preview"));
