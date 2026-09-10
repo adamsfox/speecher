@@ -1,12 +1,12 @@
 # Native popup layout evidence
 
-Windows PNGs were captured from the composited Windows 11 VM desktop using `panelEvidenceGrabsForDocumentation` in `tests/test_win_frontend.cpp`. Both versions received a quiet level of 0.02 followed by forty levels of 0.7. Preview text is identical in the before and after images.
+Windows PNGs were captured from the composited Windows 11 VM desktop using `panelEvidenceGrabsForDocumentation` in `tests/test_win_frontend.cpp`. Both versions received a quiet level of 0.02 followed by forty levels of 0.7. Both captures receive identical preview text. The new compact layout elides older text when needed to retain the latest words.
 
 - Before: production popup source from `b67b7fc`, rebuilt with the current capture driver and read-only geometry probes.
-- After: `20033eb`, built with MSVC and Qt 6.8.3. WinUI draws the rounded borders using its theme acrylic brush. The VM renders a flat fallback fill, so these captures do not establish desktop translucency. The screenshot includes the desktop visible between and around the two capsules.
+- After: `313b255`, built with MSVC and Qt 6.8.3. WinUI draws the rounded borders using its theme acrylic brush. The VM renders a flat fallback fill, so these captures do not establish desktop translucency. The waveform and latest words share one horizontal capsule. Empty previews leave only the compact waveform.
 - The notice screenshot enables the existing What's New state in temporary test preferences. It includes the notice's own window above the waveform.
 
-The after build passed all 21 CTest suites. On the interactive desktop, 21 native frontend tests passed, with one intentionally gated visual driver skipped. The banner-enabled run had the same result. Against the baseline, the fifteen-bar assertion and separate-preview geometry assertion failed as expected.
+The after build passed all 21 CTest suites. On the interactive desktop, 21 native frontend tests passed, with one intentionally gated visual driver skipped. The banner-enabled run had the same result. The shared-capsule geometry assertion failed against the preceding stacked layout, then passed after the change. Unicode preview cases remained passing.
 
 The captures cover speaking with and without preview, frozen bars at 40% opacity, transcribing, streamed refinement, the delivery receipt, an error with Dismiss, and the notice banner. Test preferences are temporary and separate from the installed application's settings.
 
@@ -18,4 +18,4 @@ The macOS PNGs are native panel captures from the existing macOS 26 panel-flow w
 
 `macos-comparison.png` pairs listening, speech preview, transcribing, refining, streamed refinement and receipt. Frames were selected by state from the same scripted flow; animation timing and receipt delivery details differ between runs. The original transparent PNGs are included. Comparison sheets composite transparency onto a blue-grey background for readability; that colour is not an app change.
 
-Final macOS frames were inspected alongside the baseline. Windows comparison pairs cover the gauge replacement and the separate transcript capsule; the remaining Windows after frames document processing, errors, frozen waveform and notices.
+Final macOS frames were inspected alongside the baseline. Windows comparison pairs cover the gauge replacement and the shared waveform/transcript capsule; the remaining Windows after frames document processing, errors, frozen waveform and notices.
