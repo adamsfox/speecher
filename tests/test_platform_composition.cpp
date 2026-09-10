@@ -4,6 +4,7 @@
 #include "app/ApplicationController.h"
 #include "app/CommandLine.h"
 #include "app/PlatformComposition.h"
+#include "app/ShortcutSuspendingDelivery.h"
 #include "core/LearnedCorrection.h"
 #include "core/SettingsStore.h"
 #include "dictation/DictationSession.h"
@@ -100,6 +101,14 @@ public:
         registerCount += 1;
     }
 
+    void suspend() override { suspendCount += 1; }
+
+    QString resume() override
+    {
+        resumeCount += 1;
+        return {};
+    }
+
     void publishShortcut(const ShortcutBinding &shortcut)
     {
         m_shortcut = shortcut;
@@ -120,6 +129,8 @@ public:
 
     int bindCount = 0;
     int registerCount = 0;
+    int suspendCount = 0;
+    int resumeCount = 0;
     bool shortcutSupportKnown = true;
     bool shortcutsSupported = true;
     bool desktopChooser = false;
@@ -1389,10 +1400,39 @@ private slots:
         QCOMPARE(controller.globalShortcut().combination(), chosen);
     }
 
+    // Delivery injects keystrokes, so the shortcut must look away for exactly
+    // the deliver() call: a single-key binding on an injected key would
+    // otherwise take the paste for the user's finger.
+    void deliverySuspendsTheShortcutForExactlyItsDuration()
+    {
+        FakeGlobalShortcutBinder binder;
+        struct ProbingDelivery final : TextDeliveryAdapter {
+            FakeGlobalShortcutBinder *binder = nullptr;
+            int suspensionsDuringDeliver = -1;
+            DeliveryResult deliver(const OutputSettings &,
+                                   const DeliveryContent &,
+                                   const Target &) override
+            {
+                suspensionsDuringDeliver = binder->suspendCount - binder->resumeCount;
+                DeliveryResult result;
+                result.ok = true;
+                return result;
+            }
+        };
+        ProbingDelivery inner;
+        inner.binder = &binder;
+        ShortcutSuspendingDelivery delivery(&inner, &binder);
+        QVERIFY(delivery.deliver({}, {}, {}).ok);
+        QCOMPARE(inner.suspensionsDuringDeliver, 1);
+        QCOMPARE(binder.suspendCount, 1);
+        QCOMPARE(binder.resumeCount, 1);
+    }
+
 #ifdef Q_OS_LINUX
-    // No shipped binder watches a bare key yet, so each turns a single-key
-    // binding away with a reason the UI can show, while combinations pass the
-    // per-binding check as before.
+    // The desktop-service binders take combinations only, so each turns a
+    // single-key binding away with a reason the UI can show, while
+    // combinations pass the per-binding check as before. The watching binders
+    // have their own coverage in the keywatch and x11 suites.
     void bindersRefuseASingleKeyWithAReason()
     {
         const ShortcutBinding rightAlt = ShortcutBinding::singleKey(QStringLiteral("AltRight"));

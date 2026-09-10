@@ -468,6 +468,7 @@ set(SPEECHER_APP_HEADERS
   src/app/CommandLine.h
   src/app/CompositionSockets.h
   src/app/ManifestUpdater.h
+  src/app/ShortcutSuspendingDelivery.h
   src/app/PlatformComposition.h
   src/app/SingleInstanceIpc.h
   src/app/UpdateController.h

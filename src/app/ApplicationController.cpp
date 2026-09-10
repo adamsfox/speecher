@@ -1,6 +1,7 @@
 #include "app/ApplicationController.h"
 
 #include "app/AppFrontEnd.h"
+#include "app/ShortcutSuspendingDelivery.h"
 #include "app/UpdateController.h"
 #ifdef Q_OS_MACOS
 #include "app/MacSparkleUpdater.h"
@@ -141,7 +142,10 @@ ApplicationController::ApplicationController(bool popupOnly,
                                      m_audio,
                                      m_platform->createMediaController(this),
                                      targetProvider,
-                                     m_platform->createTextDelivery(targetProvider, this),
+                                     new ShortcutSuspendingDelivery(
+                                         m_platform->createTextDelivery(targetProvider, this),
+                                         m_shortcutBinder,
+                                         this),
                                      m_providers,
                                      this);
     m_session->setScreenshotContextProvider(
