@@ -8,8 +8,8 @@ import SwiftUI
 
 private let pillHeight: CGFloat = 48
 private let minimumPillWidth: CGFloat = 126
-private let previewChromeWidth: CGFloat = 48
-private let maximumPreviewWidth: CGFloat = 568
+private let previewChromeWidth: CGFloat = minimumPillWidth + 10 + 24
+private let maximumPreviewWidth: CGFloat = 544
 private let screenEdgeMargin: CGFloat = 80
 /// The update and what's-new banners stacked above the pill.
 private let bannerHeight: CGFloat = 36
@@ -64,7 +64,7 @@ final class DictationPanelState: ObservableObject {
     @Published var level: Float = 0
     @Published var phase = Phase.live
     @Published var frozen = false
-    @Published var previewWidth: CGFloat = minimumPillWidth
+    @Published var pillWidth: CGFloat = minimumPillWidth
     var waveformFloor: Float = 0
     @Published var problem = ""
     /// The update banner's message, empty while there is nothing to offer, and
@@ -135,7 +135,7 @@ private struct PanelBanner: View {
     }
 }
 
-/// Separate waveform and transcript capsules on the platform material.
+/// Waveform and latest words share one capsule on the platform material.
 struct DictationPanelView: View {
     @ObservedObject var state: DictationPanelState
     let dismiss: () -> Void
@@ -164,28 +164,23 @@ struct DictationPanelView: View {
     }
 
     private var pill: some View {
-        VStack(spacing: bannerSpacing) {
+        HStack(spacing: 10) {
             if state.problem.isEmpty {
-                Group {
-                    if finished {
-                        Label(state.status, systemImage: symbol)
-                            .font(.body)
-                            .lineLimit(1)
-                            .padding(.horizontal, 24)
-                    } else if let waiting = waitingLabel {
-                        ShimmerText(text: waiting)
-                            .padding(.horizontal, 12)
-                    } else {
-                        PanelWaveform(state: state)
-                            .accessibilityElement(children: .ignore)
-                            .accessibilityLabel(phaseLabel)
-                            .accessibilityValue("Input level \(Int(state.level * 100)) percent")
-                    }
+                if finished {
+                    Label(state.status, systemImage: symbol)
+                        .font(.body)
+                        .lineLimit(1)
+                        .padding(.horizontal, 24)
+                        .frame(minWidth: minimumPillWidth)
+                } else if let waiting = waitingLabel {
+                    ShimmerText(text: waiting)
+                        .frame(width: minimumPillWidth)
+                } else {
+                    PanelWaveform(state: state)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(phaseLabel)
+                        .accessibilityValue("Input level \(Int(state.level * 100)) percent")
                 }
-                .frame(minWidth: minimumPillWidth)
-                .frame(height: pillHeight)
-                .background(.regularMaterial, in: .capsule)
-                .modifier(DictationPanelGlass())
             }
             if state.showsPreview {
                 HStack {
@@ -198,12 +193,13 @@ struct DictationPanelView: View {
                         Button("Dismiss", action: dismiss)
                     }
                 }
-                .padding(.horizontal, 24)
-                .frame(width: state.previewWidth, height: pillHeight)
-                .background(.regularMaterial, in: .capsule)
-                .modifier(DictationPanelGlass())
+                .padding(.leading, state.problem.isEmpty ? 0 : 24)
+                .padding(.trailing, 24)
             }
         }
+        .frame(width: state.pillWidth, height: pillHeight)
+        .background(.regularMaterial, in: .capsule)
+        .modifier(DictationPanelGlass())
     }
 
     private var symbol: String { state.presentation.symbol }
@@ -645,18 +641,17 @@ final class SpeecherDictationPanel {
     private func syncFrameHeight() {
         let banners = (state.updateMessage.isEmpty ? 0 : 1)
             + (state.whatsNewMessage.isEmpty ? 0 : 1)
-        let hasPreview = state.problem.isEmpty && state.showsPreview
-        let height = pillHeight + (hasPreview ? pillHeight + bannerSpacing : 0)
-            + CGFloat(banners) * (bannerHeight + bannerSpacing)
+        let height = pillHeight + CGFloat(banners) * (bannerHeight + bannerSpacing)
         let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         let message = !state.problem.isEmpty ? state.problem : state.finished ? state.status : state.preview
         let textWidth = (message as NSString).size(withAttributes: [.font: font]).width
         let availableWidth = (panel.screen ?? NSScreen.main)?.visibleFrame.width
             ?? maximumPreviewWidth + screenEdgeMargin
         let maximumWidth = max(minimumPillWidth, min(maximumPreviewWidth, availableWidth - screenEdgeMargin))
-        let chrome = !state.problem.isEmpty ? 150 : state.finished ? 78 : previewChromeWidth
+        let chrome = !state.problem.isEmpty ? 150 : state.finished ? 78
+            : state.preview.isEmpty ? 0 : previewChromeWidth
         let contentWidth = min(max(minimumPillWidth, textWidth + chrome), maximumWidth)
-        state.previewWidth = contentWidth
+        state.pillWidth = contentWidth
         let width = max(contentWidth, banners > 0 ? 420 : minimumPillWidth)
         var frame = panel.frame
         guard abs(frame.width - width) >= 1 || abs(frame.height - height) >= 1 else { return }
