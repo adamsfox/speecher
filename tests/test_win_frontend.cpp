@@ -200,7 +200,7 @@ private slots:
         frontEnd->dismissPanelForTest();
     }
 
-    void nativeDictationPanelSeparatesAndClearsPreview()
+    void nativeDictationPanelSharesCapsuleAndClearsPreview()
     {
         if (!nativeUiAvailable()) {
             QSKIP("WinUI islands require an interactive desktop");
@@ -208,19 +208,25 @@ private slots:
         auto *panel = frontEnd->dictationPanelForTest();
         panel->showForTest(13);
         QVERIFY(panel->previewGeometryForTest().isEmpty());
+        const QRect compact = panel->capsuleGeometryForTest();
         panel->drivePreviewForTest(QStringLiteral("The meeting is on Thursday afternoon"));
+        QTest::qWait(100);
         const QRect waveform = panel->waveformGeometryForTest();
         const QRect preview = panel->previewGeometryForTest();
-        QVERIFY(preview.top() > waveform.bottom());
-        QVERIFY(std::abs(preview.center().x() - waveform.center().x()) <= 1);
-        QCOMPARE(preview.height(), waveform.height());
-        QVERIFY(preview.width() > waveform.width());
+        const QRect capsule = panel->capsuleGeometryForTest();
+        QVERIFY(capsule.contains(waveform));
+        QVERIFY(capsule.contains(preview));
+        QVERIFY(waveform.right() < preview.left());
+        QVERIFY(std::abs(preview.center().y() - waveform.center().y()) <= 1);
+        QCOMPARE(capsule.height(), compact.height());
+        QVERIFY(capsule.width() > compact.width());
         controller->session()->popupFrozenChanged(true);
         panel->drivePreviewForTest(QStringLiteral("This preview must be ignored while frozen"));
         QCOMPARE(panel->previewGeometryForTest(), preview);
         controller->session()->popupFrozenChanged(false);
         panel->drivePreviewForTest(QString());
         QVERIFY(panel->previewGeometryForTest().isEmpty());
+        QCOMPARE(panel->capsuleGeometryForTest(), compact);
         panel->drivePreviewForTest(QStringLiteral("Clear this when audio stops"));
         panel->driveStatusForTest(QStringLiteral("Stopping"));
         QVERIFY(panel->previewGeometryForTest().isEmpty());

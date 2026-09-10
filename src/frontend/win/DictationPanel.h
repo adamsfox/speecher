@@ -55,6 +55,7 @@ private:
     void driveLevelForTest(float level);
     bool saveGrabForTest(const QString &path) const;
     int levelBarCountForTest() const;
+    QRect capsuleGeometryForTest() const;
     QRect waveformGeometryForTest() const;
     QRect previewGeometryForTest() const;
     QString previewTextForTest() const;
