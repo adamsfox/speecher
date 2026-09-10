@@ -57,7 +57,7 @@ constexpr QMargins kPreviewMargins{24, 8, 24, 4};
 // the strip below, joined by concave fillets so the outline stays smoothly
 // rounded everywhere.
 constexpr qreal kContourFillet = 12.0;   // the concave turn from shoulder into lobe
-constexpr qreal kLobePad = 10.0;         // lobe air either side of the strip
+constexpr qreal kLobePad = 10.0;         // lobe air either side of the strip's ink
 constexpr qreal kShoulderDrop = 6.0;     // shoulder sits this far below the text,
                                          // mirroring the text's air above
 
@@ -72,7 +72,7 @@ public:
     // Only the popup's preview pill sets these; banners and the error capsule
     // keep the plain outline. With both widgets visible the frame carves the
     // preview contour around them instead of a full rounded rectangle.
-    void setContourWidgets(QWidget *text, QWidget *strip)
+    void setContourWidgets(QWidget *text, WaveformWidget *strip)
     {
         m_text = text;
         m_strip = strip;
@@ -117,15 +117,29 @@ private:
         }
         const qreal shoulderY = m_strip->y() + kShoulderDrop;
         const qreal capR = (shoulderY - pillRect.top()) / 2.0;
-        const qreal lobeLeft = m_strip->x() - kLobePad;
-        const qreal lobeRight = m_strip->x() + m_strip->width() + kLobePad;
+        // The lobe hugs what the strip paints — the bar row, the dots or the
+        // status text — not the strip's fixed widget bounds, which are much
+        // wider than the ink they hold.
+        const qreal stripCenter = m_strip->x() + m_strip->width() / 2.0;
+        const qreal lobeHalf = m_strip->contentWidth() / 2.0 + kLobePad;
+        const qreal lobeLeft = stripCenter - lobeHalf;
+        const qreal lobeRight = stripCenter + lobeHalf;
         const qreal lobeHeight = pillRect.bottom() - shoulderY;
-        const qreal lobeR = std::min({kPillCornerRadius, lobeHeight / 2.0,
-                                      (lobeRight - lobeLeft) / 2.0});
-        const bool roomToCarve = lobeLeft - kContourFillet > pillRect.left() + 2 * capR
-            && lobeRight + kContourFillet < pillRect.right() - 2 * capR
-            && lobeHeight > kContourFillet;
-        if (capR <= 0 || !roomToCarve) {
+        // Radii yield to the room available: the fillet takes what the shelf
+        // between end cap and lobe leaves it, and fillet plus bottom corner
+        // shrink together to fit the lobe's height, so the outline can never
+        // double back on itself. Under ~4px of fillet there is nothing left
+        // to carve and the plain capsule is the honest shape.
+        const qreal shelf = std::min(lobeLeft - pillRect.left(),
+                                     pillRect.right() - lobeRight);
+        qreal fillet = std::min(kContourFillet, shelf - capR);
+        qreal lobeR = std::min(kPillCornerRadius, lobeHalf);
+        if (fillet + lobeR > lobeHeight) {
+            const qreal scale = lobeHeight / (fillet + lobeR);
+            fillet *= scale;
+            lobeR *= scale;
+        }
+        if (capR <= 0 || lobeHeight <= 0 || fillet < 4) {
             return path;
         }
 
@@ -135,10 +149,9 @@ private:
         path.arcTo(QRectF(pillRect.right() - 2 * capR, pillRect.top(),
                           2 * capR, shoulderY - pillRect.top()),
                    90, -180);
-        path.lineTo(lobeRight + kContourFillet, shoulderY);
+        path.lineTo(lobeRight + fillet, shoulderY);
         // Concave fillet into the lobe's right side.
-        path.arcTo(QRectF(lobeRight, shoulderY, 2 * kContourFillet, 2 * kContourFillet),
-                   90, 90);
+        path.arcTo(QRectF(lobeRight, shoulderY, 2 * fillet, 2 * fillet), 90, 90);
         path.lineTo(lobeRight, pillRect.bottom() - lobeR);
         path.arcTo(QRectF(lobeRight - 2 * lobeR, pillRect.bottom() - 2 * lobeR,
                           2 * lobeR, 2 * lobeR),
@@ -146,10 +159,9 @@ private:
         path.lineTo(lobeLeft + lobeR, pillRect.bottom());
         path.arcTo(QRectF(lobeLeft, pillRect.bottom() - 2 * lobeR, 2 * lobeR, 2 * lobeR),
                    270, -90);
-        path.lineTo(lobeLeft, shoulderY + kContourFillet);
+        path.lineTo(lobeLeft, shoulderY + fillet);
         // Concave fillet back onto the shoulder.
-        path.arcTo(QRectF(lobeLeft - 2 * kContourFillet, shoulderY,
-                          2 * kContourFillet, 2 * kContourFillet),
+        path.arcTo(QRectF(lobeLeft - 2 * fillet, shoulderY, 2 * fillet, 2 * fillet),
                    0, 90);
         path.lineTo(pillRect.left() + capR, shoulderY);
         // Left stadium end back up to the start.
@@ -161,7 +173,7 @@ private:
     }
 
     QWidget *m_text = nullptr;
-    QWidget *m_strip = nullptr;
+    WaveformWidget *m_strip = nullptr;
 };
 
 // The popup's action chips: capsule buttons in the pill's own visual language,

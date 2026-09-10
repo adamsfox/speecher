@@ -50,6 +50,9 @@ constexpr int barCount = 15;
 // The compact strip under the popup's transcript line: just enough for the
 // bars at full shout (barDotHeight * audioGain * the 1.5 wave crest = 24px).
 constexpr int compactStripHeight = 28;
+// The sign-in dots, shared between paintDots and contentWidth.
+constexpr int dotRadius = 4;
+constexpr int dotGap = 8;
 constexpr qreal barWidth = 2.0 * pillScale;
 constexpr qreal barGap = 2.0 * pillScale;
 constexpr qreal barDotHeight = 2.0 * pillScale;
@@ -284,6 +287,17 @@ void WaveformWidget::setMessage(const QString &message)
     update();
 }
 
+int WaveformWidget::contentWidth() const
+{
+    if (m_mode == Mode::Dots) {
+        return dotRadius * 6 + dotGap * 2;
+    }
+    if (m_mode == Mode::Message || m_mode == Mode::Status) {
+        return fontMetrics().horizontalAdvance(m_message);
+    }
+    return int(std::ceil(barCount * barWidth + (barCount - 1) * barGap));
+}
+
 void WaveformWidget::setBackgroundVisible(bool visible)
 {
     m_backgroundVisible = visible;
@@ -351,8 +365,8 @@ void WaveformWidget::paintWaveform(QPainter &painter, const QColor &bar)
 
 void WaveformWidget::paintDots(QPainter &painter, const QColor &bar)
 {
-    const int radius = 4;
-    const int gap = 8;
+    const int radius = dotRadius;
+    const int gap = dotGap;
     const int totalWidth = radius * 6 + gap * 2;
     const int startX = (width() - totalWidth) / 2 + radius;
     const int centerY = height() / 2;

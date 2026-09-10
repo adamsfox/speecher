@@ -44,6 +44,10 @@ public:
 
     explicit WaveformWidget(QWidget *parent = nullptr);
     void setBackgroundVisible(bool visible);
+    // The width of what paintEvent actually draws in the current mode — the
+    // bar row, the dots, or the message text — as opposed to the fixed widget
+    // bounds. The popup carves its contour around this.
+    int contentWidth() const;
     // Low-strip geometry for the popup capsule, where the waveform sits under
     // the transcript line rather than standing alone. Off by default; the
     // Dictation page keeps the full-height pill.
