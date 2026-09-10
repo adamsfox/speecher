@@ -53,6 +53,10 @@ constexpr int panelWidth = 126;
 constexpr int panelHeight = 48;
 constexpr int previewChromeWidth = 48;
 constexpr int compactStripHeight = 28;
+constexpr int previewTopPadding = 12;
+constexpr int previewStripSpacing = 8;
+constexpr int previewBottomPadding = 8;
+constexpr int previewShoulderDrop = 4;
 constexpr int maximumPreviewWidth = 488;
 constexpr int screenEdgeMargin = 80;
 constexpr int bottomMargin = 28;
@@ -369,7 +373,7 @@ struct DictationPanel::Native : QObject {
         previewText.TextAlignment(TextAlignment::Center);
         previewText.MaxLines(1);
         previewText.TextTrimming(TextTrimming::CharacterEllipsis);
-        previewText.Margin({24, 8, 24, 0});
+        previewText.Margin({24, previewTopPadding, 24, 0});
         content.Children().Append(previewText);
 
         dismiss = Button();
@@ -785,7 +789,8 @@ struct DictationPanel::Native : QObject {
         }
         previewText.Visibility(showPreview ? Visibility::Visible : Visibility::Collapsed);
         row.Padding(hasProblem || finished ? Thickness{12, 0, 12, 0} : Thickness{});
-        content.Padding({0, 0, 0, showPreview ? 4.0 : 0.0});
+        row.Margin({0, showPreview ? double(previewStripSpacing) : 0.0, 0, 0});
+        content.Padding({0, 0, 0, showPreview ? double(previewBottomPadding) : 0.0});
         text.Text(hstring(shown.toStdWString()));
         text.Visibility(listening ? Visibility::Collapsed : Visibility::Visible);
         text.Width(hasProblem ? wantedWidth - 150 : finished ? wantedWidth - 68 : wantedWidth);
@@ -808,9 +813,11 @@ struct DictationPanel::Native : QObject {
         const int stripHeight = showPreview ? waiting ? lineHeight + 6 : compactStripHeight : panelHeight;
         row.Height(stripHeight);
         bars.Height(stripHeight);
-        const int wantedHeight = showPreview ? 8 + lineHeight + stripHeight + 4 : panelHeight;
+        const int wantedHeight = showPreview
+            ? previewTopPadding + lineHeight + previewStripSpacing + stripHeight + previewBottomPadding
+            : panelHeight;
         resize(wantedWidth, wantedHeight);
-        updateOutline(showPreview ? 8 + lineHeight + 6 : 0,
+        updateOutline(showPreview ? previewTopPadding + lineHeight + previewShoulderDrop : 0,
                       waiting ? measuredTextWidth(shown) : 92.8);
         if (IsWindowVisible(window)) {
             reposition();
