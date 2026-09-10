@@ -1,0 +1,233 @@
+// speecher-keywatch-setup: the pkexec'd installer for speecher-keywatchd. It
+// creates the speecher-keywatch system user and group, adds the login user to
+// that group (which grants access to the daemon's socket and nothing else),
+// installs the socket and service units, and copies the daemon to a system
+// path. It deliberately does NOT write a udev rule and does NOT touch the
+// input group: the whole point of the design is that no unprivileged process
+// gains the ability to read input devices. See keywatch-security-design.md.
+//
+// Modelled on YdotoolSetupHelper.cpp, including its rollback transaction and
+// --user validation against the passwd database.
+
+#include "HelperCommands.h"
+#include "YdotoolSetupTransaction.h"
+
+#include <iostream>
+#include <string>
+#include <string_view>
+
+using namespace speecher::helpers;
+
+namespace {
+
+constexpr std::string_view groupName = "speecher-keywatch";
+constexpr std::string_view userName = "speecher-keywatch";
+constexpr std::string_view daemonInstallPath = "/usr/local/lib/speecher/speecher-keywatchd";
+constexpr std::string_view socketUnitPath = "/etc/systemd/system/speecher-keywatchd.socket";
+constexpr std::string_view serviceUnitPath = "/etc/systemd/system/speecher-keywatchd.service";
+constexpr std::string_view socketName = "speecher-keywatchd.socket";
+
+constexpr std::string_view socketText =
+    "[Unit]\n"
+    "Description=Speecher key-watch helper socket\n"
+    "\n"
+    "[Socket]\n"
+    "ListenStream=/run/speecher-keywatchd/socket\n"
+    "SocketMode=0660\n"
+    "SocketUser=root\n"
+    "SocketGroup=speecher-keywatch\n"
+    "\n"
+    "[Install]\n"
+    "WantedBy=sockets.target\n";
+
+// Runs as root only to open /dev/input at startup; the daemon drops to the
+// speecher-keywatch user and installs its seccomp filter before serving any
+// client. The hardening here is defence in depth on top of that in-process
+// drop, not a replacement for it.
+constexpr std::string_view serviceText =
+    "[Unit]\n"
+    "Description=Speecher key-watch helper\n"
+    "Requires=speecher-keywatchd.socket\n"
+    "After=speecher-keywatchd.socket\n"
+    "\n"
+    "[Service]\n"
+    "Type=simple\n"
+    "ExecStart=/usr/local/lib/speecher/speecher-keywatchd\n"
+    "NoNewPrivileges=yes\n"
+    "ProtectSystem=strict\n"
+    "ProtectHome=yes\n"
+    "PrivateTmp=yes\n"
+    "PrivateNetwork=yes\n"
+    "IPAddressDeny=any\n"
+    "RestrictAddressFamilies=AF_UNIX\n"
+    "MemoryDenyWriteExecute=yes\n"
+    "SystemCallArchitectures=native\n"
+    "LockPersonality=yes\n"
+    "RestrictNamespaces=yes\n"
+    "ProtectKernelModules=yes\n"
+    "ProtectKernelTunables=yes\n"
+    "ProtectKernelLogs=yes\n"
+    "ProtectClock=yes\n"
+    "DeviceAllow=char-input r\n"
+    "UMask=0077\n";
+
+// The daemon ships beside this installer, so its source is our own directory,
+// never a path taken from the caller: nothing user-controlled crosses pkexec.
+std::string daemonSourcePath()
+{
+    char buffer[4096];
+    const ssize_t length = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+    if (length <= 0) {
+        return {};
+    }
+    buffer[length] = '\0';
+    const std::string self(buffer);
+    const std::string::size_type slash = self.find_last_of('/');
+    if (slash == std::string::npos) {
+        return {};
+    }
+    return self.substr(0, slash + 1) + "speecher-keywatchd";
+}
+
+bool ensureSystemUser(bool &created, std::string &error)
+{
+    if (getpwnam(userName.data())) {
+        return true;
+    }
+    if (!run("useradd",
+             {"--system", "--user-group", "--no-create-home",
+              "--shell", "/usr/sbin/nologin", std::string(userName)},
+             error)) {
+        return false;
+    }
+    created = true;
+    return true;
+}
+
+bool copyDaemon(std::string &error)
+{
+    const std::string source = daemonSourcePath();
+    if (source.empty()) {
+        error = "Could not locate the bundled speecher-keywatchd";
+        return false;
+    }
+    std::error_code directoryError;
+    std::filesystem::create_directories(
+        std::filesystem::path(std::string(daemonInstallPath)).parent_path(), directoryError);
+    if (directoryError) {
+        error = "Could not create the daemon directory";
+        return false;
+    }
+    std::filesystem::copy_file(source, std::string(daemonInstallPath),
+                               std::filesystem::copy_options::overwrite_existing, directoryError);
+    if (directoryError) {
+        error = "Could not install speecher-keywatchd";
+        return false;
+    }
+    std::filesystem::permissions(std::string(daemonInstallPath),
+                                 std::filesystem::perms::owner_all
+                                     | std::filesystem::perms::group_read
+                                     | std::filesystem::perms::group_exec
+                                     | std::filesystem::perms::others_read
+                                     | std::filesystem::perms::others_exec,
+                                 directoryError);
+    return true;
+}
+
+bool install(const std::string &user, std::string &error)
+{
+    speecher::YdotoolSetupTransaction transaction;
+    const auto failed = [&] {
+        transaction.appendToError(error);
+        return false;
+    };
+    bool userCreated = false;
+    if (!ensureSystemUser(userCreated, error)) {
+        return failed();
+    }
+    if (userCreated) {
+        transaction.record("created system user " + std::string(userName));
+    }
+    bool userAdded = false;
+    if (!addUserToGroup(groupName, user, userAdded, error)) {
+        return failed();
+    }
+    if (userAdded) {
+        transaction.record("added " + user + " to " + std::string(groupName));
+    }
+    if (!copyDaemon(error)) {
+        return failed();
+    }
+    transaction.record("installed " + std::string(daemonInstallPath));
+    if (!writeFile(std::string(socketUnitPath), socketText, error)) {
+        return failed();
+    }
+    transaction.record("wrote " + std::string(socketUnitPath));
+    if (!writeFile(std::string(serviceUnitPath), serviceText, error)) {
+        return failed();
+    }
+    transaction.record("wrote " + std::string(serviceUnitPath));
+    run("systemctl", {"daemon-reload"}, error, true, true);
+    if (!run("systemctl", {"enable", "--now", std::string(socketName)}, error)) {
+        return failed();
+    }
+    return true;
+}
+
+bool remove(const std::string &user, std::string &error)
+{
+    run("systemctl", {"disable", "--now", std::string(socketName)}, error, true, true);
+    run("gpasswd", {"-d", user, std::string(groupName)}, error, true, true);
+    if (!removeFileIfPresent(std::string(socketUnitPath), error)
+        || !removeFileIfPresent(std::string(serviceUnitPath), error)
+        || !removeFileIfPresent(std::string(daemonInstallPath), error)) {
+        return false;
+    }
+    run("systemctl", {"daemon-reload"}, error, true, true);
+    return true;
+}
+
+void printHelp(const char *program)
+{
+    std::cout << "Usage: " << program << " (--install|--remove) --user USER\n";
+}
+
+} // namespace
+
+int main(int argc, char **argv)
+{
+    std::string user;
+    bool doInstall = false;
+    bool doRemove = false;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument(argv[index]);
+        if (argument == "--help") {
+            printHelp(argv[0]);
+            return 0;
+        }
+        if (argument == "--install") {
+            doInstall = true;
+        } else if (argument == "--remove") {
+            doRemove = true;
+        } else if (argument == "--user" && index + 1 < argc) {
+            user = argv[++index];
+        } else {
+            std::cerr << "Unknown argument\n";
+            return 2;
+        }
+    }
+    if (geteuid() != 0) {
+        std::cerr << "This helper must run as root through pkexec\n";
+        return 3;
+    }
+    std::string error;
+    if (doInstall == doRemove || !validateUser(user, error)) {
+        std::cerr << (error.empty() ? "Choose exactly one action\n" : error + '\n');
+        return 2;
+    }
+    if (!(doInstall ? install(user, error) : remove(user, error))) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    return 0;
+}

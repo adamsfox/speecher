@@ -5,16 +5,19 @@
 
 namespace speecher {
 
-// One row of the physical-key vocabulary: the W3C KeyboardEvent.code name and
-// what the UI calls that key. Platform backends add the columns they need to
-// map a code onto their own key identifiers.
+// One row of the physical-key vocabulary: the W3C KeyboardEvent.code name,
+// what the UI calls that key, and the Linux evdev keycode. X11 keycodes are
+// evdev + 8, so X11 needs no column of its own.
 struct PhysicalKey {
     const char *code;
     const char *label;
+    int evdev;
 };
 
 // The row for a KeyboardEvent.code name, or nullptr when no key has that name.
 const PhysicalKey *physicalKey(const QString &code);
+// The row for a Linux evdev keycode, or nullptr when the vocabulary lacks it.
+const PhysicalKey *physicalKeyForEvdev(int evdev);
 
 // The Global Shortcut: a key combination, which every desktop shortcut service
 // accepts, or one physical key, which none does and a platform backend has to

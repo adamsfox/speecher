@@ -1,21 +1,12 @@
 #include "output/YdotoolSetup.h"
 
-#include "output/HelperPath.h"
+#include "output/HelperInstall.h"
 #include "output/YdotoolDelivery.h"
 
-#include <QCoreApplication>
-#include <QDir>
 #include <QFileInfo>
-#include <QProcess>
-#include <QSaveFile>
 #include <QStandardPaths>
 
-#ifdef Q_OS_UNIX
 #include <grp.h>
-#include <pwd.h>
-#include <sys/types.h>
-#include <unistd.h>
-#endif
 
 namespace speecher {
 
@@ -33,188 +24,6 @@ QString installedServicePath()
         return QStringLiteral("/usr/lib/systemd/user/speecher-ydotoold.service");
     }
     return QStringLiteral("/lib/systemd/user/speecher-ydotoold.service");
-}
-
-bool groupExists()
-{
-#ifdef Q_OS_UNIX
-    return getgrnam(groupName) != nullptr;
-#else
-    return false;
-#endif
-}
-
-bool userInGroup(const QString &userName)
-{
-#ifdef Q_OS_UNIX
-    const QByteArray user = userName.toLocal8Bit();
-    const group *grp = getgrnam(groupName);
-    if (!grp) {
-        return false;
-    }
-    for (char **member = grp->gr_mem; member && *member; ++member) {
-        if (user == *member) {
-            return true;
-        }
-    }
-    const passwd *pw = getpwnam(user.constData());
-    return pw && pw->pw_gid == grp->gr_gid;
-#else
-    Q_UNUSED(userName);
-    return false;
-#endif
-}
-
-bool currentSessionInGroup()
-{
-#ifdef Q_OS_UNIX
-    const group *grp = getgrnam(groupName);
-    if (!grp) {
-        return false;
-    }
-    const int count = getgroups(0, nullptr);
-    if (count <= 0) {
-        return false;
-    }
-    QList<gid_t> groups(count);
-    if (getgroups(count, groups.data()) < 0) {
-        return false;
-    }
-    return groups.contains(grp->gr_gid) || getegid() == grp->gr_gid;
-#else
-    return false;
-#endif
-}
-
-QString currentUserName()
-{
-#ifdef Q_OS_UNIX
-    if (const passwd *pw = getpwuid(getuid())) {
-        return QString::fromLocal8Bit(pw->pw_name);
-    }
-#endif
-    return qEnvironmentVariable("USER");
-}
-
-bool runProgram(const QString &program,
-                const QStringList &arguments,
-                QString *error,
-                int timeoutMs = 60000)
-{
-    QProcess process;
-    process.start(program, arguments);
-    if (!process.waitForStarted(3000)) {
-        if (error) {
-            *error = QStringLiteral("Could not start %1").arg(program);
-        }
-        return false;
-    }
-    if (!process.waitForFinished(timeoutMs)
-        || process.exitStatus() != QProcess::NormalExit
-        || process.exitCode() != 0) {
-        process.kill();
-        const QString stderrText = QString::fromUtf8(process.readAllStandardError()).trimmed();
-        if (error) {
-            *error = stderrText.isEmpty() ? QStringLiteral("%1 failed").arg(program) : stderrText;
-        }
-        return false;
-    }
-    return true;
-}
-
-QString stableHelperPath()
-{
-    const QString dataHome = qEnvironmentVariable("XDG_DATA_HOME");
-    const QString root = dataHome.isEmpty()
-        ? QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
-        : dataHome;
-    return QDir(root)
-        .filePath(QStringLiteral("speecher/libexec/speecher-ydotool-setup"));
-}
-
-bool verifyHelperCopy(const QString &sourcePath, const QString &destinationPath, QString *error)
-{
-    QFile source(sourcePath);
-    QFile destination(destinationPath);
-    if (!source.open(QIODevice::ReadOnly)
-        || !destination.open(QIODevice::ReadOnly)
-        || source.readAll() != destination.readAll()
-        || source.error() != QFileDevice::NoError
-        || destination.error() != QFileDevice::NoError) {
-        if (error) {
-            *error = QStringLiteral("The local ydotool setup helper could not be verified");
-        }
-        return false;
-    }
-    return true;
-}
-
-bool copyHelper(const QString &sourcePath, const QString &destinationPath, QString *error)
-{
-    QFile source(sourcePath);
-    if (!QFileInfo(source).isFile() || !QFileInfo(source).isExecutable()
-        || !source.open(QIODevice::ReadOnly)) {
-        if (error) {
-            *error = QStringLiteral("The bundled ydotool setup helper is missing or not executable");
-        }
-        return false;
-    }
-    const QByteArray contents = source.readAll();
-    if (source.error() != QFileDevice::NoError) {
-        if (error) {
-            *error = QStringLiteral("Could not read the bundled ydotool setup helper");
-        }
-        return false;
-    }
-
-    const QFileInfo destination(destinationPath);
-    const QString directory = destination.dir().absolutePath();
-    if (!destination.dir().mkpath(QStringLiteral("."))
-        || !QFile::setPermissions(directory,
-                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                                      | QFileDevice::ExeOwner)) {
-        if (error) {
-            *error = QStringLiteral("Could not create the local ydotool helper directory");
-        }
-        return false;
-    }
-    QSaveFile copy(destinationPath);
-    if (QFileInfo::exists(destinationPath)
-        && !QFile::setPermissions(destinationPath,
-                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                                      | QFileDevice::ExeOwner)) {
-        if (error) {
-            *error = QStringLiteral("Could not replace the local ydotool setup helper");
-        }
-        return false;
-    }
-    if (!copy.open(QIODevice::WriteOnly)) {
-        if (error) {
-            *error = QStringLiteral("Could not open the local ydotool setup helper: %1")
-                         .arg(copy.errorString());
-        }
-        return false;
-    }
-    if (copy.write(contents) != contents.size() || !copy.commit()) {
-        if (error) {
-            *error = QStringLiteral("Could not install the local ydotool setup helper: %1")
-                         .arg(copy.errorString());
-        }
-        return false;
-    }
-    if (!QFile::setPermissions(destinationPath,
-                               QFileDevice::ReadOwner | QFileDevice::ExeOwner)) {
-        if (error) {
-            *error = QStringLiteral("Could not secure the local ydotool setup helper");
-        }
-        return false;
-    }
-
-    if (!verifyHelperCopy(sourcePath, destinationPath, error)) {
-        QFile::remove(destinationPath);
-        return false;
-    }
-    return true;
 }
 
 } // namespace
@@ -280,12 +89,12 @@ YdotoolSetupStatus YdotoolSetup::probe(bool enabledInSpeecher)
     const QFileInfo uinput(QStringLiteral("/dev/uinput"));
     facts.uinputExists = uinput.exists();
     facts.uinputReadWrite = uinput.isReadable() && uinput.isWritable();
-    facts.speecherGroupExists = groupExists();
+    facts.speecherGroupExists = getgrnam(groupName) != nullptr;
     facts.speecherManagedSetupInstalled = QFileInfo::exists(QString::fromLatin1(setupStatePath))
         || QFileInfo::exists(installedServicePath());
-    const QString user = currentUserName();
-    facts.userInConfiguredGroup = !user.isEmpty() && userInGroup(user);
-    facts.currentSessionInConfiguredGroup = currentSessionInGroup();
+    const QString user = helpers::currentUserName();
+    facts.userInConfiguredGroup = !user.isEmpty() && helpers::userInGroup(groupName, user);
+    facts.currentSessionInConfiguredGroup = helpers::currentSessionInGroup(groupName);
     const QFileInfo socket(YdotoolDelivery::socketPath());
     facts.socketExists = socket.exists();
     facts.socketWritable = socket.isWritable();
@@ -299,50 +108,16 @@ QString YdotoolSetup::serviceName()
 
 QString YdotoolSetup::helperPath(QString *error)
 {
-    const QString bundled = resolvedHelperPath(SPEECHER_YDOTOOL_HELPER_PATH);
-    if (qEnvironmentVariableIsSet("APPIMAGE")) {
-        const QString stable = stableHelperPath();
-        return copyHelper(bundled, stable, error) ? stable : QString();
-    }
-    return bundled;
+    return helpers::stagedHelperPath(SPEECHER_YDOTOOL_HELPER_PATH, {}, error);
 }
 
 bool YdotoolSetup::runHelper(HelperAction action, QString *error)
 {
-    const QString pkexec = QStandardPaths::findExecutable(QStringLiteral("pkexec"));
-    if (pkexec.isEmpty()) {
-        if (error) {
-            *error = QStringLiteral("pkexec is not installed");
-        }
-        return false;
-    }
-    const QString user = currentUserName();
-    if (user.isEmpty()) {
-        if (error) {
-            *error = QStringLiteral("Could not determine the current user");
-        }
-        return false;
-    }
-    const QString helper = helperPath(error);
-    if (helper.isEmpty()) {
-        return false;
-    }
-    if (qEnvironmentVariableIsSet("APPIMAGE")) {
-        const QString bundled = resolvedHelperPath(SPEECHER_YDOTOOL_HELPER_PATH);
-        // A same-uid process can still replace this path after verification.
-        // That residual risk is accepted because it can already inject into
-        // Speecher, while an fd or shell path makes pkexec's prompt unreadable.
-        if (!verifyHelperCopy(bundled, helper, error)) {
-            return false;
-        }
-    }
-    return runProgram(pkexec,
-                      {helper,
-                       action == HelperAction::Install ? QStringLiteral("--install") : QStringLiteral("--remove"),
-                       QStringLiteral("--user"),
-                       user},
-                      error,
-                      5 * 60 * 1000);
+    return helpers::runSetupHelper(SPEECHER_YDOTOOL_HELPER_PATH,
+                                   {},
+                                   action == HelperAction::Install ? helpers::HelperAction::Install
+                                                                   : helpers::HelperAction::Remove,
+                                   error);
 }
 
 bool YdotoolSetup::startUserService(QString *error)
@@ -355,8 +130,8 @@ bool YdotoolSetup::startUserService(QString *error)
         return false;
     }
     QString ignored;
-    runProgram(systemctl, {QStringLiteral("--user"), QStringLiteral("daemon-reload")}, &ignored);
-    return runProgram(systemctl,
+    helpers::runProgram(systemctl, {QStringLiteral("--user"), QStringLiteral("daemon-reload")}, &ignored);
+    return helpers::runProgram(systemctl,
                       {QStringLiteral("--user"), QStringLiteral("enable"), QStringLiteral("--now"), serviceName()},
                       error);
 }
@@ -370,7 +145,7 @@ bool YdotoolSetup::stopUserService(QString *error)
         }
         return false;
     }
-    return runProgram(systemctl,
+    return helpers::runProgram(systemctl,
                       {QStringLiteral("--user"), QStringLiteral("disable"), QStringLiteral("--now"), serviceName()},
                       error);
 }

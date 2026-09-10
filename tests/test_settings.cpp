@@ -81,6 +81,18 @@ private slots:
         QVERIFY(ShortcutBinding::fromString(QString()).isEmpty());
     }
 
+    // The Linux backends map a code onto an evdev keycode (X11 = evdev + 8).
+    // Values are from input-event-codes.h, not recomputed the way the table is.
+    void vocabularyCarriesEvdevKeycodes()
+    {
+        QCOMPARE(physicalKey(QStringLiteral("AltRight"))->evdev, 100);
+        QCOMPARE(physicalKey(QStringLiteral("F13"))->evdev, 183);
+        QCOMPARE(physicalKey(QStringLiteral("KeyE"))->evdev, 18);
+        QCOMPARE(physicalKeyForEvdev(100)->code, "AltRight");
+        QCOMPARE(physicalKeyForEvdev(58)->code, "CapsLock");
+        QVERIFY(physicalKeyForEvdev(9999) == nullptr);
+    }
+
     void settingsDefaults()
     {
         qputenv("SPEECHER_TEST_CODEX_INSTALLED", "1");
