@@ -20,6 +20,7 @@
 #include <QVBoxLayout>
 
 #include <QPainter>
+#include <QPainterPath>
 
 #include <algorithm>
 
@@ -51,6 +52,15 @@ constexpr int kMaxPreviewWidth = 440;
 // because the waveform strip brings its own air above the resting bars.
 constexpr QMargins kPreviewMargins{24, 8, 24, 4};
 
+// The preview contour: the empty corners beside the narrow waveform strip are
+// carved away, leaving a wide bar around the text and a rounded lobe hugging
+// the strip below, joined by concave fillets so the outline stays smoothly
+// rounded everywhere.
+constexpr qreal kContourFillet = 12.0;   // the concave turn from shoulder into lobe
+constexpr qreal kLobePad = 10.0;         // lobe air either side of the strip
+constexpr qreal kShoulderDrop = 6.0;     // shoulder sits this far below the text,
+                                         // mirroring the text's air above
+
 // Paints the pill instead of a stylesheet border: Qt's QSS rounded borders
 // render with uneven thickness at fractional display scales, which reads as
 // blur around the edge. This draws a one-device-pixel hairline aligned to the
@@ -58,6 +68,15 @@ constexpr QMargins kPreviewMargins{24, 8, 24, 4};
 class PillFrame final : public QFrame {
 public:
     using QFrame::QFrame;
+
+    // Only the popup's preview pill sets these; banners and the error capsule
+    // keep the plain outline. With both widgets visible the frame carves the
+    // preview contour around them instead of a full rounded rectangle.
+    void setContourWidgets(QWidget *text, QWidget *strip)
+    {
+        m_text = text;
+        m_strip = strip;
+    }
 
 protected:
     void paintEvent(QPaintEvent *) override
@@ -76,10 +95,73 @@ protected:
         painter.setPen(QPen(stroke, penWidth));
         painter.setBrush(p.color(QPalette::Base));
         const QRectF pillRect = QRectF(rect()).adjusted(inset, inset, -inset, -inset);
-        const qreal radius = std::min(pillRect.height() / 2.0, kPillCornerRadius);
-        painter.drawRoundedRect(pillRect, radius, radius);
+        QPainterPath path = contourPath(pillRect);
+        if (path.isEmpty()) {
+            const qreal radius = std::min(pillRect.height() / 2.0, kPillCornerRadius);
+            path.addRoundedRect(pillRect, radius, radius);
+        }
+        painter.drawPath(path);
 #endif
     }
+
+private:
+    // One connected outline, traced clockwise: a stadium-ended bar around the
+    // text, concave fillets turning down beside the strip, and a rounded lobe
+    // hugging it. Empty when there is no width difference worth carving, so
+    // the caller falls back to the plain capsule.
+    QPainterPath contourPath(const QRectF &pillRect) const
+    {
+        QPainterPath path;
+        if (!m_text || !m_strip || !m_text->isVisible() || !m_strip->isVisible()) {
+            return path;
+        }
+        const qreal shoulderY = m_strip->y() + kShoulderDrop;
+        const qreal capR = (shoulderY - pillRect.top()) / 2.0;
+        const qreal lobeLeft = m_strip->x() - kLobePad;
+        const qreal lobeRight = m_strip->x() + m_strip->width() + kLobePad;
+        const qreal lobeHeight = pillRect.bottom() - shoulderY;
+        const qreal lobeR = std::min({kPillCornerRadius, lobeHeight / 2.0,
+                                      (lobeRight - lobeLeft) / 2.0});
+        const bool roomToCarve = lobeLeft - kContourFillet > pillRect.left() + 2 * capR
+            && lobeRight + kContourFillet < pillRect.right() - 2 * capR
+            && lobeHeight > kContourFillet;
+        if (capR <= 0 || !roomToCarve) {
+            return path;
+        }
+
+        path.moveTo(pillRect.left() + capR, pillRect.top());
+        path.lineTo(pillRect.right() - capR, pillRect.top());
+        // Right stadium end of the text bar.
+        path.arcTo(QRectF(pillRect.right() - 2 * capR, pillRect.top(),
+                          2 * capR, shoulderY - pillRect.top()),
+                   90, -180);
+        path.lineTo(lobeRight + kContourFillet, shoulderY);
+        // Concave fillet into the lobe's right side.
+        path.arcTo(QRectF(lobeRight, shoulderY, 2 * kContourFillet, 2 * kContourFillet),
+                   90, 90);
+        path.lineTo(lobeRight, pillRect.bottom() - lobeR);
+        path.arcTo(QRectF(lobeRight - 2 * lobeR, pillRect.bottom() - 2 * lobeR,
+                          2 * lobeR, 2 * lobeR),
+                   0, -90);
+        path.lineTo(lobeLeft + lobeR, pillRect.bottom());
+        path.arcTo(QRectF(lobeLeft, pillRect.bottom() - 2 * lobeR, 2 * lobeR, 2 * lobeR),
+                   270, -90);
+        path.lineTo(lobeLeft, shoulderY + kContourFillet);
+        // Concave fillet back onto the shoulder.
+        path.arcTo(QRectF(lobeLeft - 2 * kContourFillet, shoulderY,
+                          2 * kContourFillet, 2 * kContourFillet),
+                   0, 90);
+        path.lineTo(pillRect.left() + capR, shoulderY);
+        // Left stadium end back up to the start.
+        path.arcTo(QRectF(pillRect.left(), pillRect.top(),
+                          2 * capR, shoulderY - pillRect.top()),
+                   270, -180);
+        path.closeSubpath();
+        return path;
+    }
+
+    QWidget *m_text = nullptr;
+    QWidget *m_strip = nullptr;
 };
 
 // The popup's action chips: capsule buttons in the pill's own visual language,
@@ -236,6 +318,7 @@ TranscriberPopup::TranscriberPopup(PopupPositioner *positioner, QWidget *parent)
     previewRow->addWidget(m_errorDismiss, 0, Qt::AlignVCenter);
     m_pillLayout->addLayout(previewRow, 1);
     m_pillLayout->addWidget(m_waveform, 0, Qt::AlignHCenter);
+    static_cast<PillFrame *>(m_previewPill)->setContourWidgets(m_preview, m_waveform);
 
     m_errorDismissProgress->setObjectName(QStringLiteral("errorDismissProgress"));
     m_errorDismissProgress->setRange(0, 1000);
