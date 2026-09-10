@@ -47,10 +47,9 @@ constexpr qreal kPillCornerRadius = 24.0;
 // whatever the width.
 constexpr int kMaxPreviewWidth = 440;
 
-// The air between the transcript line and the capsule: sides clear the 24px
-// corners, the top holds the text off the stroke, and the bottom is smaller
-// because the waveform strip brings its own air above the resting bars.
-constexpr QMargins kPreviewMargins{24, 8, 24, 4};
+// Match the native popups' room around the text and lower strip.
+constexpr QMargins kPreviewMargins{24, 12, 24, 8};
+constexpr int kPreviewStripSpacing = 8;
 
 // The preview contour: the empty corners beside the narrow waveform strip are
 // carved away, leaving a wide bar around the text and a rounded lobe hugging
@@ -58,8 +57,7 @@ constexpr QMargins kPreviewMargins{24, 8, 24, 4};
 // rounded everywhere.
 constexpr qreal kContourFillet = 12.0;   // the concave turn from shoulder into lobe
 constexpr qreal kLobePad = 10.0;         // lobe air either side of the strip's ink
-constexpr qreal kShoulderDrop = 6.0;     // shoulder sits this far below the text,
-                                         // mirroring the text's air above
+constexpr qreal kShoulderDrop = 4.0;    // shoulder sits this far below the text
 
 // Paints the pill instead of a stylesheet border: Qt's QSS rounded borders
 // render with uneven thickness at fractional display scales, which reads as
@@ -115,7 +113,7 @@ private:
         if (!m_text || !m_strip || !m_text->isVisible() || !m_strip->isVisible()) {
             return path;
         }
-        const qreal shoulderY = m_strip->y() + kShoulderDrop;
+        const qreal shoulderY = m_text->y() + m_text->height() + kShoulderDrop;
         const qreal capR = (shoulderY - pillRect.top()) / 2.0;
         // The lobe hugs what the strip paints — the bar row or the
         // status text — not the strip's fixed widget bounds, which are much
@@ -519,6 +517,7 @@ void TranscriberPopup::applyPillGeometry()
 {
     const bool hasWords = !m_preview->isHidden();
     m_waveform->setCompact(hasWords);
+    m_pillLayout->setSpacing(hasWords ? kPreviewStripSpacing : 0);
     if (!hasWords) {
         m_pillLayout->setContentsMargins(0, 0, 0, 0);
         m_previewPill->setFixedHeight(m_waveform->height());
@@ -526,6 +525,7 @@ void TranscriberPopup::applyPillGeometry()
     }
     m_pillLayout->setContentsMargins(kPreviewMargins);
     m_previewPill->setFixedHeight(kPreviewMargins.top() + m_preview->sizeHint().height()
+                                  + kPreviewStripSpacing
                                   + m_waveform->height() + kPreviewMargins.bottom());
 }
 
@@ -612,6 +612,7 @@ void TranscriberPopup::showErrorMessage(const QString &message)
     m_previewPill->setVisible(true);
     // previewRow is centred in what is left after the bar and its air, so the
     // same amount above it puts the text on the capsule's optical centre.
+    m_pillLayout->setSpacing(0);
     m_pillLayout->setContentsMargins(24, kErrorBarInset + 3, 24, kErrorBarInset);
     m_errorDismissProgress->setValue(m_errorDismissProgress->maximum());
     m_errorDismissProgress->show();
