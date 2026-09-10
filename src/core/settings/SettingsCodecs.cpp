@@ -781,6 +781,17 @@ void SettingsCodecs::setPasteRules(const QList<PasteRule> &rules)
     m_settings.setValue(SettingsKeys::PasteRules, QJsonDocument(array).toJson(QJsonDocument::Compact));
 }
 
+ShortcutActivationMode SettingsCodecs::shortcutActivationMode() const
+{
+    return shortcutActivationModeFromName(
+        value(SettingsKeys::ShortcutActivationMode, QStringLiteral("hybrid")).toString());
+}
+
+void SettingsCodecs::setShortcutActivationMode(ShortcutActivationMode value)
+{
+    m_settings.setValue(SettingsKeys::ShortcutActivationMode, shortcutActivationModeName(value));
+}
+
 UpdateChannel SettingsCodecs::updateChannel() const
 {
     return updateChannelFromName(
@@ -1057,6 +1068,7 @@ AppSettings SettingsCodecs::snapshot() const
     settings.output.restoreClipboardAfterTyping = restoreClipboardAfterTyping();
     settings.output.completionStatusDurationMs = completionStatusDurationMs();
     settings.output.pasteRules = pasteRules();
+    settings.shortcutActivationMode = shortcutActivationMode();
     settings.updates.channel = updateChannel();
     settings.updates.autoCheck = autoCheckUpdates();
     settings.updates.autoInstall = autoInstallUpdates();

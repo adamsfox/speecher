@@ -513,6 +513,27 @@ SettingsPage generalPage(const SchemaContext &context)
         QStringLiteral("Global Shortcut"),
         QStringLiteral("Start or stop dictation from anywhere.")));
 #endif
+    systemRows.append(choiceRow(
+        QStringLiteral("activationMode"),
+        QStringLiteral("Shortcut behaviour"),
+        QStringLiteral("What pressing the Global Shortcut does."),
+        fixedOptions({
+            {shortcutActivationModeName(ShortcutActivationMode::PushToTalk),
+             QStringLiteral("Push to talk"),
+             QStringLiteral("Dictate only while the key is held.")},
+            {shortcutActivationModeName(ShortcutActivationMode::Toggle),
+             QStringLiteral("Toggle"),
+             QStringLiteral("One press starts, the next press stops.")},
+            {shortcutActivationModeName(ShortcutActivationMode::Hybrid),
+             QStringLiteral("Hybrid"),
+             QStringLiteral("A tap toggles; holding dictates until release.")},
+        }),
+        [](const AppSettings &settings) {
+            return shortcutActivationModeName(settings.shortcutActivationMode);
+        },
+        [](AppSettings &settings, const QString &value) {
+            settings.shortcutActivationMode = shortcutActivationModeFromName(value);
+        }));
     // No clipboard status row here: the Output page's Method choice says how
     // text is delivered, and a platform's "clipboard path" is not a setting.
 
@@ -1901,7 +1922,8 @@ static QList<SettingsPane> settingsPanes()
                                    QStringLiteral("transcriptionPreviewEnabled"),
                                    QStringLiteral("refinementPreviewEnabled"),
                                    QStringLiteral("previewWords")}),
-              group("System", {QStringLiteral("launchAtLogin")}),
+              group("System", {QStringLiteral("launchAtLogin"),
+                               QStringLiteral("activationMode")}),
               group("Maintenance", {QStringLiteral("runSetup")}),
               group("Updates", {QStringLiteral("updateChannel"),
                                 QStringLiteral("autoCheckUpdates"),

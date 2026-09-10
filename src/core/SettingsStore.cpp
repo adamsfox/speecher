@@ -87,6 +87,7 @@ void SettingsStore::applySnapshot(const AppSettings &draft)
     setPasteRules(draft.output.pasteRules);
     setRestoreClipboardAfterTyping(draft.output.restoreClipboardAfterTyping);
     setCompletionStatusDurationMs(draft.output.completionStatusDurationMs);
+    setShortcutActivationMode(draft.shortcutActivationMode);
     setUpdateChannel(draft.updates.channel);
     setAutoCheckUpdates(draft.updates.autoCheck);
     setAutoInstallUpdates(draft.updates.autoInstall);

@@ -345,6 +345,27 @@ private slots:
         QVERIFY(profiles.value(settings) != profiles.value(AppSettings{}));
     }
 
+    void activationModeRowOffersThreeModesAndDefaultsToHybrid()
+    {
+        const SettingsSchema schema = buildSettingsSchema(fakeContext());
+        const SettingsRow &row = rowById(schema.page(QStringLiteral("general")),
+                                         QStringLiteral("activationMode"));
+        QCOMPARE(row.kind, RowKind::Choice);
+        QStringList ids;
+        for (const RowOption &option : row.options(AppSettings{})) {
+            ids.append(option.id);
+        }
+        QCOMPARE(ids,
+                 QStringList({QStringLiteral("push_to_talk"),
+                              QStringLiteral("toggle"),
+                              QStringLiteral("hybrid")}));
+        QCOMPARE(row.value(AppSettings{}).toString(), QStringLiteral("hybrid"));
+
+        AppSettings settings;
+        row.apply(settings, QStringLiteral("toggle"));
+        QCOMPARE(settings.shortcutActivationMode, ShortcutActivationMode::Toggle);
+    }
+
     void launchAtLoginAppearsOnMacOSAndWindows()
     {
         const SettingsSchema schema = buildSettingsSchema(fakeContext());

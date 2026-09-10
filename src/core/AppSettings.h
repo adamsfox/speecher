@@ -27,6 +27,39 @@ inline UpdateChannel updateChannelFromName(const QString &name)
                                              : UpdateChannel::Stable;
 }
 
+// How the Global Shortcut drives a Dictation Session.
+enum class ShortcutActivationMode {
+    PushToTalk,
+    Toggle,
+    Hybrid,
+};
+
+inline QString shortcutActivationModeName(ShortcutActivationMode mode)
+{
+    switch (mode) {
+    case ShortcutActivationMode::PushToTalk:
+        return QStringLiteral("push_to_talk");
+    case ShortcutActivationMode::Toggle:
+        return QStringLiteral("toggle");
+    case ShortcutActivationMode::Hybrid:
+        break;
+    }
+    return QStringLiteral("hybrid");
+}
+
+// Anything unrecognised reads as hybrid, which is what the app did before the
+// setting existed.
+inline ShortcutActivationMode shortcutActivationModeFromName(const QString &name)
+{
+    if (name == QStringLiteral("push_to_talk")) {
+        return ShortcutActivationMode::PushToTalk;
+    }
+    if (name == QStringLiteral("toggle")) {
+        return ShortcutActivationMode::Toggle;
+    }
+    return ShortcutActivationMode::Hybrid;
+}
+
 struct BindingRule {
     QString phrase;
     QString replacement;
@@ -136,6 +169,7 @@ struct AppSettings {
     RefinementSettings refinement;
     OutputSettings output;
     UpdateSettings updates;
+    ShortcutActivationMode shortcutActivationMode = ShortcutActivationMode::Hybrid;
     QList<BindingRule> bindings;
     QList<VocabularyEntry> vocabulary;
     QList<LearnedCorrection> learnedCorrections;

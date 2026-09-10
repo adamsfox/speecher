@@ -54,6 +54,7 @@ public:
     bool restoreClipboardAfterTyping() const; void setRestoreClipboardAfterTyping(bool value);
     int completionStatusDurationMs() const; void setCompletionStatusDurationMs(int value);
     QList<PasteRule> pasteRules() const; void setPasteRules(const QList<PasteRule> &rules);
+    ShortcutActivationMode shortcutActivationMode() const; void setShortcutActivationMode(ShortcutActivationMode value);
     UpdateChannel updateChannel() const; void setUpdateChannel(UpdateChannel value);
     bool autoCheckUpdates() const; void setAutoCheckUpdates(bool value);
     bool autoInstallUpdates() const; void setAutoInstallUpdates(bool value);

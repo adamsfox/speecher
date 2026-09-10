@@ -117,7 +117,9 @@ public:
     using SettingsCodecs::snapshot;
     using SettingsCodecs::soundsEnabled;
     using SettingsCodecs::speechProvider;
+    using SettingsCodecs::setShortcutActivationMode;
     using SettingsCodecs::setupCompleted;
+    using SettingsCodecs::shortcutActivationMode;
     using SettingsCodecs::storedApiKeyFallback;
     using SettingsCodecs::theme;
     using SettingsCodecs::useTargetContext;

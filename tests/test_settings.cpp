@@ -2,6 +2,7 @@
 #ifdef SPEECHER_WITH_QKEYCHAIN
 #include "core/KeyringResult.h"
 #include "core/ShortcutBinding.h"
+#include "core/settings/SettingsKeys.h"
 #endif
 
 using namespace speecher;
@@ -133,6 +134,7 @@ private slots:
         QCOMPARE(settings.audioPostRollMs(), 200);
         QCOMPARE(settings.audioReadinessTimeoutMs(), 900);
         QCOMPARE(settings.audioVadThresholdPercent(), 2);
+        QCOMPARE(settings.shortcutActivationMode(), ShortcutActivationMode::Hybrid);
 
         settings.setSetupCompleted(true);
         QCOMPARE(settings.setupCompleted(), true);
@@ -319,6 +321,12 @@ private slots:
         QCOMPARE(settings.audioPostRollMs(), 0);
         QCOMPARE(settings.audioReadinessTimeoutMs(), 500);
         QCOMPARE(settings.audioVadThresholdPercent(), 20);
+
+        settings.raw().setValue(SettingsKeys::ShortcutActivationMode, QStringLiteral("hold"));
+        QCOMPARE(settings.shortcutActivationMode(), ShortcutActivationMode::Hybrid);
+        settings.setShortcutActivationMode(ShortcutActivationMode::PushToTalk);
+        QCOMPARE(settings.shortcutActivationMode(), ShortcutActivationMode::PushToTalk);
+        QCOMPARE(settings.snapshot().shortcutActivationMode, ShortcutActivationMode::PushToTalk);
     }
 
     void settingsDefaultRefinementProviderUsesInstalledCli()
