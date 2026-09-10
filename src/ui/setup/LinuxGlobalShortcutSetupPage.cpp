@@ -1,9 +1,13 @@
 #include "ui/setup/LinuxGlobalShortcutSetupPage.h"
 
 #include "app/ApplicationController.h"
+#include "core/AppSettings.h"
+#include "core/SettingsStore.h"
+#include "platform/KeywatchSetup.h"
 #include "platform/LinuxDesktopIntegration.h"
 
 #include <QClipboard>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -11,17 +15,25 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QKeyEvent>
 #include <QKeySequenceEdit>
 #include <QLabel>
+#include <QPointer>
+#include <QProgressBar>
 #include <QPushButton>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QSystemTrayIcon>
+#include <QThread>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
 namespace speecher {
 namespace {
+
+// X11 and xkb report a physical key as its evdev code plus eight.
+constexpr int x11KeycodeOffset = 8;
 
 QLabel *guidanceLabel(const QString &text, QWidget *parent)
 {
@@ -35,7 +47,77 @@ QString shortcutSetStatus(const QString &display)
     return QStringLiteral("Shortcut set to %1. Try it now.").arg(display);
 }
 
+// A key that types text keeps typing after it is bound, which the user has to
+// be told. Modifiers, Caps Lock and the F13-F24 block carry no text, so they
+// bind without a caveat.
+QString singleKeyTypingWarning(const ShortcutBinding &binding)
+{
+    static const QSet<QString> silentPrefixes{
+        QStringLiteral("Shift"), QStringLiteral("Control"), QStringLiteral("Alt"),
+        QStringLiteral("Meta"), QStringLiteral("CapsLock"), QStringLiteral("Fn")};
+    const QString code = binding.keyCode();
+    for (const QString &prefix : silentPrefixes) {
+        if (code.startsWith(prefix)) {
+            return QString();
+        }
+    }
+    if (code.startsWith(QLatin1Char('F')) && code.size() > 1 && code.at(1).isDigit()) {
+        return QString();
+    }
+    return QStringLiteral(
+        "Heads up: %1 still does its normal job and now also starts dictation, "
+        "so pressing it types as well.")
+        .arg(binding.displayText());
+}
+
+bool isWaylandSession()
+{
+    const QString sessionType = qEnvironmentVariable("XDG_SESSION_TYPE").toLower();
+    return sessionType == QStringLiteral("wayland")
+        || (sessionType.isEmpty() && qEnvironmentVariableIsSet("WAYLAND_DISPLAY"));
+}
+
 } // namespace
+
+SingleKeyCaptureButton::SingleKeyCaptureButton(QWidget *parent)
+    : QPushButton(QStringLiteral("Record a single key"), parent)
+{
+    setCheckable(true);
+    connect(this, &QPushButton::clicked, this, [this](bool checked) { setArmed(checked); });
+}
+
+void SingleKeyCaptureButton::setArmed(bool armed)
+{
+    m_armed = armed;
+    setChecked(armed);
+    setText(armed ? QStringLiteral("Press a key…") : QStringLiteral("Record a single key"));
+    if (armed) {
+        setFocus(Qt::OtherFocusReason);
+    }
+}
+
+void SingleKeyCaptureButton::keyPressEvent(QKeyEvent *event)
+{
+    if (!m_armed || event->isAutoRepeat()) {
+        QPushButton::keyPressEvent(event);
+        return;
+    }
+    if (const PhysicalKey *key = physicalKeyForEvdev(int(event->nativeScanCode()) - x11KeycodeOffset)) {
+        setArmed(false);
+        emit keyCaptured(ShortcutBinding::singleKey(QString::fromLatin1(key->code)));
+        return;
+    }
+    // A key with no vocabulary row (e.g. a media key) is ignored, staying armed.
+    event->accept();
+}
+
+void SingleKeyCaptureButton::focusOutEvent(QFocusEvent *event)
+{
+    if (m_armed) {
+        setArmed(false);
+    }
+    QPushButton::focusOutEvent(event);
+}
 
 QString linuxGlobalShortcutManualInstruction()
 {
@@ -75,6 +157,7 @@ LinuxGlobalShortcutSetupPage::LinuxGlobalShortcutSetupPage(
     , m_homePath(QDir::homePath())
     , m_appImagePath(QString::fromLocal8Bit(qgetenv("APPIMAGE")))
     , m_binaryPath(resolvedPath(QCoreApplication::applicationFilePath()))
+    , m_waylandSession(isWaylandSession())
 {
     if (!m_appImagePath.isEmpty()) {
         m_appImagePath = resolvedPath(m_appImagePath);
@@ -127,6 +210,49 @@ LinuxGlobalShortcutSetupPage::LinuxGlobalShortcutSetupPage(
     keyLayout->addLayout(keyRow);
     layout->addWidget(m_keySequenceControls);
 
+    // Single-key recording: its own capture widget, since QKeySequenceEdit
+    // cannot report a bare modifier. Any key records and saves; a warning
+    // explains the cost rather than a modal blocking it.
+    m_singleKeyControls = new QWidget(this);
+    m_singleKeyControls->setObjectName(QStringLiteral("singleKeyShortcut"));
+    auto *singleKeyLayout = new QVBoxLayout(m_singleKeyControls);
+    singleKeyLayout->setContentsMargins(0, 0, 0, 0);
+    singleKeyLayout->addWidget(guidanceLabel(
+        QStringLiteral("Or press a single key, such as Right Alt or F13, to use on its own."),
+        m_singleKeyControls));
+    m_captureKey = new SingleKeyCaptureButton(m_singleKeyControls);
+    m_captureKey->setObjectName(QStringLiteral("singleKeyCapture"));
+    singleKeyLayout->addWidget(m_captureKey, 0, Qt::AlignLeft);
+    m_singleKeyWarning = guidanceLabel(QString(), m_singleKeyControls);
+    m_singleKeyWarning->setObjectName(QStringLiteral("singleKeyWarning"));
+    singleKeyLayout->addWidget(m_singleKeyWarning);
+    layout->addWidget(m_singleKeyControls);
+
+    // The privileged key-watch helper: Wayland's only route to a single key,
+    // gated like the AppImage install block above it.
+    m_keyHelperControls = new QWidget(this);
+    m_keyHelperControls->setObjectName(QStringLiteral("keyHelperInstall"));
+    auto *keyHelperLayout = new QVBoxLayout(m_keyHelperControls);
+    keyHelperLayout->setContentsMargins(0, 0, 0, 0);
+    keyHelperLayout->addWidget(guidanceLabel(
+        QStringLiteral("On Wayland, a single-key shortcut needs a small helper that watches for "
+                       "that one key. Setting it up asks for administrator permission once; "
+                       "Speecher itself stays unprivileged. The helper only allows keys that "
+                       "cannot type text: modifiers, Caps Lock and F13 to F24."),
+        m_keyHelperControls));
+    auto *keyHelperRow = new QHBoxLayout;
+    m_keyHelperButton = new QPushButton(QStringLiteral("Set up single-key helper"), m_keyHelperControls);
+    m_keyHelperStatus = new QLabel(m_keyHelperControls);
+    m_keyHelperStatus->setWordWrap(true);
+    keyHelperRow->addWidget(m_keyHelperButton);
+    keyHelperRow->addWidget(m_keyHelperStatus, 1);
+    keyHelperLayout->addLayout(keyHelperRow);
+    m_keyHelperProgress = new QProgressBar(m_keyHelperControls);
+    m_keyHelperProgress->setRange(0, 0);
+    m_keyHelperProgress->setVisible(false);
+    keyHelperLayout->addWidget(m_keyHelperProgress);
+    layout->addWidget(m_keyHelperControls);
+
     m_portalControls = new QWidget(this);
     m_portalControls->setObjectName(QStringLiteral("portalShortcut"));
     auto *portalLayout = new QVBoxLayout(m_portalControls);
@@ -169,7 +295,39 @@ LinuxGlobalShortcutSetupPage::LinuxGlobalShortcutSetupPage(
     m_trayNote->setObjectName(QStringLiteral("globalShortcutTrayNote"));
     layout->addWidget(m_trayNote);
 
+    // The shortcut and its behaviour are set together. This is a native combo
+    // bound to the same shortcuts/activationMode setting the General page's
+    // schema row edits; the wizard page cannot host a SchemaSettingsPage row
+    // (that renders a whole settings pane), so it shares the setting rather
+    // than keeping a second copy of the value.
+    m_activationModeRow = new QWidget(this);
+    auto *modeRow = m_activationModeRow;
+    auto *modeLayout = new QVBoxLayout(modeRow);
+    modeLayout->setContentsMargins(0, 0, 0, 0);
+    modeLayout->addWidget(guidanceLabel(QStringLiteral("Shortcut behaviour"), modeRow));
+    m_activationMode = new QComboBox(modeRow);
+    m_activationMode->setObjectName(QStringLiteral("activationMode"));
+    const auto addMode = [this](ShortcutActivationMode mode, const QString &label) {
+        m_activationMode->addItem(label, shortcutActivationModeName(mode));
+    };
+    addMode(ShortcutActivationMode::PushToTalk, QStringLiteral("Push to talk — dictate while held"));
+    addMode(ShortcutActivationMode::Toggle, QStringLiteral("Toggle — one press starts, the next stops"));
+    addMode(ShortcutActivationMode::Hybrid, QStringLiteral("Hybrid — a tap toggles, holding dictates"));
+    modeLayout->addWidget(m_activationMode, 0, Qt::AlignLeft);
+    layout->addWidget(modeRow);
+
     layout->addStretch();
+
+    const auto currentMode = shortcutActivationModeName(
+        m_controller.settings()->shortcutActivationMode());
+    m_activationMode->setCurrentIndex(m_activationMode->findData(currentMode));
+    connect(m_activationMode, &QComboBox::currentIndexChanged, this, [this] {
+        m_controller.settings()->setShortcutActivationMode(
+            shortcutActivationModeFromName(m_activationMode->currentData().toString()));
+    });
+    connect(m_captureKey, &SingleKeyCaptureButton::keyCaptured, this,
+            [this](const ShortcutBinding &binding) { saveSingleKey(binding); });
+    connect(m_keyHelperButton, &QPushButton::clicked, this, [this] { installKeyHelper(); });
 
     connect(m_sequence,
             &QKeySequenceEdit::keySequenceChanged,
@@ -224,6 +382,11 @@ void LinuxGlobalShortcutSetupPage::hideAppMenuIntegration()
 {
     m_integration->hide();
     m_integrationHidden = true;
+}
+
+void LinuxGlobalShortcutSetupPage::hideActivationMode()
+{
+    m_activationModeRow->hide();
 }
 
 bool LinuxGlobalShortcutSetupPage::installRequired() const
@@ -286,6 +449,49 @@ void LinuxGlobalShortcutSetupPage::setShortcut()
     m_status->setText(shortcutSetStatus(m_controller.globalShortcutDisplay()));
 }
 
+void LinuxGlobalShortcutSetupPage::saveSingleKey(const ShortcutBinding &binding)
+{
+    // A refusal is shown, never saved: a Wayland user asking for a letter is
+    // told why rather than getting a binding that never fires.
+    const QString reason = m_controller.globalShortcutUnsupportedBindingReason(binding);
+    if (!reason.isEmpty()) {
+        m_singleKeyWarning->clear();
+        m_status->setText(reason);
+        return;
+    }
+    QString error;
+    if (!m_controller.setGlobalShortcut(binding, &error)) {
+        m_singleKeyWarning->clear();
+        m_status->setText(error.isEmpty() ? QStringLiteral("Couldn't set the shortcut.") : error);
+        return;
+    }
+    m_singleKeyWarning->setText(singleKeyTypingWarning(binding));
+    m_status->setText(shortcutSetStatus(m_controller.globalShortcutDisplay()));
+}
+
+void LinuxGlobalShortcutSetupPage::installKeyHelper()
+{
+    m_keyHelperButton->setEnabled(false);
+    m_keyHelperProgress->setVisible(true);
+    m_keyHelperStatus->setText(QStringLiteral("Setting up the key helper…"));
+    auto *thread = QThread::create([] {
+        QString error;
+        if (!KeywatchSetup::install(&error)) {
+            qWarning("key helper install failed: %s", qPrintable(error));
+        }
+    });
+    const QPointer<LinuxGlobalShortcutSetupPage> guard(this);
+    connect(thread, &QThread::finished, this, [this, guard] {
+        if (!guard) {
+            return;
+        }
+        m_keyHelperProgress->setVisible(false);
+        refreshKeyHelper();
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+}
+
 void LinuxGlobalShortcutSetupPage::chooseShortcut()
 {
     m_chooseShortcut->setEnabled(false);
@@ -338,6 +544,13 @@ void LinuxGlobalShortcutSetupPage::refreshControls()
     m_keySequenceControls->setVisible(ready && known && supported && !desktopChooser);
     m_portalControls->setVisible(ready && (!known || (supported && desktopChooser)));
     m_manualControls->setVisible(ready && known && !supported);
+    // A single key is watched by Speecher itself, so it does not need the
+    // desktop's combination service; it shows whenever the step is ready.
+    m_singleKeyControls->setVisible(ready && known);
+    m_keyHelperControls->setVisible(ready && known && m_waylandSession);
+    if (ready && known && m_waylandSession) {
+        refreshKeyHelper();
+    }
     m_status->setVisible(ready && (!known || supported));
     m_trayNote->setText(linuxTrayShortcutNote(QSystemTrayIcon::isSystemTrayAvailable()));
     m_trayNote->setVisible(ready && known && supported);
@@ -370,6 +583,15 @@ void LinuxGlobalShortcutSetupPage::refreshControls()
     m_setShortcut->setEnabled(
         !m_sequence->keySequence().isEmpty()
         && m_sequence->keySequence() != m_controller.globalShortcut().combination());
+}
+
+void LinuxGlobalShortcutSetupPage::refreshKeyHelper()
+{
+    const KeywatchSetupStatus status = KeywatchSetup::probe();
+    m_keyHelperStatus->setText(status.detail);
+    m_keyHelperButton->setEnabled(!status.ready() && !m_keyHelperProgress->isVisible());
+    m_keyHelperButton->setText(status.ready() ? QStringLiteral("Key helper ready")
+                                              : QStringLiteral("Set up single-key helper"));
 }
 
 void LinuxGlobalShortcutSetupPage::showRegistrationResult(bool bound,
