@@ -310,7 +310,6 @@ struct SetupWindow::Native {
         microphoneStatus = nullptr;
         microphoneProblem = nullptr;
         shortcutStatus = nullptr;
-        singleKeyBox = nullptr;
         ++transcriptionCheckGeneration;
         pageIndex = index;
         // The recorder page needs the bound chord delivered as a key event,
@@ -699,7 +698,6 @@ struct SetupWindow::Native {
         });
         panel.Children().Append(settingRow(
             QStringLiteral("Or a single key, such as Right Alt or F13"), singleKey));
-        singleKeyBox = singleKey;
 
         // The shortcut and its behaviour are set together; the combo shares
         // the shortcuts/activationMode setting the General page's schema row
@@ -799,29 +797,6 @@ struct SetupWindow::Native {
         }
     }
 
-    HWND windowHandle() const
-    {
-        if (!window) {
-            return nullptr;
-        }
-        HWND handle = nullptr;
-        window.as<::IWindowNative>()->get_WindowHandle(&handle);
-        return handle;
-    }
-
-    // The live recorder test needs real keyboard focus in the single-key box
-    // before it SendInputs a bare right Alt at it.
-    bool focusSingleKeyRecorder()
-    {
-        if (!singleKeyBox) {
-            return false;
-        }
-        if (HWND handle = windowHandle()) {
-            SetForegroundWindow(handle);
-        }
-        return singleKeyBox.Focus(FocusState::Programmatic);
-    }
-
     ApplicationController *controller;
     std::function<void()> firstFrame;
     SetupWindow *setup;
@@ -835,7 +810,6 @@ struct SetupWindow::Native {
     TextBlock microphoneStatus{nullptr};
     InfoBar microphoneProblem{nullptr};
     TextBlock shortcutStatus{nullptr};
-    TextBox singleKeyBox{nullptr};
     quint64 transcriptionCheckGeneration = 0;
     int pageIndex = 0;
     bool launchAtLogin;
@@ -884,16 +858,6 @@ QString SetupWindow::currentPageTitleForTest() const
 QStringList SetupWindow::welcomeCopyForTest()
 {
     return welcomeCopy();
-}
-
-bool SetupWindow::focusSingleKeyRecorderForTest()
-{
-    return m_native->focusSingleKeyRecorder();
-}
-
-qintptr SetupWindow::windowHandleForTest() const
-{
-    return qintptr(m_native->windowHandle());
 }
 
 } // namespace speecher

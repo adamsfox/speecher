@@ -28,8 +28,6 @@ private:
     void skipForTest();
     QString currentPageTitleForTest() const;
     static QStringList welcomeCopyForTest();
-    bool focusSingleKeyRecorderForTest();
-    qintptr windowHandleForTest() const;
     struct Native;
     std::unique_ptr<Native> m_native;
 };

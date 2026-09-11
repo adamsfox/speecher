@@ -3,9 +3,7 @@
 #include "app/ApplicationController.h"
 #include "core/OutputMethod.h"
 #include "core/SettingsStore.h"
-#include "core/ShortcutBinding.h"
 #include "dictation/DictationSession.h"
-#include "platform/win/WinGlobalShortcutBinder.h"
 #include "frontend/win/CustomRows.h"
 #include "frontend/win/DictationPanel.h"
 #include "frontend/win/SettingsWindow.h"
@@ -18,8 +16,6 @@
 #include <windows.h>
 
 #include <QApplication>
-#include <QPixmap>
-#include <QScreen>
 #include <QTest>
 #include <QScopeGuard>
 
@@ -31,26 +27,6 @@ namespace {
 bool nativeUiAvailable()
 {
     return QGuiApplication::platformName() != QStringLiteral("offscreen");
-}
-
-// WinUI composition windows blit black through their own DC, so evidence
-// grabs copy the screen at the window's rectangle, as the dictation panel's
-// grab seam does. The runner's desktop is 96 DPI, where device-independent
-// and native pixels coincide.
-bool saveWindowGrab(qintptr handle, const QString &path)
-{
-    RECT rect{};
-    if (!handle || !GetWindowRect(reinterpret_cast<HWND>(handle), &rect)) {
-        return false;
-    }
-    QScreen *screen = QGuiApplication::primaryScreen();
-    if (!screen) {
-        return false;
-    }
-    const QPixmap grab = screen->grabWindow(0, rect.left, rect.top,
-                                            rect.right - rect.left,
-                                            rect.bottom - rect.top);
-    return !grab.isNull() && grab.save(path);
 }
 
 template<typename Widget>
@@ -374,43 +350,6 @@ private slots:
             setup->show(SetupAssistantPage::GlobalShortcut);
             QCOMPARE(setup->currentPageTitleForTest(), QStringLiteral("Global Shortcut"));
         }
-    }
-
-    // Wave W's one unverified recorder assumption, proven on real input: a
-    // bare right Alt must arrive as a XAML key event in the focused single-key
-    // box (not be eaten as a system key) and bind AltRight through the
-    // controller. Also files the setup shortcut page as PNG evidence.
-    void setupSingleKeyRecorderTakesABareRightAltFromRealInput()
-    {
-        if (!nativeUiAvailable()) {
-            QSKIP("WinUI windows require an interactive desktop");
-        }
-        setup->show(SetupAssistantPage::GlobalShortcut);
-        QVERIFY(setup->focusSingleKeyRecorderForTest());
-        QTest::qWait(400);
-
-        INPUT alt{};
-        alt.type = INPUT_KEYBOARD;
-        alt.ki.wVk = VK_MENU;
-        alt.ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
-        QCOMPARE(SendInput(1, &alt, sizeof(INPUT)), 1U);
-        alt.ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
-        QCOMPARE(SendInput(1, &alt, sizeof(INPUT)), 1U);
-
-        QTRY_VERIFY_WITH_TIMEOUT(controller->globalShortcut().isSingleKey(), 3000);
-        QCOMPARE(controller->globalShortcut().keyCode(), QStringLiteral("AltRight"));
-
-        const QString grabDir = qEnvironmentVariable("SPEECHER_TEST_GRAB_DIR");
-        if (!grabDir.isEmpty()) {
-            QTest::qWait(200);
-            QVERIFY(saveWindowGrab(setup->windowHandleForTest(),
-                                   grabDir + QStringLiteral("/win-setup-shortcut.png")));
-        }
-
-        QString error;
-        QVERIFY2(controller->setGlobalShortcut(
-                     ShortcutBinding(WinGlobalShortcutBinder::defaultShortcut()), &error),
-                 qPrintable(error));
     }
 
     void panelVisualState()

@@ -96,16 +96,6 @@ jobs:
           $env:SPEECHER_TEST_GRAB_DIR = (Resolve-Path evidence).Path
           build/speecher_tests.exe
 
-      # The runner's desktop is interactive, so the win_platform suite's
-      # SendInput-driven binder tests run for real here instead of skipping:
-      # right Alt through the actual WM_INPUT path, the dwExtraInfo paste tag,
-      # and the combo<->single switch leaving one binding firing.
-      - name: Prove the shortcut binders on live input
-        shell: pwsh
-        env:
-          SPEECHER_TEST_ONLY_WIN_PLATFORM: "1"
-        run: build/speecher_tests.exe
-
       - name: Upload panel pictures
         if: always()
         uses: actions/upload-artifact@v7

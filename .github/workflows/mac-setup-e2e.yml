@@ -137,18 +137,15 @@ jobs:
           hdiutil detach "$mount" -quiet
           codesign --verify --deep --strict "$RUNNER_TEMP/product/speecher.app"
 
-      - name: Compile evidence probe and key poster
-        run: |
-          swiftc .github/macos-e2e/window_probe.swift -o "$RUNNER_TEMP/window-probe"
-          swiftc .github/macos-e2e/key_post.swift -o "$RUNNER_TEMP/key-post"
+      - name: Compile evidence probe
+        run: swiftc .github/macos-e2e/window_probe.swift -o "$RUNNER_TEMP/window-probe"
 
       - name: Run setup assistant E2E
-        timeout-minutes: 12
+        timeout-minutes: 5
         env:
           APP_BUNDLE: ${{ runner.temp }}/product/speecher.app
           EVIDENCE_ROOT: ${{ runner.temp }}/setup-e2e
           PROBE: ${{ runner.temp }}/window-probe
-          KEY_POST: ${{ runner.temp }}/key-post
         run: bash .github/macos-e2e/setup_run.sh
 
       - name: Run provider steps E2E

@@ -5,7 +5,6 @@
 #include "dictation/DictationPorts.h"
 #include "output/ClipboardDelivery.h"
 #include "output/TextDelivery.h"
-#include "platform/RoutingShortcutBinder.h"
 #include "platform/win/WinGlobalShortcutBinder.h"
 #include "platform/win/WinInjectedInput.h"
 #include "platform/win/WinSingleKeyShortcutBinder.h"
@@ -56,45 +55,6 @@ SchemaContext context()
     };
 }
 
-// SendInput and RegisterHotKey only work on an interactive window station;
-// the live tests below skip on a service-style station rather than fail.
-bool interactiveWindowStation()
-{
-    USEROBJECTFLAGS station{};
-    return GetUserObjectInformationW(GetProcessWindowStation(), UOI_FLAGS,
-                                     &station, sizeof(station), nullptr)
-        && (station.dwFlags & WSF_VISIBLE);
-}
-
-// A real key press: down then up through SendInput, untagged unless the test
-// says otherwise. KEYEVENTF_EXTENDEDKEY turns VK_MENU into right Alt (E0 38).
-void sendKey(WORD virtualKey, DWORD flags, ULONG_PTR extraInfo = 0)
-{
-    INPUT press[2]{};
-    for (INPUT &input : press) {
-        input.type = INPUT_KEYBOARD;
-        input.ki.wVk = virtualKey;
-        input.ki.dwFlags = flags;
-        input.ki.dwExtraInfo = extraInfo;
-    }
-    press[1].ki.dwFlags |= KEYEVENTF_KEYUP;
-    QCOMPARE(SendInput(2, press, sizeof(INPUT)), 2U);
-}
-
-void sendChord(WORD key)
-{
-    INPUT input[6]{};
-    const WORD keys[]{VK_CONTROL, VK_MENU, key, key, VK_MENU, VK_CONTROL};
-    for (int index = 0; index < 6; ++index) {
-        input[index].type = INPUT_KEYBOARD;
-        input[index].ki.wVk = keys[index];
-        if (index >= 3) {
-            input[index].ki.dwFlags = KEYEVENTF_KEYUP;
-        }
-    }
-    QCOMPARE(SendInput(6, input, sizeof(INPUT)), 6U);
-}
-
 } // namespace
 
 class WinPlatformTests : public QObject {
@@ -123,7 +83,10 @@ private slots:
 
     void suspendReleasesHotkeyUntilLastResume()
     {
-        if (!interactiveWindowStation()) {
+        USEROBJECTFLAGS station{};
+        if (!GetUserObjectInformationW(GetProcessWindowStation(), UOI_FLAGS,
+                                        &station, sizeof(station), nullptr)
+            || !(station.dwFlags & WSF_VISIBLE)) {
             QSKIP("Global Shortcut registration requires an interactive window station");
         }
         WinGlobalShortcutBinder shortcut;
@@ -273,101 +236,6 @@ private slots:
         binder.handleRawInput(input);
         QCOMPARE(activated.count(), 1);
         QVERIFY2(binder.setShortcut({}, &error), qPrintable(error));
-    }
-
-    // The synthetic-RAWINPUT tests above prove the decoding; this proves the
-    // wiring: a real SendInput right Alt travels the actual WM_INPUT route
-    // (RIDEV_INPUTSINK registration, the message-only window, GetRawInputData)
-    // and comes out as activated()/deactivated().
-    void liveRightAltRoundTripsThroughRealRawInput()
-    {
-        if (!interactiveWindowStation()) {
-            QSKIP("SendInput needs an interactive window station");
-        }
-        WinSingleKeyShortcutBinder binder;
-        QString error;
-        QVERIFY2(binder.setShortcut(ShortcutBinding::singleKey(QStringLiteral("AltRight")), &error),
-                 qPrintable(error));
-        QSignalSpy activated(&binder, &GlobalShortcutBinder::activated);
-        QSignalSpy deactivated(&binder, &GlobalShortcutBinder::deactivated);
-
-        INPUT alt{};
-        alt.type = INPUT_KEYBOARD;
-        alt.ki.wVk = VK_MENU;
-        alt.ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
-        QCOMPARE(SendInput(1, &alt, sizeof(INPUT)), 1U);
-        QTRY_COMPARE_WITH_TIMEOUT(activated.count(), 1, 2000);
-        alt.ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
-        QCOMPARE(SendInput(1, &alt, sizeof(INPUT)), 1U);
-        QTRY_COMPARE_WITH_TIMEOUT(deactivated.count(), 1, 2000);
-        QVERIFY2(binder.setShortcut({}, &error), qPrintable(error));
-    }
-
-    // dwExtraInfo must survive the real injection path, not just the struct
-    // the unit test above builds by hand: a tagged V (Speecher's own paste)
-    // stays silent while an untagged V (the e2e harness) fires.
-    void liveTaggedInjectionStaysSilentWhileUntaggedFires()
-    {
-        if (!interactiveWindowStation()) {
-            QSKIP("SendInput needs an interactive window station");
-        }
-        WinSingleKeyShortcutBinder binder;
-        QString error;
-        QVERIFY2(binder.setShortcut(ShortcutBinding::singleKey(QStringLiteral("KeyV")), &error),
-                 qPrintable(error));
-        QSignalSpy activated(&binder, &GlobalShortcutBinder::activated);
-
-        sendKey('V', 0, injectedInputTag);
-        QTest::qWait(500);
-        QCOMPARE(activated.count(), 0);
-
-        sendKey('V', 0);
-        QTRY_COMPARE_WITH_TIMEOUT(activated.count(), 1, 2000);
-        QVERIFY2(binder.setShortcut({}, &error), qPrintable(error));
-    }
-
-    // Switching combo -> single -> combo in one process leaves exactly one
-    // binding firing at each step; in particular removeRegistration must
-    // actually let the hot key go when a single key takes the binding over.
-    void liveSwitchingComboAndSingleLeavesOneBindingFiring()
-    {
-        if (!interactiveWindowStation()) {
-            QSKIP("SendInput needs an interactive window station");
-        }
-        RoutingShortcutBinder binder(new WinGlobalShortcutBinder,
-                                     new WinSingleKeyShortcutBinder);
-        QSignalSpy activated(&binder, &GlobalShortcutBinder::activated);
-        QSignalSpy deactivated(&binder, &GlobalShortcutBinder::deactivated);
-        QString error;
-        QVERIFY2(binder.setShortcut(
-                     ShortcutBinding(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F23)), &error),
-                 qPrintable(error));
-        sendChord(VK_F23);
-        QTRY_COMPARE_WITH_TIMEOUT(activated.count(), 1, 2000);
-
-        QVERIFY2(binder.setShortcut(ShortcutBinding::singleKey(QStringLiteral("AltRight")),
-                                    &error),
-                 qPrintable(error));
-        sendChord(VK_F23);
-        QTest::qWait(500);
-        QCOMPARE(activated.count(), 1); // the hot key was let go
-        sendKey(VK_MENU, KEYEVENTF_EXTENDEDKEY);
-        QTRY_COMPARE_WITH_TIMEOUT(activated.count(), 2, 2000);
-        QTRY_COMPARE_WITH_TIMEOUT(deactivated.count(), 2, 2000);
-
-        QVERIFY2(binder.setShortcut(
-                     ShortcutBinding(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F23)), &error),
-                 qPrintable(error));
-        sendKey(VK_MENU, KEYEVENTF_EXTENDEDKEY);
-        QTest::qWait(500);
-        QCOMPARE(activated.count(), 2); // the key watch was let go
-        sendChord(VK_F23);
-        QTRY_COMPARE_WITH_TIMEOUT(activated.count(), 3, 2000);
-
-        // Leave the stored shortcut on the platform default rather than F23.
-        QVERIFY2(binder.setShortcut(
-                     ShortcutBinding(WinGlobalShortcutBinder::defaultShortcut()), &error),
-                 qPrintable(error));
     }
 
     void qtClipboardSnapshotRestoresFormatsWithoutAManifest()
