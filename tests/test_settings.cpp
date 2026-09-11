@@ -125,6 +125,44 @@ private slots:
         }
     }
 
+    // The Windows backend maps a code onto a scancode: the set-1 make code
+    // with 0xE0 in the high byte for extended keys, as WM_KEYDOWN's lParam
+    // spells it. Values are from Chromium's dom_code_data.inc win column, not
+    // recomputed the way the table is; -1 marks Fn, which never reaches
+    // Windows, and the lookup must never match it. Pause is 0x45 while
+    // NumLock is 0xE045 — the message-level spelling the raw-input backend
+    // normalizes its E1/E0 quirks to.
+    void vocabularyCarriesWindowsScancodes()
+    {
+        QCOMPARE(physicalKey(QStringLiteral("AltRight"))->win, 0xE038);
+        QCOMPARE(physicalKey(QStringLiteral("AltLeft"))->win, 0x38);
+        QCOMPARE(physicalKey(QStringLiteral("ControlRight"))->win, 0xE01D);
+        QCOMPARE(physicalKey(QStringLiteral("KeyV"))->win, 0x2F);
+        QCOMPARE(physicalKey(QStringLiteral("F13"))->win, 0x64);
+        QCOMPARE(physicalKey(QStringLiteral("F24"))->win, 0x76);
+        QCOMPARE(physicalKey(QStringLiteral("Pause"))->win, 0x45);
+        QCOMPARE(physicalKey(QStringLiteral("NumLock"))->win, 0xE045);
+        QCOMPARE(physicalKey(QStringLiteral("NumpadEnter"))->win, 0xE01C);
+        QCOMPARE(physicalKey(QStringLiteral("Fn"))->win, -1);
+        QCOMPARE(physicalKeyForWin(0xE038)->code, "AltRight");
+        QCOMPARE(physicalKeyForWin(0x1D)->code, "ControlLeft");
+        QCOMPARE(physicalKeyForWin(0x3A)->code, "CapsLock");
+        QVERIFY(physicalKeyForWin(-1) == nullptr);
+        QVERIFY(physicalKeyForWin(0xE0FF) == nullptr);
+
+        // The keys that share a make code differ only in the E0 byte, so the
+        // watcher can never read an event as two different bindings.
+        for (const auto &[plain, extended] :
+             QList<QPair<QString, QString>>{{QStringLiteral("ControlLeft"), QStringLiteral("ControlRight")},
+                                            {QStringLiteral("AltLeft"), QStringLiteral("AltRight")},
+                                            {QStringLiteral("Slash"), QStringLiteral("NumpadDivide")},
+                                            {QStringLiteral("Enter"), QStringLiteral("NumpadEnter")},
+                                            {QStringLiteral("NumpadMultiply"), QStringLiteral("PrintScreen")},
+                                            {QStringLiteral("Pause"), QStringLiteral("NumLock")}}) {
+            QCOMPARE(physicalKey(extended)->win, physicalKey(plain)->win | 0xE000);
+        }
+    }
+
     // The warning is the same sentence on every platform; the keys that carry
     // no text stay silent.
     void singleKeyWarningNamesTypingKeysOnly()

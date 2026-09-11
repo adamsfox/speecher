@@ -9,12 +9,16 @@ namespace speecher {
 // what the UI calls that key, and the platform keycodes. X11 keycodes are
 // evdev + 8, so X11 needs no column of its own. The mac column holds the
 // macOS virtual keycode (Carbon's kVK_* values, which are positional like the
-// code names); -1 marks a key Mac keyboards do not have.
+// code names); -1 marks a key Mac keyboards do not have. The win column holds
+// the Windows scancode: the set-1 make code, with 0xE0 in the high byte for
+// extended keys, as WM_KEYDOWN's lParam spells it; -1 marks a key that never
+// reaches Windows as a scancode.
 struct PhysicalKey {
     const char *code;
     const char *label;
     int evdev;
     int mac;
+    int win;
 };
 
 // The row for a KeyboardEvent.code name, or nullptr when no key has that name.
@@ -23,6 +27,8 @@ const PhysicalKey *physicalKey(const QString &code);
 const PhysicalKey *physicalKeyForEvdev(int evdev);
 // The row for a macOS virtual keycode, or nullptr when the vocabulary lacks it.
 const PhysicalKey *physicalKeyForMac(int mac);
+// The row for a Windows scancode, or nullptr when the vocabulary lacks it.
+const PhysicalKey *physicalKeyForWin(int win);
 
 // The Global Shortcut: a key combination, which every desktop shortcut service
 // accepts, or one physical key, which none does and a platform backend has to
