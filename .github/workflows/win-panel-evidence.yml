@@ -13,9 +13,13 @@ on:
       - 'evidence/**'
   pull_request:
     paths:
-      - src/frontend/win/DictationPanel.*
-      - src/frontend/win/WinFrontEnd.*
+      - src/frontend/win/**
+      - src/platform/win/**
+      - src/platform/RoutingShortcutBinder.*
+      - src/platform/SingleKeyShortcutBinder.*
+      - src/core/ShortcutBinding.*
       - tests/test_win_frontend.cpp
+      - tests/test_win_platform.cpp
       - .github/workflows/win-panel-evidence.yml
 
 permissions:
@@ -91,6 +95,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path evidence | Out-Null
           $env:SPEECHER_TEST_GRAB_DIR = (Resolve-Path evidence).Path
           build/speecher_tests.exe
+
+      # The runner's desktop is interactive, so the win_platform suite's
+      # SendInput-driven binder tests run for real here instead of skipping:
+      # right Alt through the actual WM_INPUT path, the dwExtraInfo paste tag,
+      # and the combo<->single switch leaving one binding firing.
+      - name: Prove the shortcut binders on live input
+        shell: pwsh
+        env:
+          SPEECHER_TEST_ONLY_WIN_PLATFORM: "1"
+        run: build/speecher_tests.exe
 
       - name: Upload panel pictures
         if: always()
