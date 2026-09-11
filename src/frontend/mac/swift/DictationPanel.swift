@@ -13,7 +13,9 @@ private let compactStripHeight: CGFloat = 28
 private let previewTopPadding: CGFloat = 12
 private let previewStripSpacing: CGFloat = 8
 private let previewBottomPadding: CGFloat = 8
-private let previewShoulderDrop: CGFloat = 4
+// The shoulder sits as far below the text as the pill's top sits above it,
+// so the wide bar reads evenly padded around the preview line.
+private let previewShoulderDrop: CGFloat = previewTopPadding
 private let maximumPreviewWidth: CGFloat = 488
 private let screenEdgeMargin: CGFloat = 80
 /// The update and what's-new banners stacked above the pill.

@@ -56,7 +56,9 @@ constexpr int compactStripHeight = 28;
 constexpr int previewTopPadding = 12;
 constexpr int previewStripSpacing = 8;
 constexpr int previewBottomPadding = 8;
-constexpr int previewShoulderDrop = 4;
+// The shoulder sits as far below the text as the pill's top sits above it,
+// so the wide bar reads evenly padded around the preview line.
+constexpr int previewShoulderDrop = previewTopPadding;
 constexpr int maximumPreviewWidth = 488;
 constexpr int screenEdgeMargin = 80;
 constexpr int bottomMargin = 28;
