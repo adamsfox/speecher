@@ -2,9 +2,11 @@
 // creates the speecher-keywatch system user and group, adds the login user to
 // that group (which grants access to the daemon's socket and nothing else),
 // installs the socket and service units, and copies the daemon to a system
-// path. It deliberately does NOT write a udev rule and does NOT touch the
-// input group: the whole point of the design is that no unprivileged process
-// gains the ability to read input devices. See keywatch-security-design.md.
+// path. Only the daemon's own service account gets the input group, through
+// the unit's SupplementaryGroups=. The installer deliberately does NOT write
+// a udev rule and does NOT touch the login user's input membership: the whole
+// point of the design is that no process the user runs gains the ability to
+// read input devices. See keywatch-security-design.md.
 //
 // Modelled on YdotoolSetupHelper.cpp, including its rollback transaction and
 // --user validation against the passwd database.
@@ -40,10 +42,11 @@ constexpr std::string_view socketText =
     "[Install]\n"
     "WantedBy=sockets.target\n";
 
-// Runs as root only to open /dev/input at startup; the daemon drops to the
-// speecher-keywatch user and installs its seccomp filter before serving any
-// client. The hardening here is defence in depth on top of that in-process
-// drop, not a replacement for it.
+// The whole sandbox is declared here: the daemon never runs as root. Its
+// locked-down service account joins the input group (the login user never
+// does), the bounding set is empty, and the syscall allowlist covers what a
+// socket-activated epoll loop needs. Editing this file needs root, and so
+// would removing any of these lines.
 constexpr std::string_view serviceText =
     "[Unit]\n"
     "Description=Speecher key-watch helper\n"
@@ -53,6 +56,12 @@ constexpr std::string_view serviceText =
     "[Service]\n"
     "Type=simple\n"
     "ExecStart=/usr/local/lib/speecher/speecher-keywatchd\n"
+    "User=speecher-keywatch\n"
+    "SupplementaryGroups=input\n"
+    "CapabilityBoundingSet=\n"
+    "SystemCallFilter=@system-service\n"
+    "SystemCallFilter=~@privileged @resources\n"
+    "SystemCallErrorNumber=EPERM\n"
     "NoNewPrivileges=yes\n"
     "ProtectSystem=strict\n"
     "ProtectHome=yes\n"

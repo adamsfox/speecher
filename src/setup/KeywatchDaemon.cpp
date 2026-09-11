@@ -1,9 +1,10 @@
-// speecher-keywatchd: reads the keyboards as root at startup, then permanently
-// drops to the speecher-keywatch system user, empties its capability bounding
-// set, sets no-new-privs and installs a seccomp filter with no openat/execve/
-// socket. A client names one allowlisted key; the daemon thereafter reports
-// only whether that one key is down. Every other key's events are read and
-// dropped inside this process. See keywatch-security-design.md.
+// speecher-keywatchd: reads the keyboards and reports whether one key is
+// down. It never runs as root: the systemd unit starts it as the dedicated
+// speecher-keywatch system user with the input group, an empty capability
+// bounding set and a syscall allowlist — the sandbox is the unit's, not
+// hand-rolled in here. A client names one allowlisted key; every other key's
+// events are read and dropped inside this process. See
+// keywatch-security-design.md.
 //
 // Plain C++, no Qt, no D-Bus. libsystemd only, for the activated socket.
 
@@ -12,26 +13,18 @@
 #include <array>
 #include <cerrno>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
-#include <ctime>
 #include <string>
 #include <vector>
 
 #include <dirent.h>
 #include <fcntl.h>
-#include <grp.h>
-#include <linux/audit.h>
-#include <linux/capability.h>
-#include <linux/filter.h>
 #include <linux/input.h>
-#include <linux/seccomp.h>
-#include <pwd.h>
 #include <sys/epoll.h>
+#include <sys/inotify.h>
 #include <sys/ioctl.h>
-#include <sys/prctl.h>
 #include <sys/socket.h>
-#include <sys/syscall.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <systemd/sd-daemon.h>
@@ -45,7 +38,7 @@ using speecher::keywatch::Refusal;
 using speecher::keywatch::WatchReply;
 using speecher::keywatch::WatchRequest;
 
-constexpr char systemUser[] = "speecher-keywatch";
+constexpr char inputDirectory[] = "/dev/input";
 constexpr int maxClients = 16;
 constexpr int idleExitSeconds = 30;
 // Per-uid connection budget: no more than this many WATCH attempts in the
@@ -59,124 +52,6 @@ void logLine(const std::string &text)
     (void)!write(STDERR_FILENO, line.data(), line.size());
 }
 
-// Startup only: enumerate /dev/input/event*, keep the keyboards. Opened
-// read-only and O_CLOEXEC; these fds survive the drop, which is what lets the
-// daemon keep reading without keeping the right to open anything new.
-std::vector<int> openKeyboards()
-{
-    std::vector<int> keyboards;
-    DIR *dir = opendir("/dev/input");
-    if (!dir) {
-        return keyboards;
-    }
-    while (dirent *entry = readdir(dir)) {
-        if (std::strncmp(entry->d_name, "event", 5) != 0) {
-            continue;
-        }
-        const std::string path = std::string("/dev/input/") + entry->d_name;
-        const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-        if (fd < 0) {
-            continue;
-        }
-        unsigned long evBits = 0;
-        unsigned char keyBits[(KEY_MAX / 8) + 1] = {};
-        // A keyboard advertises EV_KEY and the letter range; a mouse or tablet
-        // advertising EV_KEY without letters is rejected.
-        const bool hasKeyEv = ioctl(fd, EVIOCGBIT(0, sizeof(evBits)), &evBits) >= 0
-            && (evBits & (1UL << EV_KEY));
-        bool looksLikeKeyboard = false;
-        if (hasKeyEv && ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keyBits)), keyBits) >= 0) {
-            looksLikeKeyboard = (keyBits[KEY_A / 8] & (1 << (KEY_A % 8)))
-                && (keyBits[KEY_Z / 8] & (1 << (KEY_Z % 8)));
-        }
-        if (looksLikeKeyboard) {
-            keyboards.push_back(fd);
-        } else {
-            close(fd);
-        }
-    }
-    closedir(dir);
-    return keyboards;
-}
-
-bool dropPrivileges()
-{
-    const passwd *account = getpwnam(systemUser);
-    if (!account) {
-        logLine(std::string("system user ") + systemUser + " does not exist");
-        return false;
-    }
-    if (setgroups(0, nullptr) != 0
-        || setresgid(account->pw_gid, account->pw_gid, account->pw_gid) != 0
-        || setresuid(account->pw_uid, account->pw_uid, account->pw_uid) != 0) {
-        logLine("could not drop to the system user");
-        return false;
-    }
-    // A regained-root check: setuid back must fail now.
-    if (setuid(0) == 0) {
-        logLine("privilege drop did not stick");
-        return false;
-    }
-    for (int capability = 0; capability <= CAP_LAST_CAP; ++capability) {
-        prctl(PR_CAPBSET_DROP, capability, 0, 0, 0);
-    }
-    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-        logLine("could not set no-new-privs");
-        return false;
-    }
-    return true;
-}
-
-// The read loop's allowlist. openat, execve, socket, ptrace, clone and the
-// rest are absent, so a code-execution bug after the drop yields the keyboards
-// already open and nothing else: no new file, no process, no network. The
-// arithmetic/memory syscalls (brk, mmap, futex, rt_sigreturn) are here because
-// glibc needs them to run at all; none of them opens a file, execs or reaches
-// the network. getsockopt and write extend the design's illustrative list for
-// SO_PEERCRED and journal lines respectively.
-bool installSeccomp()
-{
-#if defined(__x86_64__)
-    constexpr std::uint32_t audit_arch = AUDIT_ARCH_X86_64;
-#elif defined(__aarch64__)
-    constexpr std::uint32_t audit_arch = AUDIT_ARCH_AARCH64;
-#else
-#error "speecher-keywatchd seccomp filter has no rule for this architecture"
-#endif
-    static const int allowed[] = {
-        SYS_read, SYS_write, SYS_close, SYS_epoll_wait, SYS_epoll_pwait,
-        SYS_epoll_ctl, SYS_accept4, SYS_getsockopt, SYS_recvmsg, SYS_sendmsg,
-        SYS_clock_gettime, SYS_clock_nanosleep, SYS_exit, SYS_exit_group,
-        SYS_rt_sigreturn, SYS_rt_sigprocmask, SYS_futex, SYS_brk, SYS_mmap,
-        SYS_munmap, SYS_mprotect, SYS_restart_syscall,
-#ifdef SYS_epoll_pwait2
-        SYS_epoll_pwait2,
-#endif
-#ifdef SYS_newfstatat
-        SYS_newfstatat,
-#endif
-    };
-    std::vector<sock_filter> program;
-    program.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, arch)));
-    program.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, audit_arch, 1, 0));
-    program.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS));
-    program.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, nr)));
-    for (const int syscall : allowed) {
-        program.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, std::uint32_t(syscall), 0, 1));
-        program.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
-    }
-    program.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS));
-
-    sock_fprog fprog{};
-    fprog.len = static_cast<unsigned short>(program.size());
-    fprog.filter = program.data();
-    if (syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &fprog) != 0) {
-        logLine("could not install the seccomp filter");
-        return false;
-    }
-    return true;
-}
-
 std::uint64_t monotonicUsec()
 {
     timespec now{};
@@ -184,26 +59,93 @@ std::uint64_t monotonicUsec()
     return std::uint64_t(now.tv_sec) * 1000000 + std::uint64_t(now.tv_nsec) / 1000;
 }
 
+struct Keyboard {
+    std::string name; // The directory entry, such as "event3".
+    int fd = -1;
+};
+
 struct Client {
     int fd = -1;
     uid_t uid = 0;
     pid_t pid = 0;
     std::uint16_t evdev = 0; // 0 until a WATCH is accepted.
     bool down = false;
+    // A WATCH may arrive fragmented; parse only a whole request.
+    std::uint8_t pending[sizeof(WatchRequest)] = {};
+    std::size_t pendingFill = 0;
 };
 
 struct RateBucket {
     uid_t uid = 0;
     int count = 0;
-    time_t windowStart = 0;
+    std::uint64_t windowStartUsec = 0;
 };
+
+// Opens one /dev/input node if it is a real keyboard: EV_KEY with the letter
+// range (a mouse advertises EV_KEY without letters), and not a virtual
+// device — ydotoold's uinput keyboard is how Speecher's own text delivery
+// would otherwise loop back into the watch. Returns -1 for everything else.
+int openKeyboard(const std::string &name)
+{
+    if (name.compare(0, 5, "event") != 0) {
+        return -1;
+    }
+    const std::string path = std::string(inputDirectory) + "/" + name;
+    const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        return -1;
+    }
+    unsigned long evBits = 0;
+    unsigned char keyBits[(KEY_MAX / 8) + 1] = {};
+    input_id id{};
+    const bool keyboard = ioctl(fd, EVIOCGBIT(0, sizeof(evBits)), &evBits) >= 0
+        && (evBits & (1UL << EV_KEY))
+        && ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keyBits)), keyBits) >= 0
+        && (keyBits[KEY_A / 8] & (1 << (KEY_A % 8)))
+        && (keyBits[KEY_Z / 8] & (1 << (KEY_Z % 8)))
+        && ioctl(fd, EVIOCGID, &id) >= 0
+        && id.bustype != BUS_VIRTUAL;
+    if (!keyboard) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
 
 class Server {
 public:
-    Server(int listenFd, std::vector<int> keyboards)
+    explicit Server(int listenFd)
         : m_listenFd(listenFd)
-        , m_keyboards(std::move(keyboards))
     {
+    }
+
+    // Startup enumeration. False when devices exist but none could be opened,
+    // which means the service user lacks the input group: exiting loudly is
+    // better than running deaf.
+    bool openKeyboards()
+    {
+        DIR *dir = opendir(inputDirectory);
+        if (!dir) {
+            logLine(std::string("could not open ") + inputDirectory);
+            return false;
+        }
+        int refused = 0;
+        while (dirent *entry = readdir(dir)) {
+            const std::string name = entry->d_name;
+            const int fd = openKeyboard(name);
+            if (fd >= 0) {
+                m_keyboards.push_back({name, fd});
+            } else if (errno == EACCES) {
+                refused += 1;
+            }
+        }
+        closedir(dir);
+        if (m_keyboards.empty() && refused > 0) {
+            logLine("input devices exist but none could be opened; is the "
+                    "service running with the input group?");
+            return false;
+        }
+        return true;
     }
 
     int run()
@@ -212,25 +154,38 @@ public:
         if (m_epoll < 0) {
             return 1;
         }
-        addToEpoll(m_listenFd);
-        for (const int fd : m_keyboards) {
-            addToEpoll(fd);
+        m_inotify = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+        if (m_inotify >= 0) {
+            // IN_ATTRIB as well: a new node exists before udev grants the
+            // input group, so the open that matters follows the chmod.
+            inotify_add_watch(m_inotify, inputDirectory, IN_CREATE | IN_ATTRIB);
+            addToEpoll(m_inotify);
         }
+        addToEpoll(m_listenFd);
+        for (const Keyboard &keyboard : m_keyboards) {
+            addToEpoll(keyboard.fd);
+        }
+        std::uint64_t idleDeadline = monotonicUsec() + idleExitSeconds * 1000000ULL;
         std::array<epoll_event, 32> events{};
         while (true) {
-            const int timeoutMs = m_clientCount == 0 ? idleExitSeconds * 1000 : -1;
-            const int ready = epoll_wait(m_epoll, events.data(), events.size(), timeoutMs);
-            if (ready == 0 && m_clientCount == 0) {
-                return 0; // Idle: exit so nothing privileged-adjacent lingers.
-            }
-            if (ready < 0) {
-                if (errno == EINTR) {
-                    continue;
+            int timeoutMs = -1;
+            if (m_clientCount == 0) {
+                const std::uint64_t now = monotonicUsec();
+                if (now >= idleDeadline) {
+                    return 0; // Idle: exit so no key reader lingers unused.
                 }
+                timeoutMs = int((idleDeadline - now) / 1000) + 1;
+            }
+            const int ready = epoll_wait(m_epoll, events.data(), events.size(), timeoutMs);
+            if (ready < 0 && errno != EINTR) {
                 return 1;
             }
+            const bool hadClients = m_clientCount > 0;
             for (int index = 0; index < ready; ++index) {
                 dispatch(events[index].data.fd);
+            }
+            if (hadClients && m_clientCount == 0) {
+                idleDeadline = monotonicUsec() + idleExitSeconds * 1000000ULL;
             }
         }
     }
@@ -250,8 +205,12 @@ private:
             acceptClient();
             return;
         }
-        for (const int keyboard : m_keyboards) {
-            if (fd == keyboard) {
+        if (fd == m_inotify) {
+            readInotify();
+            return;
+        }
+        for (Keyboard &keyboard : m_keyboards) {
+            if (fd == keyboard.fd) {
                 readKeyboard(keyboard);
                 return;
             }
@@ -264,13 +223,63 @@ private:
         }
     }
 
+    bool alreadyOpen(const std::string &name) const
+    {
+        for (const Keyboard &keyboard : m_keyboards) {
+            if (keyboard.name == name) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Hot-plug: open a keyboard that appeared after startup.
+    void readInotify()
+    {
+        alignas(inotify_event) char buffer[4096];
+        ssize_t got = 0;
+        while ((got = read(m_inotify, buffer, sizeof(buffer))) > 0) {
+            for (ssize_t offset = 0; offset < got;) {
+                const auto *event = reinterpret_cast<const inotify_event *>(buffer + offset);
+                offset += ssize_t(sizeof(inotify_event)) + event->len;
+                if (event->len == 0) {
+                    continue;
+                }
+                const std::string name = event->name;
+                if (alreadyOpen(name)) {
+                    continue;
+                }
+                const int fd = openKeyboard(name);
+                if (fd >= 0) {
+                    m_keyboards.push_back({name, fd});
+                    addToEpoll(fd);
+                    logLine("watching new keyboard " + name);
+                }
+            }
+        }
+    }
+
+    void dropKeyboard(Keyboard &keyboard)
+    {
+        logLine("keyboard " + keyboard.name + " went away");
+        epoll_ctl(m_epoll, EPOLL_CTL_DEL, keyboard.fd, nullptr);
+        close(keyboard.fd);
+        for (auto it = m_keyboards.begin(); it != m_keyboards.end(); ++it) {
+            if (it->fd == keyboard.fd) {
+                m_keyboards.erase(it);
+                return;
+            }
+        }
+    }
+
     bool rateLimited(uid_t uid)
     {
-        const time_t now = time(nullptr);
+        const std::uint64_t now = monotonicUsec();
         RateBucket *existing = nullptr;
         RateBucket *free = nullptr;
         for (RateBucket &bucket : m_rate) {
-            if (bucket.count > 0 && now - bucket.windowStart >= rateLimitWindowSec) {
+            if (bucket.count > 0
+                && now - bucket.windowStartUsec >= rateLimitWindowSec * 1000000ULL) {
                 bucket = RateBucket{}; // The window closed; the bucket is free again.
             }
             if (bucket.count > 0 && bucket.uid == uid) {
@@ -288,7 +297,7 @@ private:
         }
         if (free) {
             free->uid = uid;
-            free->windowStart = now;
+            free->windowStartUsec = now;
             free->count = 1;
         }
         return false; // No free bucket: fail open rather than lock everyone out.
@@ -336,24 +345,43 @@ private:
         m_clientCount -= 1;
     }
 
+    bool uidAlreadyWatching(const Client &asking) const
+    {
+        for (const Client &client : m_clients) {
+            if (client.fd != -1 && &client != &asking && client.uid == asking.uid
+                && client.evdev != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void readClient(Client &client)
     {
-        WatchRequest request{};
-        const ssize_t got = read(client.fd, &request, sizeof(request));
-        if (got <= 0) {
+        const ssize_t got = read(client.fd,
+                                 client.pending + client.pendingFill,
+                                 sizeof(client.pending) - client.pendingFill);
+        if (got == 0 || (got < 0 && errno != EAGAIN && errno != EINTR)) {
             dropClient(client);
             return;
         }
-        // One watch per peer: a second WATCH on the same connection is refused.
-        if (client.evdev != 0) {
-            const WatchReply reply{speecher::keywatch::protocolVersion,
-                                   std::uint8_t(Refusal::AlreadyWatching)};
-            (void)!write(client.fd, &reply, sizeof(reply));
+        if (got < 0) {
             return;
         }
+        client.pendingFill += std::size_t(got);
+        if (client.pendingFill < sizeof(WatchRequest)) {
+            return;
+        }
+        WatchRequest request{};
+        std::memcpy(&request, client.pending, sizeof(request));
+        client.pendingFill = 0;
         Refusal refusal = Refusal::None;
         const PermittedKey *key = nullptr;
-        if (request.version != speecher::keywatch::protocolVersion) {
+        if (client.evdev != 0 || uidAlreadyWatching(client)) {
+            // One watch per peer: neither a second WATCH on this connection
+            // nor a second connection from the same uid gets another key.
+            refusal = Refusal::AlreadyWatching;
+        } else if (request.version != speecher::keywatch::protocolVersion) {
             refusal = Refusal::BadVersion;
         } else if (!(key = permittedKeyById(request.keyId))) {
             refusal = Refusal::KeyNotPermitted;
@@ -363,7 +391,9 @@ private:
         if (refusal != Refusal::None) {
             logLine("refused uid " + std::to_string(client.uid) + " pid "
                     + std::to_string(client.pid) + " key " + std::to_string(request.keyId));
-            dropClient(client);
+            if (client.evdev == 0) {
+                dropClient(client);
+            }
             return;
         }
         client.evdev = key->evdev;
@@ -371,15 +401,20 @@ private:
                 + std::to_string(client.pid) + " key " + std::string(key->code));
     }
 
-    void readKeyboard(int fd)
+    void readKeyboard(Keyboard &keyboard)
     {
         input_event event{};
         ssize_t got = 0;
-        while ((got = read(fd, &event, sizeof(event))) == sizeof(event)) {
+        while ((got = read(keyboard.fd, &event, sizeof(event))) == sizeof(event)) {
             if (event.type != EV_KEY || event.value == 2) {
                 continue; // value 2 is auto-repeat, which is not a transition.
             }
             report(event.code, event.value == 1);
+        }
+        // An unplugged keyboard reports EOF or ENODEV forever; leaving its fd
+        // in the epoll set would spin the loop.
+        if (got == 0 || (got < 0 && errno != EAGAIN && errno != EINTR)) {
+            dropKeyboard(keyboard);
         }
     }
 
@@ -402,8 +437,9 @@ private:
     }
 
     int m_listenFd;
-    std::vector<int> m_keyboards;
+    std::vector<Keyboard> m_keyboards;
     int m_epoll = -1;
+    int m_inotify = -1;
     std::array<Client, maxClients> m_clients{};
     std::array<RateBucket, maxClients * 2> m_rate{};
     int m_clientCount = 0;
@@ -413,23 +449,19 @@ private:
 
 int main()
 {
+    if (geteuid() == 0) {
+        logLine("refusing to run as root; the unit must set User=speecher-keywatch");
+        return 1;
+    }
     const int listenCount = sd_listen_fds(0);
     if (listenCount != 1) {
         logLine("expected exactly one socket-activation fd from systemd");
         return 1;
     }
-    const int listenFd = SD_LISTEN_FDS_START;
 
-    std::vector<int> keyboards = openKeyboards();
-    if (keyboards.empty()) {
-        logLine("found no keyboard devices to watch");
+    Server server(SD_LISTEN_FDS_START);
+    if (!server.openKeyboards()) {
         return 1;
     }
-
-    if (!dropPrivileges() || !installSeccomp()) {
-        return 1;
-    }
-
-    Server server(listenFd, std::move(keyboards));
     return server.run();
 }
