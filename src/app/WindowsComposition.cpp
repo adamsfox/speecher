@@ -5,8 +5,10 @@
 #include "output/TextDelivery.h"
 #include "platform/FallbackPopupPositioner.h"
 #include "platform/audio/QtAudioInput.h"
+#include "platform/RoutingShortcutBinder.h"
 #include "platform/win/WinGlobalShortcutBinder.h"
 #include "platform/win/WinMediaController.h"
+#include "platform/win/WinSingleKeyShortcutBinder.h"
 #include "platform/win/WinScreenshotContextProvider.h"
 #include "platform/win/WinTargetProvider.h"
 
@@ -96,7 +98,9 @@ PopupPositioner *WindowsComposition::createPopupPositioner(QObject *parent) cons
 
 GlobalShortcutBinder *WindowsComposition::createGlobalShortcutBinder(QObject *parent) const
 {
-    return new WinGlobalShortcutBinder(parent);
+    return new RoutingShortcutBinder(new WinGlobalShortcutBinder,
+                                     new WinSingleKeyShortcutBinder,
+                                     parent);
 }
 
 AccessibilityState WindowsComposition::accessibilityState() const

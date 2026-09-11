@@ -442,14 +442,17 @@ set(SPEECHER_PLATFORM_WIN_SOURCES
   src/platform/win/WinGlobalShortcutBinder.cpp
   src/platform/win/WinMediaController.cpp
   src/platform/win/WinScreenshotContextProvider.cpp
+  src/platform/win/WinSingleKeyShortcutBinder.cpp
   src/platform/win/WinTargetProvider.cpp
 )
 set(SPEECHER_PLATFORM_WIN_HEADERS
   src/output/win/WinPasteDelivery.h
   src/platform/win/WinCorrectionObserver.h
   src/platform/win/WinGlobalShortcutBinder.h
+  src/platform/win/WinInjectedInput.h
   src/platform/win/WinMediaController.h
   src/platform/win/WinScreenshotContextProvider.h
+  src/platform/win/WinSingleKeyShortcutBinder.h
   src/platform/win/WinTargetProvider.h
 )
 
