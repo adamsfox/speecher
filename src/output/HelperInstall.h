@@ -24,7 +24,8 @@ bool runProgram(const QString &program,
 // from a user-writable path: a helper not already at its root-owned installed
 // path (an AppImage mount, a build directory) is first copied, with its
 // companion files, to a root-owned directory by pkexec'd /usr/bin/install,
-// and that copy is what runs.
+// and that copy is what runs. The intermediate hop onto a normal filesystem
+// exists because pkexec's root cannot read the AppImage's private FUSE mount.
 bool runSetupHelper(const char *installedHelperPath,
                     const QStringList &companionFileNames,
                     HelperAction action,

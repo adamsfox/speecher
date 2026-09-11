@@ -3,9 +3,11 @@
 #include "output/HelperPath.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QProcess>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 
 #include <grp.h>
 #include <pwd.h>
@@ -117,17 +119,43 @@ bool runSetupHelper(const char *installedHelperPath,
     if (helper != QLatin1StringView(installedHelperPath)) {
         const QDir sourceDirectory = QFileInfo(helper).dir();
         const QString helperName = QFileInfo(helper).fileName();
+
+        // The helper usually sits in the AppImage's FUSE mount, which only the
+        // user who mounted it can read: pkexec's root gets EACCES from the
+        // mount itself, whatever the file's own mode, so staging straight from
+        // there fails with "cannot stat". Copy the helper and its companions
+        // onto a normal filesystem first, as this unprivileged process which
+        // can read the mount, so root can then read them to stage.
+        QTemporaryDir readable;
+        if (!readable.isValid()) {
+            if (error) {
+                *error = QStringLiteral("Could not create a temporary directory for the key helper.");
+            }
+            return false;
+        }
+        QStringList names{helperName};
+        names.append(companionFileNames);
+        QStringList sources;
+        for (const QString &name : names) {
+            const QString destination = readable.filePath(name);
+            QFile::remove(destination);
+            if (!QFile::copy(sourceDirectory.filePath(name), destination)) {
+                if (error) {
+                    *error = QStringLiteral("Could not read the bundled %1.").arg(name);
+                }
+                return false;
+            }
+            sources.append(destination);
+        }
+
         QStringList stageArguments{QStringLiteral("/usr/bin/install"),
                                    QStringLiteral("-o"), QStringLiteral("root"),
                                    QStringLiteral("-g"), QStringLiteral("root"),
                                    QStringLiteral("-m"), QStringLiteral("0755"),
                                    QStringLiteral("-D"),
                                    QStringLiteral("-t"),
-                                   QLatin1StringView(rootStageDirectory),
-                                   helper};
-        for (const QString &fileName : companionFileNames) {
-            stageArguments.append(sourceDirectory.filePath(fileName));
-        }
+                                   QLatin1StringView(rootStageDirectory)};
+        stageArguments.append(sources);
         if (!runProgram(pkexec, stageArguments, error, 5 * 60 * 1000)) {
             return false;
         }
