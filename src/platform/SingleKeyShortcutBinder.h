@@ -24,6 +24,10 @@ public:
     QString resume() override;
 
 protected:
+    // The binding persisted in settings, which bind() reads. A subclass with a
+    // recovery path (a permission grant, a helper install) reads it to know
+    // whether a stored key is waiting to be bound.
+    static ShortcutBinding storedBinding();
     // Starts observing the key, replacing any earlier watch. Empty on success,
     // otherwise what to tell the user.
     virtual QString watch(const PhysicalKey &key) = 0;

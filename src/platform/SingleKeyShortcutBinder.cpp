@@ -7,13 +7,6 @@
 namespace speecher {
 namespace {
 
-ShortcutBinding storedBinding()
-{
-    QSettings settings(QString::fromLatin1(SettingsKeys::Organization),
-                       QString::fromLatin1(SettingsKeys::Application));
-    return ShortcutBinding::fromString(settings.value(SettingsKeys::GlobalShortcut).toString());
-}
-
 void storeBinding(const ShortcutBinding &binding)
 {
     QSettings settings(QString::fromLatin1(SettingsKeys::Organization),
@@ -33,6 +26,13 @@ void storeBinding(const ShortcutBinding &binding)
 }
 
 } // namespace
+
+ShortcutBinding SingleKeyShortcutBinder::storedBinding()
+{
+    QSettings settings(QString::fromLatin1(SettingsKeys::Organization),
+                       QString::fromLatin1(SettingsKeys::Application));
+    return ShortcutBinding::fromString(settings.value(SettingsKeys::GlobalShortcut).toString());
+}
 
 QString SingleKeyShortcutBinder::unsupportedReason() const
 {
