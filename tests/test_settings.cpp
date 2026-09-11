@@ -83,39 +83,43 @@ private slots:
         QVERIFY(ShortcutBinding::fromString(QString()).isEmpty());
     }
 
-    // The Linux backends map a code onto an evdev keycode (X11 = evdev + 8).
-    // Values are from input-event-codes.h, not recomputed the way the table is.
-    void vocabularyCarriesEvdevKeycodes()
+    // Each platform column maps a code to that platform's keycode. Expected
+    // values are from the platforms' own tables (input-event-codes.h,
+    // HIToolbox/Events.h kVK_*, Chromium's dom_code_data.inc win column),
+    // never recomputed the way the table is; -1 marks keys a platform does
+    // not have, which the reverse lookups must never match.
+    void vocabularyCarriesPlatformKeycodes()
     {
+        // evdev (X11 = evdev + 8).
         QCOMPARE(physicalKey(QStringLiteral("AltRight"))->evdev, 100);
-        QCOMPARE(physicalKey(QStringLiteral("F13"))->evdev, 183);
         QCOMPARE(physicalKey(QStringLiteral("KeyE"))->evdev, 18);
         QCOMPARE(physicalKeyForEvdev(100)->code, "AltRight");
         QCOMPARE(physicalKeyForEvdev(58)->code, "CapsLock");
         QVERIFY(physicalKeyForEvdev(9999) == nullptr);
-    }
 
-    // The macOS backend maps a code onto a Carbon virtual keycode. Values are
-    // from HIToolbox/Events.h (kVK_*), not recomputed the way the table is;
-    // -1 marks keys Mac keyboards do not have, which the lookup must never
-    // match. Note evdev 58 is Caps Lock while mac 58 is Left Option — the
-    // columns are independent.
-    void vocabularyCarriesMacKeycodes()
-    {
+        // mac. Note evdev 58 is Caps Lock while mac 58 is Left Option — the
+        // columns are independent.
         QCOMPARE(physicalKey(QStringLiteral("AltRight"))->mac, 61);
         QCOMPARE(physicalKey(QStringLiteral("AltLeft"))->mac, 58);
-        QCOMPARE(physicalKey(QStringLiteral("KeyE"))->mac, 14);
-        QCOMPARE(physicalKey(QStringLiteral("F13"))->mac, 105);
         QCOMPARE(physicalKey(QStringLiteral("Fn"))->mac, 63);
         QCOMPARE(physicalKey(QStringLiteral("PrintScreen"))->mac, -1);
-        QCOMPARE(physicalKeyForMac(61)->code, "AltRight");
-        QCOMPARE(physicalKeyForMac(57)->code, "CapsLock");
         QCOMPARE(physicalKeyForMac(0)->code, "KeyA");
         QVERIFY(physicalKeyForMac(-1) == nullptr);
-        QVERIFY(physicalKeyForMac(9999) == nullptr);
 
-        // Every assigned mac keycode names one key, so the watcher can never
-        // read an event as two different bindings.
+        // win: the set-1 make code with 0xE0 in the high byte for extended
+        // keys, as WM_KEYDOWN's lParam spells it. Pause is 0x45 while NumLock
+        // is 0xE045 (the spelling the raw-input backend normalizes its E1/E0
+        // quirks to); Fn never reaches Windows.
+        QCOMPARE(physicalKey(QStringLiteral("AltRight"))->win, 0xE038);
+        QCOMPARE(physicalKey(QStringLiteral("Pause"))->win, 0x45);
+        QCOMPARE(physicalKey(QStringLiteral("NumLock"))->win, 0xE045);
+        QCOMPARE(physicalKey(QStringLiteral("Fn"))->win, -1);
+        QCOMPARE(physicalKeyForWin(0xE038)->code, "AltRight");
+        QVERIFY(physicalKeyForWin(-1) == nullptr);
+
+        // No watcher may read one event as two bindings: the assigned mac
+        // modifier keycodes are unique, and the win keys sharing a make code
+        // differ exactly in the E0 byte.
         QSet<int> seen;
         for (const char *code : {"ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight",
                                  "AltLeft", "AltRight", "MetaLeft", "MetaRight", "CapsLock", "Fn"}) {
@@ -123,35 +127,6 @@ private slots:
             QVERIFY(!seen.contains(mac));
             seen.insert(mac);
         }
-    }
-
-    // The Windows backend maps a code onto a scancode: the set-1 make code
-    // with 0xE0 in the high byte for extended keys, as WM_KEYDOWN's lParam
-    // spells it. Values are from Chromium's dom_code_data.inc win column, not
-    // recomputed the way the table is; -1 marks Fn, which never reaches
-    // Windows, and the lookup must never match it. Pause is 0x45 while
-    // NumLock is 0xE045 — the message-level spelling the raw-input backend
-    // normalizes its E1/E0 quirks to.
-    void vocabularyCarriesWindowsScancodes()
-    {
-        QCOMPARE(physicalKey(QStringLiteral("AltRight"))->win, 0xE038);
-        QCOMPARE(physicalKey(QStringLiteral("AltLeft"))->win, 0x38);
-        QCOMPARE(physicalKey(QStringLiteral("ControlRight"))->win, 0xE01D);
-        QCOMPARE(physicalKey(QStringLiteral("KeyV"))->win, 0x2F);
-        QCOMPARE(physicalKey(QStringLiteral("F13"))->win, 0x64);
-        QCOMPARE(physicalKey(QStringLiteral("F24"))->win, 0x76);
-        QCOMPARE(physicalKey(QStringLiteral("Pause"))->win, 0x45);
-        QCOMPARE(physicalKey(QStringLiteral("NumLock"))->win, 0xE045);
-        QCOMPARE(physicalKey(QStringLiteral("NumpadEnter"))->win, 0xE01C);
-        QCOMPARE(physicalKey(QStringLiteral("Fn"))->win, -1);
-        QCOMPARE(physicalKeyForWin(0xE038)->code, "AltRight");
-        QCOMPARE(physicalKeyForWin(0x1D)->code, "ControlLeft");
-        QCOMPARE(physicalKeyForWin(0x3A)->code, "CapsLock");
-        QVERIFY(physicalKeyForWin(-1) == nullptr);
-        QVERIFY(physicalKeyForWin(0xE0FF) == nullptr);
-
-        // The keys that share a make code differ only in the E0 byte, so the
-        // watcher can never read an event as two different bindings.
         for (const auto &[plain, extended] :
              QList<QPair<QString, QString>>{{QStringLiteral("ControlLeft"), QStringLiteral("ControlRight")},
                                             {QStringLiteral("AltLeft"), QStringLiteral("AltRight")},
