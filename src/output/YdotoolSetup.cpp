@@ -106,11 +106,6 @@ QString YdotoolSetup::serviceName()
     return QStringLiteral("speecher-ydotoold.service");
 }
 
-QString YdotoolSetup::helperPath(QString *error)
-{
-    return helpers::stagedHelperPath(SPEECHER_YDOTOOL_HELPER_PATH, {}, error);
-}
-
 bool YdotoolSetup::runHelper(HelperAction action, QString *error)
 {
     return helpers::runSetupHelper(SPEECHER_YDOTOOL_HELPER_PATH,

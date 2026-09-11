@@ -3,10 +3,8 @@
 #include "output/HelperPath.h"
 
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
 #include <QProcess>
-#include <QSaveFile>
 #include <QStandardPaths>
 
 #include <grp.h>
@@ -17,101 +15,9 @@
 namespace speecher::helpers {
 namespace {
 
-QString stableHelperDirectory()
-{
-    const QString dataHome = qEnvironmentVariable("XDG_DATA_HOME");
-    const QString root = dataHome.isEmpty()
-        ? QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
-        : dataHome;
-    return QDir(root).filePath(QStringLiteral("speecher/libexec"));
-}
-
-bool verifyHelperCopy(const QString &sourcePath, const QString &destinationPath, QString *error)
-{
-    QFile source(sourcePath);
-    QFile destination(destinationPath);
-    if (!source.open(QIODevice::ReadOnly)
-        || !destination.open(QIODevice::ReadOnly)
-        || source.readAll() != destination.readAll()
-        || source.error() != QFileDevice::NoError
-        || destination.error() != QFileDevice::NoError) {
-        if (error) {
-            *error = QStringLiteral("The local copy of %1 could not be verified")
-                         .arg(QFileInfo(sourcePath).fileName());
-        }
-        return false;
-    }
-    return true;
-}
-
-bool copyHelper(const QString &sourcePath, const QString &destinationPath, QString *error)
-{
-    const QString name = QFileInfo(sourcePath).fileName();
-    QFile source(sourcePath);
-    if (!QFileInfo(source).isFile() || !QFileInfo(source).isExecutable()
-        || !source.open(QIODevice::ReadOnly)) {
-        if (error) {
-            *error = QStringLiteral("The bundled %1 is missing or not executable").arg(name);
-        }
-        return false;
-    }
-    const QByteArray contents = source.readAll();
-    if (source.error() != QFileDevice::NoError) {
-        if (error) {
-            *error = QStringLiteral("Could not read the bundled %1").arg(name);
-        }
-        return false;
-    }
-
-    const QFileInfo destination(destinationPath);
-    const QString directory = destination.dir().absolutePath();
-    if (!destination.dir().mkpath(QStringLiteral("."))
-        || !QFile::setPermissions(directory,
-                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                                      | QFileDevice::ExeOwner)) {
-        if (error) {
-            *error = QStringLiteral("Could not create the local helper directory");
-        }
-        return false;
-    }
-    QSaveFile copy(destinationPath);
-    if (QFileInfo::exists(destinationPath)
-        && !QFile::setPermissions(destinationPath,
-                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                                      | QFileDevice::ExeOwner)) {
-        if (error) {
-            *error = QStringLiteral("Could not replace the local copy of %1").arg(name);
-        }
-        return false;
-    }
-    if (!copy.open(QIODevice::WriteOnly)) {
-        if (error) {
-            *error = QStringLiteral("Could not open the local copy of %1: %2")
-                         .arg(name, copy.errorString());
-        }
-        return false;
-    }
-    if (copy.write(contents) != contents.size() || !copy.commit()) {
-        if (error) {
-            *error = QStringLiteral("Could not install the local copy of %1: %2")
-                         .arg(name, copy.errorString());
-        }
-        return false;
-    }
-    if (!QFile::setPermissions(destinationPath,
-                               QFileDevice::ReadOwner | QFileDevice::ExeOwner)) {
-        if (error) {
-            *error = QStringLiteral("Could not secure the local copy of %1").arg(name);
-        }
-        return false;
-    }
-
-    if (!verifyHelperCopy(sourcePath, destinationPath, error)) {
-        QFile::remove(destinationPath);
-        return false;
-    }
-    return true;
-}
+// Where a helper that does not already live at a root-owned path is staged,
+// by root, before root executes it.
+constexpr auto rootStageDirectory = "/usr/local/lib/speecher/setup";
 
 } // namespace
 
@@ -182,28 +88,6 @@ bool runProgram(const QString &program,
     return true;
 }
 
-QString stagedHelperPath(const char *installedHelperPath,
-                         const QStringList &companionFileNames,
-                         QString *error)
-{
-    const QString helper = resolvedHelperPath(installedHelperPath);
-    if (!qEnvironmentVariableIsSet("APPIMAGE")) {
-        return helper;
-    }
-    const QDir bundledDirectory = QFileInfo(helper).dir();
-    const QDir stableDirectory(stableHelperDirectory());
-    QStringList fileNames = companionFileNames;
-    fileNames.prepend(QFileInfo(helper).fileName());
-    for (const QString &fileName : std::as_const(fileNames)) {
-        if (!copyHelper(bundledDirectory.filePath(fileName),
-                        stableDirectory.filePath(fileName),
-                        error)) {
-            return QString();
-        }
-    }
-    return stableDirectory.filePath(QFileInfo(helper).fileName());
-}
-
 bool runSetupHelper(const char *installedHelperPath,
                     const QStringList &companionFileNames,
                     HelperAction action,
@@ -223,22 +107,31 @@ bool runSetupHelper(const char *installedHelperPath,
         }
         return false;
     }
-    const QString helper = stagedHelperPath(installedHelperPath, companionFileNames, error);
-    if (helper.isEmpty()) {
-        return false;
-    }
-    if (qEnvironmentVariableIsSet("APPIMAGE")) {
-        const QDir bundledDirectory = QFileInfo(resolvedHelperPath(installedHelperPath)).dir();
-        const QDir stableDirectory = QFileInfo(helper).dir();
-        QStringList fileNames = companionFileNames;
-        fileNames.prepend(QFileInfo(helper).fileName());
-        for (const QString &fileName : std::as_const(fileNames)) {
-            if (!verifyHelperCopy(bundledDirectory.filePath(fileName),
-                                  stableDirectory.filePath(fileName),
-                                  error)) {
-                return false;
-            }
+    // Root never executes from a user-writable path. The installed libexec
+    // path is root-owned and runs directly; a helper found anywhere else (an
+    // AppImage mount, a build directory) is first copied to a root-owned
+    // directory by pkexec'd /usr/bin/install — fixed tooling, so nothing a
+    // user can rewrite runs as root — and the root-owned copy is what runs.
+    // The two prompts this costs are honest: one names install, one the helper.
+    QString helper = resolvedHelperPath(installedHelperPath);
+    if (helper != QLatin1StringView(installedHelperPath)) {
+        const QDir sourceDirectory = QFileInfo(helper).dir();
+        const QString helperName = QFileInfo(helper).fileName();
+        QStringList stageArguments{QStringLiteral("/usr/bin/install"),
+                                   QStringLiteral("-o"), QStringLiteral("root"),
+                                   QStringLiteral("-g"), QStringLiteral("root"),
+                                   QStringLiteral("-m"), QStringLiteral("0755"),
+                                   QStringLiteral("-D"),
+                                   QStringLiteral("-t"),
+                                   QLatin1StringView(rootStageDirectory),
+                                   helper};
+        for (const QString &fileName : companionFileNames) {
+            stageArguments.append(sourceDirectory.filePath(fileName));
         }
+        if (!runProgram(pkexec, stageArguments, error, 5 * 60 * 1000)) {
+            return false;
+        }
+        helper = QLatin1StringView(rootStageDirectory) + QLatin1Char('/') + helperName;
     }
     return runProgram(pkexec,
                       {helper,

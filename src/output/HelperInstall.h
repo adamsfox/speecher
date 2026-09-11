@@ -19,18 +19,12 @@ bool runProgram(const QString &program,
                 const QStringList &arguments,
                 QString *error,
                 int timeoutMs = 60000);
-// The helper to hand pkexec: its installed path, or from an AppImage a
-// per-user copy that outlives the mount, made and verified here along with
-// the companion files that must sit beside it. Empty on failure.
-QString stagedHelperPath(const char *installedHelperPath,
-                         const QStringList &companionFileNames,
-                         QString *error);
-// Runs the staged helper as root through pkexec with a fixed argv: the
-// helper, --install or --remove, --user and the current user. Every AppImage
-// copy is verified again right before the prompt shows its path. A same-uid
-// process can still replace a copy after that; the risk is accepted because
-// such a process can already inject into Speecher, while an fd or shell path
-// would make pkexec's prompt unreadable.
+// Runs the setup helper as root through pkexec with a fixed argv: the helper,
+// --install or --remove, --user and the current user. Root never executes
+// from a user-writable path: a helper not already at its root-owned installed
+// path (an AppImage mount, a build directory) is first copied, with its
+// companion files, to a root-owned directory by pkexec'd /usr/bin/install,
+// and that copy is what runs.
 bool runSetupHelper(const char *installedHelperPath,
                     const QStringList &companionFileNames,
                     HelperAction action,
