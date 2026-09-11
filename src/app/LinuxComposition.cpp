@@ -7,6 +7,7 @@
 #include "platform/AtSpiTargetProvider.h"
 #include "platform/KGlobalAccelShortcutBinder.h"
 #include "platform/KeywatchShortcutBinder.h"
+#include "platform/LinuxDesktopIntegration.h"
 #include "platform/MediaPauseController.h"
 #include "platform/PortalGlobalShortcutBinder.h"
 #include "platform/RoutingShortcutBinder.h"
@@ -144,13 +145,14 @@ GlobalShortcutBinder *createCombinationBinder(QObject *parent)
 // reason when it cannot reach a server.
 GlobalShortcutBinder *createSingleKeyBinder(QObject *parent)
 {
-    const QString sessionType = qEnvironmentVariable("XDG_SESSION_TYPE").toLower();
-    const bool wayland = sessionType == QStringLiteral("wayland")
-        || (sessionType.isEmpty() && qEnvironmentVariableIsSet("WAYLAND_DISPLAY"));
-    if (wayland) {
-        return new KeywatchShortcutBinder(parent);
+#ifdef SPEECHER_WITH_X11
+    if (!isWaylandSession()) {
+        return new XInput2ShortcutBinder(parent);
     }
-    return new XInput2ShortcutBinder(parent);
+#endif
+    // The key-watch daemon reads evdev, so it works on X11 too; a build
+    // without the XInput2 backend (no libxi dev files) falls back to it.
+    return new KeywatchShortcutBinder(parent);
 }
 
 } // namespace

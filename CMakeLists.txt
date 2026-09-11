@@ -179,8 +179,10 @@ endif()
 if(PkgConfig_FOUND AND NOT SPEECHER_RELEASE_BUILD)
   pkg_check_modules(ATSPI QUIET IMPORTED_TARGET atspi-2 gobject-2.0)
   pkg_check_modules(WAYLAND_CLIENT QUIET IMPORTED_TARGET wayland-client)
-  pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
-  pkg_check_modules(XI REQUIRED IMPORTED_TARGET xi)
+  # QUIET like the neighbours: a Wayland-only host without libxi dev files
+  # still builds, minus the XInput2 single-key backend.
+  pkg_check_modules(X11 QUIET IMPORTED_TARGET x11)
+  pkg_check_modules(XI QUIET IMPORTED_TARGET xi)
   pkg_get_variable(WAYLAND_PROTOCOLS_DATA_DIR wayland-protocols pkgdatadir)
 endif()
 if(SPEECHER_RELEASE_BUILD)
@@ -683,9 +685,12 @@ if(UNIX AND NOT APPLE)
   # with the Wayland and ydotool backends compiled in.
   target_compile_definitions(speecher_platform PUBLIC SPEECHER_WITH_WAYLAND=1)
   # Network: the Wayland key-watch binder talks to the daemon over QLocalSocket.
-  # X11/Xi: the XInput2 single-key watcher.
-  target_link_libraries(speecher_platform PUBLIC
-    Qt6::DBus Qt6::Network PkgConfig::X11 PkgConfig::XI)
+  target_link_libraries(speecher_platform PUBLIC Qt6::DBus Qt6::Network)
+  # X11/Xi: the XInput2 single-key watcher, only where the dev files exist.
+  if(X11_FOUND AND XI_FOUND)
+    target_compile_definitions(speecher_platform PUBLIC SPEECHER_WITH_X11=1)
+    target_link_libraries(speecher_platform PUBLIC PkgConfig::X11 PkgConfig::XI)
+  endif()
 endif()
 if(APPLE)
   target_sources(speecher_platform PRIVATE
