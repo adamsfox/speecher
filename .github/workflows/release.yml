@@ -101,6 +101,13 @@ jobs:
               if ! pulseaudio --start --exit-idle-time=-1; then
                 echo "pulseaudio did not start; continuing so ctest can report audio failures." >&2
               fi
+              # The XTEST end-to-end test for the XInput2 single-key backend is
+              # CMake-gated on xvfb-run and libXtst; require its registration so
+              # a container regression fails loudly instead of silently skipping.
+              if ! ctest --test-dir build -N | grep -Fq speecher_x11_injection; then
+                echo "speecher_x11_injection is not registered; the container lost xvfb-run or libXtst dev files." >&2
+                exit 1
+              fi
               QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
             '
 
