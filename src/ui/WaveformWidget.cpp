@@ -47,6 +47,9 @@ constexpr qreal pillScale = pillHeight / referencePillHeight;
 // fifteen at Wispr Flow's thickness and spacing fill 74% of the width, the
 // same fraction its ten fill of 50px.
 constexpr int barCount = 15;
+// The compact strip under the popup's transcript line: just enough for the
+// bars at full shout (barDotHeight * audioGain * the 1.5 wave crest = 24px).
+constexpr int compactStripHeight = 28;
 constexpr qreal barWidth = 2.0 * pillScale;
 constexpr qreal barGap = 2.0 * pillScale;
 constexpr qreal barDotHeight = 2.0 * pillScale;
@@ -196,12 +199,27 @@ WaveformWidget::WaveformWidget(QWidget *parent)
 void WaveformWidget::applyGeometry()
 {
     // The height follows the desktop's font where that is taller, so a large
-    // font cannot clip the receipt; a long message widens the pill.
-    const int height = std::max(pillHeight, fontMetrics().height() + 10);
+    // font cannot clip the receipt; a long message widens the pill. Compact
+    // trades the standalone pill's air for a low strip, keeping the font's
+    // height only when the strip carries text (the status shimmer).
+    const bool showsText = m_mode == Mode::Message || m_mode == Mode::Status;
+    const int height = m_compact
+        ? (showsText ? fontMetrics().height() + 6 : compactStripHeight)
+        : std::max(pillHeight, fontMetrics().height() + 10);
     const int width = m_message.isEmpty()
         ? pillWidth
         : std::max(pillWidth, fontMetrics().horizontalAdvance(m_message) + 32);
     setFixedSize(width, height);
+}
+
+void WaveformWidget::setCompact(bool compact)
+{
+    if (m_compact == compact) {
+        return;
+    }
+    m_compact = compact;
+    applyGeometry();
+    update();
 }
 
 void WaveformWidget::hideEvent(QHideEvent *event)
@@ -266,6 +284,20 @@ void WaveformWidget::setMessage(const QString &message)
     update();
 }
 
+int WaveformWidget::contentWidth() const
+{
+    if (m_mode == Mode::Message || m_mode == Mode::Status) {
+        return fontMetrics().horizontalAdvance(m_message);
+    }
+    return int(std::ceil(barCount * barWidth + (barCount - 1) * barGap));
+}
+
+void WaveformWidget::setBackgroundVisible(bool visible)
+{
+    m_backgroundVisible = visible;
+    update();
+}
+
 void WaveformWidget::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
@@ -283,14 +315,14 @@ void WaveformWidget::paintEvent(QPaintEvent *)
     painter.setPen(QPen(stroke, penWidth));
     painter.setBrush(pill);
     const QRectF pillRect = QRectF(rect()).adjusted(inset, inset, -inset, -inset);
-    painter.drawRoundedRect(pillRect, pillRect.height() / 2.0, pillRect.height() / 2.0);
+    if (m_backgroundVisible) {
+        painter.drawRoundedRect(pillRect, pillRect.height() / 2.0, pillRect.height() / 2.0);
+    }
 
     if (m_mode == Mode::Message) {
         paintMessage(painter, bar);
     } else if (m_mode == Mode::Status) {
         paintStatus(painter, bar);
-    } else if (m_mode == Mode::Dots) {
-        paintDots(painter, bar);
     } else {
         // Frozen keeps the bars at their last heights but drops them to the
         // 40% alpha Wispr Flow uses once the mic is no longer capturing.
@@ -320,25 +352,6 @@ void WaveformWidget::paintWaveform(QPainter &painter, const QColor &bar)
         const qreal radiusY = barRadius * h / barDotHeight;
         painter.drawRoundedRect(QRectF(x, (height() - h) / 2.0, barWidth, h),
                                 barRadius, radiusY);
-    }
-}
-
-void WaveformWidget::paintDots(QPainter &painter, const QColor &bar)
-{
-    const int radius = 4;
-    const int gap = 8;
-    const int totalWidth = radius * 6 + gap * 2;
-    const int startX = (width() - totalWidth) / 2 + radius;
-    const int centerY = height() / 2;
-    const float phase = std::fmod(m_idlePhase * 0.45f, 3.0f);
-    for (int i = 0; i < 3; ++i) {
-        const float distance = std::abs(phase - i);
-        const float wrappedDistance = std::min(distance, 3.0f - distance);
-        const float alpha = 0.26f + 0.74f * std::clamp(1.0f - wrappedDistance, 0.0f, 1.0f);
-        QColor dot = bar;
-        dot.setAlphaF(alpha);
-        painter.setBrush(dot);
-        painter.drawEllipse(QPointF(startX + i * (radius * 2 + gap), centerY), radius, radius);
     }
 }
 

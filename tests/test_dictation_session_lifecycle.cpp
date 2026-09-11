@@ -852,32 +852,34 @@ private slots:
         QVERIFY(audio->started);
     }
 
-    void transcriberPopupRestoresPreviewLayoutAfterOAuthIndicator()
+    void transcriberPopupReplacesOAuthLabelWithPreview()
     {
         TranscriberPopup popup(new FakePopupPositioner);
-        auto *layout = qobject_cast<QBoxLayout *>(popup.layout());
         auto *previewPill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
         auto *rawTranscript = popup.findChild<QLabel *>(QStringLiteral("rawTranscript"));
         auto *waveform = popup.findChild<WaveformWidget *>();
-        QVERIFY(layout);
         QVERIFY(previewPill);
         QVERIFY(rawTranscript);
         QVERIFY(waveform);
         QVERIFY(!popup.findChild<QLabel *>(QStringLiteral("popupStatus")));
         QVERIFY(!popup.findChild<QLabel *>(QStringLiteral("popupMetadata")));
-        QCOMPARE(previewPill->minimumHeight(), 48);
-        QCOMPARE(previewPill->maximumHeight(), 48);
+        QCOMPARE(previewPill->minimumHeight(), waveform->height());
+        QCOMPARE(previewPill->maximumHeight(), waveform->height());
         QVERIFY(!rawTranscript->wordWrap());
 
         popup.showOAuthRefreshIndicator();
-        QVERIFY(layout->indexOf(previewPill) < layout->indexOf(waveform));
+        QVERIFY(rawTranscript->isHidden());
+        QVERIFY(!waveform->isHidden());
 
         popup.setPreview(QStringLiteral("hello world"));
-        QVERIFY(layout->indexOf(waveform) < layout->indexOf(previewPill));
+        QCOMPARE(rawTranscript->text(), QStringLiteral("hello world"));
+        QVERIFY(!rawTranscript->isHidden());
 
         popup.showOAuthRefreshIndicator();
         popup.hidePreview();
-        QVERIFY(layout->indexOf(waveform) < layout->indexOf(previewPill));
+        QVERIFY(rawTranscript->isHidden());
+        QVERIFY(!previewPill->isHidden());
+        QVERIFY(!waveform->isHidden());
 
         const QString longRaw = QStringLiteral(
             "one two three four five six seven eight nine ten eleven twelve");
@@ -885,6 +887,8 @@ private slots:
         QVERIFY(!rawTranscript->text().contains(QLatin1Char('\n')));
         popup.setRefining(true);
         QVERIFY(rawTranscript->isHidden());
+        QVERIFY(!previewPill->isHidden());
+        QVERIFY(!waveform->isHidden());
     }
 
     void transcriberPopupStreamsRefinementInsteadOfSpeechPreview()
@@ -892,8 +896,10 @@ private slots:
         TranscriberPopup popup(new FakePopupPositioner);
         auto *previewPill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
         auto *rawTranscript = popup.findChild<QLabel *>(QStringLiteral("rawTranscript"));
+        auto *waveform = popup.findChild<WaveformWidget *>();
         QVERIFY(previewPill);
         QVERIFY(rawTranscript);
+        QVERIFY(waveform);
 
         popup.setPreview(QStringLiteral("hello world"));
         QVERIFY(!previewPill->isHidden());
@@ -901,13 +907,19 @@ private slots:
         // Mic toggled off: the speech preview disappears for the whole
         // transcribe-then-refine stretch, even when late partials arrive.
         popup.setStatus(QStringLiteral("Stopping"));
-        QVERIFY(previewPill->isHidden());
+        QVERIFY(!previewPill->isHidden());
+        QVERIFY(rawTranscript->isHidden());
+        QVERIFY(!waveform->isHidden());
         popup.setPreview(QStringLiteral("late speech words"));
-        QVERIFY(previewPill->isHidden());
+        QVERIFY(!previewPill->isHidden());
+        QVERIFY(rawTranscript->isHidden());
+        QVERIFY(!waveform->isHidden());
 
         popup.setFrozen(true);
         popup.setRefining(true);
-        QVERIFY(previewPill->isHidden());
+        QVERIFY(!previewPill->isHidden());
+        QVERIFY(rawTranscript->isHidden());
+        QVERIFY(!waveform->isHidden());
 
         popup.setRefinementPreview(QStringLiteral("Polished words"));
         QVERIFY(!previewPill->isHidden());
@@ -917,7 +929,9 @@ private slots:
 
         popup.setRefining(false);
         popup.showMessage(QStringLiteral("Input sent"));
-        QVERIFY(previewPill->isHidden());
+        QVERIFY(!previewPill->isHidden());
+        QVERIFY(rawTranscript->isHidden());
+        QVERIFY(!waveform->isHidden());
 
         // The next dictation session starts clean.
         popup.showListeningIndicator();

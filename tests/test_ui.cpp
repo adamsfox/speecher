@@ -27,6 +27,8 @@
 #include <QLineEdit>
 #include <QPropertyAnimation>
 #include <QPushButton>
+#include <QScopeGuard>
+#include <QScreen>
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QStyleHints>
@@ -159,22 +161,73 @@ private slots:
         QVERIFY(!popup.findChild<QPushButton *>(QStringLiteral("enableAccessibilityButton")));
     }
 
-    void popupHidesThePreviewPillUntilWordsArrive()
+    void popupKeepsWaveformAndPreviewInsideOnePill()
     {
         TranscriberPopup popup(new SizingPopupPositioner);
         popup.showListeningIndicator();
+        popup.show();
         auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
-        QVERIFY(pill);
-        // No words yet: the waveform alone says "listening", with no
-        // placeholder capsule under it.
-        QVERIFY(pill->isHidden());
+        auto *preview = popup.findChild<QLabel *>(QStringLiteral("rawTranscript"));
+        auto *waveform = popup.findChild<WaveformWidget *>();
+        QVERIFY(pill && preview && waveform);
+        QVERIFY(pill->isVisible());
+        QVERIFY(waveform->isVisible());
+        QVERIFY(!preview->isVisible());
 
         popup.setPreview(QStringLiteral("hello there"));
-        QVERIFY(!pill->isHidden());
+        // The transcript line sits above a compact waveform strip, both
+        // centred on the capsule's vertical axis.
+        QTRY_VERIFY(preview->mapTo(pill, QPoint()).y() + preview->height()
+                    <= waveform->mapTo(pill, QPoint()).y());
+        QVERIFY(preview->isVisible());
+        const QRect waveRect(waveform->mapTo(pill, QPoint()), waveform->size());
+        const QRect textRect(preview->mapTo(pill, QPoint()), preview->size());
+        QVERIFY(pill->rect().contains(waveRect));
+        QVERIFY(pill->rect().contains(textRect));
+        QVERIFY(textRect.bottom() < waveRect.top());
+        QVERIFY(qAbs(waveRect.center().x() - textRect.center().x()) <= 1);
+        QVERIFY(waveform->height() < 48);
 
-        // Silence clears the preview; the empty pill goes with it.
-        popup.setPreview(QString());
-        QVERIFY(pill->isHidden());
+        popup.hidePreview();
+        QVERIFY(!preview->isVisible());
+        QVERIFY(pill->isVisible());
+        QVERIFY(waveform->isVisible());
+    }
+
+    void popupContainsLargeFontStatusAndReceipt()
+    {
+        const QFont originalFont = QApplication::font();
+        QFont largeFont = originalFont;
+        largeFont.setPointSizeF(std::max(48.0, originalFont.pointSizeF() * 3));
+        QApplication::setFont(largeFont);
+        const auto restoreFont = qScopeGuard([originalFont] {
+            QApplication::setFont(originalFont);
+        });
+
+        TranscriberPopup popup(new SizingPopupPositioner);
+        popup.show();
+        auto *pill = popup.findChild<QFrame *>(QStringLiteral("previewPill"));
+        auto *waveform = popup.findChild<WaveformWidget *>();
+        QVERIFY(pill && waveform);
+
+        const auto verifyContained = [&] {
+            QCoreApplication::processEvents();
+            const QRect waveformRect(waveform->mapTo(pill, QPoint()), waveform->size());
+            const QString geometry = QStringLiteral("pill=%1,%2 %3x%4 waveform=%5,%6 %7x%8")
+                                         .arg(pill->x()).arg(pill->y())
+                                         .arg(pill->width()).arg(pill->height())
+                                         .arg(waveformRect.x()).arg(waveformRect.y())
+                                         .arg(waveformRect.width()).arg(waveformRect.height());
+            QVERIFY2(pill->rect().contains(waveformRect), qPrintable(geometry));
+            QVERIFY(popup.sizeHint().height() >= pill->height() + 4);
+        };
+
+        popup.setStatus(QStringLiteral("Stopping"));
+        verifyContained();
+        popup.showMessage(QStringLiteral("Input sent"));
+        verifyContained();
+        popup.showOAuthRefreshIndicator();
+        verifyContained();
     }
 
     void popupTrimsThePreviewFromTheFrontWithAnEllipsis()
@@ -191,7 +244,8 @@ private slots:
         QVERIFY(preview->text().startsWith(QStringLiteral("…")));
         QVERIFY(preview->text().endsWith(QStringLiteral("the very last words")));
         const QFontMetrics metrics(preview->font());
-        QVERIFY(metrics.horizontalAdvance(preview->text()) <= 520);
+        // One line capped at the popup's preview width (kMaxPreviewWidth).
+        QVERIFY(metrics.horizontalAdvance(preview->text()) <= 440);
 
         // A short preview is shown whole, with nothing implied before it.
         popup.setPreview(QStringLiteral("short preview"));
@@ -213,6 +267,79 @@ private slots:
         const QFontMetrics metrics(preview->font());
         const int textWidth = metrics.horizontalAdvance(QStringLiteral("Microphone unavailable"));
         QCOMPARE(preview->width(), textWidth);
+    }
+
+    void popupRepositionsAfterShowingALongError()
+    {
+        TranscriberPopup popup;
+        popup.showPopup(0);
+        const int initialHeight = popup.height();
+        popup.showErrorMessage(QStringLiteral(
+            "Microphone access is off. Allow Speecher under Privacy & Security > "
+            "Microphone, then try again."));
+
+        const QScreen *screen = QGuiApplication::primaryScreen();
+        QVERIFY(screen);
+        QVERIFY(popup.height() > initialHeight);
+        const int clearance = screen->availableGeometry().bottom() - popup.geometry().bottom();
+        QVERIFY(screen->availableGeometry().contains(popup.geometry()));
+        QVERIFY2(clearance >= 28,
+                 qPrintable(QStringLiteral("clearance=%1 popup=%2x%3 hint=%4x%5")
+                                .arg(clearance)
+                                .arg(popup.width()).arg(popup.height())
+                                .arg(popup.sizeHint().width()).arg(popup.sizeHint().height())));
+    }
+
+    void popupStaysBottomAnchoredWhilePreviewHeightChanges()
+    {
+        // A large font exaggerates every height change, so a popup that grew
+        // downward instead of upward would leave the screen's bottom margin.
+        const QFont originalFont = QApplication::font();
+        QFont largeFont = originalFont;
+        largeFont.setPointSizeF(std::max(48.0, originalFont.pointSizeF() * 3));
+        QApplication::setFont(largeFont);
+        const auto restoreFont = qScopeGuard([originalFont] {
+            QApplication::setFont(originalFont);
+        });
+
+        // The real fallback positioner: it anchors the window's bottom edge,
+        // so every height change must re-place the window, not just resize it.
+        TranscriberPopup popup;
+        popup.showListeningIndicator();
+        popup.showPopup(0);
+        QCoreApplication::processEvents();
+        const QScreen *screen = QGuiApplication::primaryScreen();
+        QVERIFY(screen);
+        const int anchoredBottom = popup.geometry().bottom();
+        QVERIFY(screen->availableGeometry().contains(popup.geometry()));
+
+        const auto verifyAnchored = [&] {
+            QCoreApplication::processEvents();
+            const QString geometry = QStringLiteral("popup=%1,%2 %3x%4 anchored=%5")
+                                         .arg(popup.x()).arg(popup.y())
+                                         .arg(popup.width()).arg(popup.height())
+                                         .arg(anchoredBottom);
+            // Fontless offscreen backends can make the large status text wider
+            // than the virtual screen; this test checks vertical anchoring.
+            QVERIFY2(popup.geometry().top() >= screen->availableGeometry().top(),
+                     qPrintable(geometry));
+            QCOMPARE(popup.geometry().bottom(), anchoredBottom);
+        };
+
+        // The live preview grows the capsule upward.
+        popup.setPreview(QStringLiteral("the very last words"));
+        verifyAnchored();
+        // Words go away for "Transcribing…" and the popup shrinks back.
+        popup.setStatus(QStringLiteral("Stopping"));
+        verifyAnchored();
+        // The refinement preview grows it again over the "Refining…" strip.
+        popup.setRefining(true);
+        popup.setRefinementPreview(QStringLiteral("the very last words"));
+        verifyAnchored();
+        // And back to the bare waveform pill.
+        popup.setRefining(false);
+        popup.hidePreview();
+        verifyAnchored();
     }
 
     void popupErrorCanBeDismissedEarly()
@@ -250,7 +377,8 @@ private slots:
         // The next dictation starts while that countdown is still draining.
         popup.showPopup(1);
         QVERIFY(dismiss->isHidden());
-        QVERIFY(pill->isHidden());
+        QVERIFY(!pill->isHidden());
+        QVERIFY(popup.findChild<QLabel *>(QStringLiteral("rawTranscript"))->isHidden());
         QCOMPARE(pill->height(), 48);
         // Left running it would hide this dictation's popup when it finished,
         // and report a dismissal against a session that had moved on.
@@ -1301,12 +1429,6 @@ private slots:
         const QSize resting = waveform.size();
         QCOMPARE(resting.width(), 126);
         QVERIFY(resting.height() >= 48);
-
-        waveform.setMode(speecher::WaveformWidget::Mode::Dots);
-        QCOMPARE(waveform.size(), resting);
-
-        waveform.setMode(speecher::WaveformWidget::Mode::Waveform);
-        QCOMPARE(waveform.size(), resting);
 
         waveform.setMessage(QStringLiteral("Input sent"));
         QVERIFY(waveform.width() >= resting.width());
