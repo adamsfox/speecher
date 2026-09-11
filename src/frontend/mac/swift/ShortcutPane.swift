@@ -68,18 +68,25 @@ final class ShortcutRecorder: ObservableObject {
 
     /// Whether this flagsChanged event is the press edge of the modifier its
     /// keyCode names, read from the flag rather than assumed from the edge.
+    /// The side-specific NX_DEVICE* bits (IOLLEvent.h), as the binder uses:
+    /// the family flag would read releasing Left Option while Right Option is
+    /// held as a press of the released key.
     private static func modifierIsDown(_ event: NSEvent) -> Bool {
-        let family: NSEvent.ModifierFlags
+        let bit: UInt
         switch event.keyCode {
-        case 54, 55: family = .command
-        case 56, 60: family = .shift
-        case 58, 61: family = .option
-        case 59, 62: family = .control
-        case 57: family = .capsLock
-        case 63: family = .function
+        case 54: bit = 0x0000_0010 // NX_DEVICERCMDKEYMASK
+        case 55: bit = 0x0000_0008 // NX_DEVICELCMDKEYMASK
+        case 56: bit = 0x0000_0002 // NX_DEVICELSHIFTKEYMASK
+        case 60: bit = 0x0000_0004 // NX_DEVICERSHIFTKEYMASK
+        case 58: bit = 0x0000_0020 // NX_DEVICELALTKEYMASK
+        case 61: bit = 0x0000_0040 // NX_DEVICERALTKEYMASK
+        case 59: bit = 0x0000_0001 // NX_DEVICELCTLKEYMASK
+        case 62: bit = 0x0000_2000 // NX_DEVICERCTLKEYMASK
+        case 57: bit = NSEvent.ModifierFlags.capsLock.rawValue
+        case 63: bit = NSEvent.ModifierFlags.function.rawValue
         default: return false
         }
-        return event.modifierFlags.contains(family)
+        return event.modifierFlags.rawValue & bit != 0
     }
 
     private func begin(_ newMode: Mode, suspending model: AppModel) {
