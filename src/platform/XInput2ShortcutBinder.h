@@ -2,6 +2,10 @@
 
 #include "platform/SingleKeyShortcutBinder.h"
 
+#ifdef SPEECHER_WITH_X11
+
+#include <QList>
+
 struct _XDisplay;
 class QSocketNotifier;
 
@@ -27,12 +31,18 @@ protected:
 
 private:
     void selectRawKeyEvents(bool select);
+    void resolveInjectionDevices();
     void readEvents();
 
     _XDisplay *m_display = nullptr;
     int m_xiOpcode = 0;
     int m_keycode = 0;
     QSocketNotifier *m_notifier = nullptr;
+    // ydotoold's uinput keyboard, whose events are Speecher's own injected
+    // keystrokes and must never read as the user's finger.
+    QList<int> m_injectionDeviceIds;
 };
 
 } // namespace speecher
+
+#endif // SPEECHER_WITH_X11
