@@ -26,6 +26,15 @@ RoutingShortcutBinder::RoutingShortcutBinder(GlobalShortcutBinder *combination,
                 }
                 emit registrationFinished(bound, detail);
             });
+    // A single-key backend can also bind on its own, later: the mac binder
+    // rebinds when its Accessibility grant arrives, the keywatch binder when
+    // its helper gets installed. bind() may have registered the combination
+    // in the meantime, and there is one binding, so let the combination go.
+    connect(m_singleKey, &GlobalShortcutBinder::bindingChanged, this, [this] {
+        if (m_singleKey->shortcut().isSingleKey()) {
+            m_combination->removeRegistration();
+        }
+    });
 }
 
 bool RoutingShortcutBinder::supported() const
@@ -80,11 +89,9 @@ QString RoutingShortcutBinder::unsupportedBindingReason(const ShortcutBinding &b
 bool RoutingShortcutBinder::setShortcut(const ShortcutBinding &shortcut, QString *error)
 {
     if (shortcut.isSingleKey()) {
-        if (!m_singleKey->setShortcut(shortcut, error)) {
-            return false;
-        }
-        m_combination->removeRegistration();
-        return true;
+        // Success emits bindingChanged, whose handler above lets the
+        // desktop-service registration go.
+        return m_singleKey->setShortcut(shortcut, error);
     }
     if (!m_combination->setShortcut(shortcut, error)) {
         return false;

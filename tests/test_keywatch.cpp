@@ -38,6 +38,7 @@ public:
             return false;
         }
         m_shortcut = shortcut;
+        emit bindingChanged();
         return true;
     }
     bool removeRegistration(QString *) override
@@ -125,6 +126,31 @@ private slots:
         // …and the combination binder no longer owns the binding.
         QVERIFY(!combination->shortcut().isSingleKey());
         QCOMPARE(router.unsupportedBindingReason(rightAlt), QString());
+    }
+
+    // The one-binding invariant across startup and recovery: while a single
+    // key is stored, bind() never registers the combination, and a single-key
+    // backend binding on its own later (the mac grant poll, the keywatch
+    // helper appearing) lets a bound combination go.
+    void routerKeepsOneBindingThroughBindAndRecovery()
+    {
+        auto *combination = new FakeBinder;
+        auto *singleKey = new FakeBinder;
+        singleKey->takesSingleKey = true;
+        RoutingShortcutBinder router(combination, singleKey);
+
+        QVERIFY(singleKey->setShortcut(ShortcutBinding::singleKey(QStringLiteral("AltRight")),
+                                       nullptr));
+        const int removedBySet = combination->removeCount;
+        router.bind();
+        QCOMPARE(singleKey->bindCount, 1);
+        QCOMPARE(combination->bindCount, 0);
+
+        // Recovery: the single-key backend re-binds without going through the
+        // router, as the grant poll does; the combination must be let go.
+        QVERIFY(singleKey->setShortcut(ShortcutBinding::singleKey(QStringLiteral("F13")),
+                                       nullptr));
+        QCOMPARE(combination->removeCount, removedBySet + 1);
     }
 };
 
