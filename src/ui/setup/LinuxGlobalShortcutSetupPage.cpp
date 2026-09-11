@@ -199,17 +199,13 @@ LinuxGlobalShortcutSetupPage::LinuxGlobalShortcutSetupPage(
     // key-sequence controls, which portal and manual desktops do not show.
     m_singleKeyLead = guidanceLabel(QString(), m_singleKeyControls);
     singleKeyLayout->addWidget(m_singleKeyLead);
-    m_captureKey = new SingleKeyCaptureButton(m_singleKeyControls);
-    m_captureKey->setObjectName(QStringLiteral("singleKeyCapture"));
-    singleKeyLayout->addWidget(m_captureKey, 0, Qt::AlignLeft);
-    m_singleKeyWarning = guidanceLabel(QString(), m_singleKeyControls);
-    m_singleKeyWarning->setObjectName(QStringLiteral("singleKeyWarning"));
-    singleKeyLayout->addWidget(m_singleKeyWarning);
-    layout->addWidget(m_singleKeyControls);
 
-    // The privileged key-watch helper: Wayland's only route to a single key,
-    // gated like the AppImage install block above it.
-    m_keyHelperControls = new QWidget(this);
+    // Wayland's only route to a single key is the privileged key-watch helper,
+    // so its setup sits between the "press a single key" lead and the record
+    // button, as that button's prerequisite. The button stays disabled until
+    // the helper is ready (refreshKeyHelper), and the helper's status and any
+    // install error read directly under it rather than far down the page.
+    m_keyHelperControls = new QWidget(m_singleKeyControls);
     m_keyHelperControls->setObjectName(QStringLiteral("keyHelperInstall"));
     auto *keyHelperLayout = new QVBoxLayout(m_keyHelperControls);
     keyHelperLayout->setContentsMargins(0, 0, 0, 0);
@@ -219,18 +215,24 @@ LinuxGlobalShortcutSetupPage::LinuxGlobalShortcutSetupPage(
                        "Speecher itself stays unprivileged. The helper only allows keys that "
                        "cannot type text: modifiers, Caps Lock and F13 to F24."),
         m_keyHelperControls));
-    auto *keyHelperRow = new QHBoxLayout;
     m_keyHelperButton = new QPushButton(QStringLiteral("Set up single-key helper"), m_keyHelperControls);
+    keyHelperLayout->addWidget(m_keyHelperButton, 0, Qt::AlignLeft);
     m_keyHelperStatus = new QLabel(m_keyHelperControls);
     m_keyHelperStatus->setWordWrap(true);
-    keyHelperRow->addWidget(m_keyHelperButton);
-    keyHelperRow->addWidget(m_keyHelperStatus, 1);
-    keyHelperLayout->addLayout(keyHelperRow);
+    keyHelperLayout->addWidget(m_keyHelperStatus);
     m_keyHelperProgress = new QProgressBar(m_keyHelperControls);
     m_keyHelperProgress->setRange(0, 0);
     m_keyHelperProgress->setVisible(false);
     keyHelperLayout->addWidget(m_keyHelperProgress);
-    layout->addWidget(m_keyHelperControls);
+    singleKeyLayout->addWidget(m_keyHelperControls);
+
+    m_captureKey = new SingleKeyCaptureButton(m_singleKeyControls);
+    m_captureKey->setObjectName(QStringLiteral("singleKeyCapture"));
+    singleKeyLayout->addWidget(m_captureKey, 0, Qt::AlignLeft);
+    m_singleKeyWarning = guidanceLabel(QString(), m_singleKeyControls);
+    m_singleKeyWarning->setObjectName(QStringLiteral("singleKeyWarning"));
+    singleKeyLayout->addWidget(m_singleKeyWarning);
+    layout->addWidget(m_singleKeyControls);
 
     m_portalControls = new QWidget(this);
     m_portalControls->setObjectName(QStringLiteral("portalShortcut"));
@@ -552,8 +554,15 @@ void LinuxGlobalShortcutSetupPage::refreshControls()
             : QStringLiteral("Press a single key, such as Right Alt or F13, to use on its own."));
     m_singleKeyControls->setVisible(ready && known);
     m_keyHelperControls->setVisible(ready && known && m_waylandSession);
-    if (ready && known && m_waylandSession) {
-        refreshKeyHelper();
+    if (m_waylandSession) {
+        // The record button waits on the helper: a key recorded before the
+        // helper is installed would save a binding that never fires.
+        // refreshKeyHelper() enables it once the helper is ready.
+        if (ready && known) {
+            refreshKeyHelper();
+        }
+    } else {
+        m_captureKey->setEnabled(true);
     }
     m_status->setVisible(ready && (!known || supported));
     m_trayNote->setText(linuxTrayShortcutNote(QSystemTrayIcon::isSystemTrayAvailable()));
@@ -596,6 +605,9 @@ void LinuxGlobalShortcutSetupPage::refreshKeyHelper()
     m_keyHelperButton->setEnabled(!status.ready() && !m_keyHelperProgress->isVisible());
     m_keyHelperButton->setText(status.ready() ? QStringLiteral("Key helper ready")
                                               : QStringLiteral("Set up single-key helper"));
+    // Recording a single key only fires once the helper watches for it, so the
+    // record button follows the helper's readiness on Wayland.
+    m_captureKey->setEnabled(status.ready());
 }
 
 void LinuxGlobalShortcutSetupPage::showRegistrationResult(bool bound,
