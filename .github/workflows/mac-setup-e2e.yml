@@ -13,6 +13,8 @@ on:
     paths:
       - src/frontend/mac/**
       - src/app/**
+      - src/platform/**
+      - src/core/ShortcutBinding.*
       - .github/macos-e2e/**
       - .github/workflows/mac-setup-e2e.yml
   workflow_dispatch:
@@ -135,15 +137,18 @@ jobs:
           hdiutil detach "$mount" -quiet
           codesign --verify --deep --strict "$RUNNER_TEMP/product/speecher.app"
 
-      - name: Compile evidence probe
-        run: swiftc .github/macos-e2e/window_probe.swift -o "$RUNNER_TEMP/window-probe"
+      - name: Compile evidence probe and key poster
+        run: |
+          swiftc .github/macos-e2e/window_probe.swift -o "$RUNNER_TEMP/window-probe"
+          swiftc .github/macos-e2e/key_post.swift -o "$RUNNER_TEMP/key-post"
 
       - name: Run setup assistant E2E
-        timeout-minutes: 5
+        timeout-minutes: 12
         env:
           APP_BUNDLE: ${{ runner.temp }}/product/speecher.app
           EVIDENCE_ROOT: ${{ runner.temp }}/setup-e2e
           PROBE: ${{ runner.temp }}/window-probe
+          KEY_POST: ${{ runner.temp }}/key-post
         run: bash .github/macos-e2e/setup_run.sh
 
       - name: Run provider steps E2E
