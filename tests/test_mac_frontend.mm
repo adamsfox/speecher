@@ -21,6 +21,7 @@
 #include <QDeadlineTimer>
 #include <QApplication>
 #include <QFile>
+#include <QDir>
 #include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -178,6 +179,80 @@ private slots:
         }
         QCOMPARE(ui.dictationPanelPresentedGeneration, generation);
         [ui dismissDictationPanel];
+    }
+
+    void dictationPreviewGrowsUpwardAndRenewalUsesStandalonePill()
+    {
+        ApplicationController controller(false);
+        SpeecherBridge *bridge = [[SpeecherBridge alloc] initWithController:&controller];
+        SpeecherMacUI *ui = [[SpeecherMacUI alloc] initWithBridge:bridge];
+        bridge.popupStatusChanged(@"Listening");
+        bridge.popupShowRequested(74);
+        const auto settle = [] {
+            const QDeadlineTimer deadline(300);
+            while (!deadline.hasExpired()) {
+                CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, true);
+                QCoreApplication::processEvents();
+            }
+        };
+        settle();
+        NSWindow *panel = nil;
+        for (NSWindow *window in NSApp.windows) {
+            if ([window isKindOfClass:[NSPanel class]] && window.visible
+                && window.level == NSStatusWindowLevel) {
+                panel = window;
+                break;
+            }
+        }
+        QVERIFY(panel);
+        const auto cleanup = qScopeGuard([&] { [ui dismissDictationPanel]; });
+        const NSRect initial = panel.frame;
+        QCOMPARE(initial.size.height, CGFloat(48));
+        const QString directory = qEnvironmentVariable("SPEECHER_UPDATE_PREVIEW_DIR");
+        const auto capture = [&](const QString &name) {
+            if (directory.isEmpty()) return true;
+            QDir().mkpath(directory);
+            NSView *view = panel.contentView;
+            NSBitmapImageRep *bitmap = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
+            if (!bitmap) return false;
+            [view cacheDisplayInRect:view.bounds toBitmapImageRep:bitmap];
+            NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+            return bool([png writeToFile:(directory + "/mac-" + name + ".png").toNSString()
+                              atomically:YES]);
+        };
+        QVERIFY(capture("listening"));
+        bridge.popupPreviewChanged(@"short preview");
+        settle();
+        QVERIFY(panel.frame.size.height > initial.size.height);
+        QCOMPARE(panel.frame.origin.y, initial.origin.y);
+        QVERIFY(capture("short-preview"));
+        bridge.popupPreviewChanged(@"We should probably move the meeting to Thursday afternoon, after everyone has reviewed the latest draft.");
+        settle();
+        QVERIFY(panel.frame.size.width <= 488);
+        QCOMPARE(panel.frame.origin.y, initial.origin.y);
+        QVERIFY(capture("long-preview"));
+        bridge.popupFrozenChanged(true);
+        settle();
+        QVERIFY(capture("frozen-preview"));
+        bridge.popupStatusChanged(@"Stopping");
+        settle();
+        QCOMPARE(panel.frame.size.height, initial.size.height);
+        QVERIFY(capture("transcribing"));
+        bridge.popupRefiningChanged(true);
+        bridge.popupRefinementPreviewChanged(@"Move the meeting to Thursday afternoon.");
+        settle();
+        QVERIFY(panel.frame.size.height > initial.size.height);
+        QCOMPARE(panel.frame.origin.y, initial.origin.y);
+        QVERIFY(capture("refining"));
+        bridge.popupFrozenChanged(false);
+        bridge.popupOAuthRefreshRequested();
+        settle();
+        QCOMPARE(panel.frame.size.height, initial.size.height);
+        QVERIFY(panel.frame.size.width < 200);
+        QVERIFY(capture("renewal"));
+        bridge.popupListeningIndicatorRequested();
+        settle();
+        QCOMPARE(panel.frame.size.width, initial.size.width);
     }
 
     // Skip, all nine pages, and Finish are driven through the native AX tree

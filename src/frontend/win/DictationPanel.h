@@ -6,6 +6,7 @@
 #include <memory>
 
 #include <QObject>
+#include <QRect>
 #include <QString>
 
 namespace speecher {
@@ -54,6 +55,11 @@ private:
     void driveLevelForTest(float level);
     bool saveGrabForTest(const QString &path) const;
     int levelBarCountForTest() const;
+    QRect capsuleGeometryForTest() const;
+    QRect waveformGeometryForTest() const;
+    QRect previewGeometryForTest() const;
+    QString previewTextForTest() const;
+    bool previewTextFitsForTest() const;
     struct Native;
     std::unique_ptr<Native> m_native;
 };

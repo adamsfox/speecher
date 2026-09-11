@@ -55,6 +55,9 @@ private slots:
     {
         SettingsStore settings;
         settings.raw().clear();
+        if (qEnvironmentVariableIsSet("SPEECHER_TEST_PANEL_BANNERS")) {
+            settings.setUpdatesPendingWhatsNewVersion(QStringLiteral("0.0.1"));
+        }
         existingQtPopups = widgetCount<TranscriberPopup>();
         controller = std::make_unique<ApplicationController>(false);
         frontEnd = std::make_unique<WinFrontEnd>(controller.get(), std::move(host));
@@ -192,10 +195,90 @@ private slots:
             QSKIP("WinUI islands require an interactive desktop");
         }
         frontEnd->showPanelForTest(11);
-        // Ten animated bars, the Qt popup's waveform, instead of the accent
-        // ProgressBar that read as a loading indicator.
-        QCOMPARE(frontEnd->dictationPanelForTest()->levelBarCountForTest(), 10);
+        // Fifteen dots at the same thickness and spacing as the Linux waveform.
+        QCOMPARE(frontEnd->dictationPanelForTest()->levelBarCountForTest(), 15);
         frontEnd->dismissPanelForTest();
+    }
+
+    void nativeDictationPanelSharesCapsuleAndClearsPreview()
+    {
+        if (!nativeUiAvailable()) {
+            QSKIP("WinUI islands require an interactive desktop");
+        }
+        auto *panel = frontEnd->dictationPanelForTest();
+        panel->showForTest(13);
+        QVERIFY(panel->previewGeometryForTest().isEmpty());
+        const QRect compact = panel->capsuleGeometryForTest();
+        panel->drivePreviewForTest(QStringLiteral("The meeting is on Thursday afternoon"));
+        QTest::qWait(100);
+        const QRect waveform = panel->waveformGeometryForTest();
+        const QRect preview = panel->previewGeometryForTest();
+        const QRect capsule = panel->capsuleGeometryForTest();
+        QVERIFY(capsule.contains(waveform));
+        QVERIFY(capsule.contains(preview));
+        QVERIFY(preview.bottom() < waveform.top());
+        QVERIFY(std::abs(preview.center().x() - waveform.center().x()) <= 1);
+        QVERIFY(capsule.height() > compact.height());
+        QCOMPARE(capsule.bottom(), compact.bottom());
+        QVERIFY(capsule.width() > compact.width());
+        controller->session()->popupFrozenChanged(true);
+        panel->drivePreviewForTest(QStringLiteral("This preview must be ignored while frozen"));
+        QCOMPARE(panel->previewGeometryForTest(), preview);
+        controller->session()->popupFrozenChanged(false);
+        panel->drivePreviewForTest(QString());
+        QVERIFY(panel->previewGeometryForTest().isEmpty());
+        QCOMPARE(panel->capsuleGeometryForTest(), compact);
+        panel->drivePreviewForTest(QStringLiteral("Clear this when audio stops"));
+        panel->driveStatusForTest(QStringLiteral("Stopping"));
+        QVERIFY(panel->previewGeometryForTest().isEmpty());
+        controller->session()->popupRefiningChanged(true);
+        controller->session()->popupRefinementPreviewChanged(QStringLiteral("Move the meeting to Thursday."));
+        QTest::qWait(100);
+        QVERIFY(panel->capsuleGeometryForTest().height() > compact.height());
+        QCOMPARE(panel->capsuleGeometryForTest().bottom(), compact.bottom());
+        controller->session()->popupOAuthRefreshRequested();
+        QVERIFY(panel->previewGeometryForTest().isEmpty());
+        QVERIFY(panel->waveformGeometryForTest().isEmpty());
+        QCOMPARE(panel->capsuleGeometryForTest().height(), compact.height());
+        controller->session()->popupListeningIndicatorRequested();
+        QTest::qWait(100);
+        QCOMPARE(panel->capsuleGeometryForTest(), compact);
+        QVERIFY(!panel->waveformGeometryForTest().isEmpty());
+        controller->session()->popupFrozenChanged(false);
+        panel->showForTest(14);
+        QVERIFY(panel->previewGeometryForTest().isEmpty());
+        panel->drivePreviewForTest(QStringLiteral("A new Dictation Session"));
+        QVERIFY(!panel->previewGeometryForTest().isEmpty());
+        panel->dismissForTest();
+        QVERIFY(panel->previewGeometryForTest().isEmpty());
+    }
+
+    void nativePreviewKeepsNewestWordsWithinItsWidth_data()
+    {
+        QTest::addColumn<QString>("prefix");
+        QTest::newRow("narrow-letters") << QString(300, QLatin1Char('i'));
+        QTest::newRow("emoji-graphemes") << QString::fromUtf8("👩‍💻é").repeated(100);
+    }
+
+    void nativePreviewKeepsNewestWordsWithinItsWidth()
+    {
+        if (!nativeUiAvailable()) {
+            QSKIP("WinUI islands require an interactive desktop");
+        }
+        QFETCH(QString, prefix);
+        auto *panel = frontEnd->dictationPanelForTest();
+        const QString newest = QString::fromUtf8(" Newest words 👩‍💻 arrive intact.");
+        panel->showForTest(15);
+        panel->drivePreviewForTest(prefix + newest);
+        QTRY_VERIFY(panel->previewTextFitsForTest());
+        const QString rendered = panel->previewTextForTest();
+        QVERIFY(rendered.startsWith(QChar(0x2026)));
+        QVERIFY(rendered.endsWith(newest));
+        const QChar first = rendered.at(1);
+        QVERIFY(!first.isLowSurrogate());
+        QVERIFY(first != QChar(0x200d));
+        QVERIFY(first.category() != QChar::Mark_NonSpacing);
+        panel->dismissForTest();
     }
 
     void nativeDictationProblemAutoDismissesLikeTheQtPopup()
@@ -222,15 +305,39 @@ private slots:
         DictationPanel *panel = frontEnd->dictationPanelForTest();
         panel->showForTest(12);
         panel->driveStatusForTest(QStringLiteral("Listening"));
+        panel->driveLevelForTest(0.02f);
         for (int i = 0; i < 40; ++i) {
             panel->driveLevelForTest(0.7f);
             QTest::qWait(24);
         }
         QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-listening.png")));
+        controller->session()->popupFrozenChanged(true);
+        QTest::qWait(150);
+        QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-frozen.png")));
+        controller->session()->popupFrozenChanged(false);
         panel->drivePreviewForTest(QStringLiteral(
             "and then we should probably move the meeting to Thursday afternoon"));
         QTest::qWait(150);
         QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-preview.png")));
+        panel->drivePreviewForTest(QStringLiteral("short preview"));
+        QTest::qWait(150);
+        QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-short-preview.png")));
+        controller->session()->popupFrozenChanged(true);
+        QTest::qWait(150);
+        QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-frozen-preview.png")));
+        panel->driveStatusForTest(QStringLiteral("Stopping"));
+        QTest::qWait(150);
+        QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-transcribing.png")));
+        controller->session()->popupRefiningChanged(true);
+        controller->session()->popupRefinementPreviewChanged(QStringLiteral("The meeting is on Thursday."));
+        QTest::qWait(150);
+        QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-refining.png")));
+        controller->session()->popupOAuthRefreshRequested();
+        QTest::qWait(150);
+        QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-renewal.png")));
+        controller->session()->popupMessageRequested(QStringLiteral("Copied to clipboard"));
+        QTest::qWait(150);
+        QVERIFY(panel->saveGrabForTest(grabDir + QStringLiteral("/win-outcome.png")));
         panel->dismissForTest();
 
         frontEnd->showDictationError(QStringLiteral(
