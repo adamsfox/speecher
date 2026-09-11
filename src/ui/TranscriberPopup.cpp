@@ -57,7 +57,9 @@ constexpr int kPreviewStripSpacing = 8;
 // rounded everywhere.
 constexpr qreal kContourFillet = 12.0;   // the concave turn from shoulder into lobe
 constexpr qreal kLobePad = 10.0;         // lobe air either side of the strip's ink
-constexpr qreal kShoulderDrop = 4.0;    // shoulder sits this far below the text
+// The shoulder sits as far below the text as the pill's top sits above it,
+// so the wide bar reads evenly padded around the preview line.
+constexpr qreal kShoulderDrop = kPreviewMargins.top();
 
 // Paints the pill instead of a stylesheet border: Qt's QSS rounded borders
 // render with uneven thickness at fractional display scales, which reads as
