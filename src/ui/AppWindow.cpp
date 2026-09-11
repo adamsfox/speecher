@@ -64,14 +64,19 @@ struct PageDefinition {
     QString fallbackIconName;
 };
 
+// Every name comes from the theme's monochrome action/status/device set,
+// which Breeze draws in the text colour at the sidebar's 22px size. The
+// preferences-* and app icons live in a different visual language (colourful,
+// or gradients that stay dark on dark schemes), so one of them in the list
+// makes the whole column read as mismatched.
 const QList<PageDefinition> kPages{
     {QStringLiteral("Dictation"), QStringLiteral("audio-input-microphone"), QString()},
-    {QStringLiteral("General"), QStringLiteral("preferences-system"), QString()},
-    {QStringLiteral("Audio"), QStringLiteral("preferences-desktop-sound"), QString()},
+    {QStringLiteral("General"), QStringLiteral("settings-configure"), QStringLiteral("configure")},
+    {QStringLiteral("Audio"), QStringLiteral("audio-volume-high"), QStringLiteral("player-volume")},
     {QStringLiteral("Output"), QStringLiteral("edit-paste"), QStringLiteral("edit-copy")},
-    {QStringLiteral("Accounts"), QStringLiteral("preferences-desktop-user-password"), QStringLiteral("dialog-password")},
+    {QStringLiteral("Accounts"), QStringLiteral("user-identity"), QStringLiteral("im-user")},
     {QStringLiteral("Refinement"), QStringLiteral("tools-wizard"), QStringLiteral("document-edit")},
-    {QStringLiteral("Vocabulary"), QStringLiteral("accessories-dictionary"), QStringLiteral("tools-check-spelling")},
+    {QStringLiteral("Vocabulary"), QStringLiteral("tools-check-spelling"), QStringLiteral("accessories-dictionary")},
 };
 
 QScrollArea *scrollingPage(QWidget *content, QWidget *parent)

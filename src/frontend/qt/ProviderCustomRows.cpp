@@ -142,9 +142,15 @@ SchemaCustomRow ProviderCustomRows::makeAnthropicAuthModeRow(QWidget *parent,
                                                              std::function<void()> notifyChanged)
 {
     auto *container = new QWidget(parent);
+    // The status can run to a sentence with a path in it, far too wide for a
+    // row's control column. Expanding hands the row makeRow's full-width
+    // shape: title and description across the card, then this container, with
+    // the combo at its native size on the right and the status wrapping over
+    // the whole row instead of a sliver under the combo.
+    container->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     auto *layout = new QVBoxLayout(container);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
+    layout->setSpacing(settings::relatedSpacing());
 
     m_anthropicAuthMode = new QComboBox(container);
     m_anthropicAuthMode->addItem(QStringLiteral("Claude Code sign-in"), QStringLiteral("oauth"));
@@ -157,11 +163,8 @@ SchemaCustomRow ProviderCustomRows::makeAnthropicAuthModeRow(QWidget *parent,
     m_anthropicAuthStatus->setForegroundRole(QPalette::WindowText);
     m_anthropicAuthStatus->setAttribute(Qt::WA_StyledBackground, false);
     m_anthropicAuthStatus->setAutoFillBackground(false);
-    // Wraps under the combo instead of widening the control column and
-    // squeezing the row title.
     m_anthropicAuthStatus->setWordWrap(true);
-    m_anthropicAuthStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    layout->addWidget(m_anthropicAuthMode);
+    layout->addWidget(m_anthropicAuthMode, 0, Qt::AlignRight);
     layout->addWidget(m_anthropicAuthStatus);
 
     QObject::connect(m_anthropicAuthMode,
@@ -459,6 +462,19 @@ void ProviderCustomRows::updateAnthropicAuthControl()
                            : credentials.error);
     }
     m_anthropicAuthStatus->setVisible(!cliproxy);
+    // Announce the changed hint, or the row's layout keeps the container's
+    // cached size and holds the old height.
+    QWidget *container = m_anthropicAuthStatus->parentWidget();
+    if (container) {
+        container->updateGeometry();
+    }
+    // The row frame pins its minimum height on resize; drop the stale pin so
+    // the next layout pass re-measures at the new content height.
+    if (QWidget *rowFrame = container ? container->parentWidget() : nullptr) {
+        if (rowFrame->objectName() == QLatin1String("settingsRow")) {
+            rowFrame->setMinimumHeight(0);
+        }
+    }
 }
 
 } // namespace speecher
