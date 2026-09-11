@@ -702,13 +702,15 @@ struct SetupWindow::Native {
         // The shortcut and its behaviour are set together; the combo shares
         // the shortcuts/activationMode setting the General page's schema row
         // edits rather than keeping a second copy of the value.
+        // The wording is the activationMode schema row's, so the wizard and
+        // the settings page describe each mode identically.
         const QList<QPair<QString, QString>> modes{
             {shortcutActivationModeName(ShortcutActivationMode::PushToTalk),
-             QStringLiteral("Push to talk — dictate while held")},
+             QStringLiteral("Push to talk — dictate only while the key is held")},
             {shortcutActivationModeName(ShortcutActivationMode::Toggle),
-             QStringLiteral("Toggle — one press starts, the next stops")},
+             QStringLiteral("Toggle — one press starts, the next press stops")},
             {shortcutActivationModeName(ShortcutActivationMode::Hybrid),
-             QStringLiteral("Hybrid — a tap toggles, holding dictates")}};
+             QStringLiteral("Hybrid — a tap toggles; holding dictates until release")}};
         ComboBox mode = combo(modes,
                               shortcutActivationModeName(
                                   controller->settings()->shortcutActivationMode()));
@@ -739,9 +741,14 @@ struct SetupWindow::Native {
 
     void showReady()
     {
+        // The actual binding, not a hardcoded default: the shortcut step may
+        // have recorded anything, a single key included.
+        const QString display = controller->globalShortcutDisplay();
         StackPanel panel = page(
             QStringLiteral("Ready to dictate"),
-            QStringLiteral("Press Ctrl+Alt+D to start dictating; hold it to talk."));
+            display.isEmpty()
+                ? QStringLiteral("Set a dictation shortcut to start dictating from anywhere.")
+                : QStringLiteral("Press %1 to start dictating; hold it to talk.").arg(display));
         panel.Children().Append(textBlock(QStringLiteral(
             "Speecher stays in the notification area. Open its microphone icon for status, your latest transcript, and settings.")));
         content.Children().Append(panel);

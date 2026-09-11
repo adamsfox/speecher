@@ -77,8 +77,12 @@ QKeySequence savedShortcut()
 {
     QSettings settings(QString::fromLatin1(SettingsKeys::Organization),
                        QString::fromLatin1(SettingsKeys::Application));
-    const QString stored = settings.value(SettingsKeys::GlobalShortcut).toString();
-    return stored.isEmpty() ? WinGlobalShortcutBinder::defaultShortcut() : QKeySequence(stored);
+    // The stored value can be a single key ("key:…"), which belongs to the
+    // single-key binder and must not parse as a sequence here.
+    const ShortcutBinding stored =
+        ShortcutBinding::fromString(settings.value(SettingsKeys::GlobalShortcut).toString());
+    return stored.combination().isEmpty() ? WinGlobalShortcutBinder::defaultShortcut()
+                                          : stored.combination();
 }
 
 void storeShortcut(const QKeySequence &shortcut)
