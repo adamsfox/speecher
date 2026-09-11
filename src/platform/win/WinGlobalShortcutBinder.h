@@ -32,6 +32,7 @@ public:
     bool setShortcut(const ShortcutBinding &shortcut, QString *error = nullptr) override;
     void suspend() override;
     QString resume() override;
+    bool removeRegistration(QString *error = nullptr) override;
 
     bool nativeEventFilter(const QByteArray &eventType,
                            void *message,

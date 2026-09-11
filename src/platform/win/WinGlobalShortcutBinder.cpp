@@ -189,6 +189,17 @@ QString WinGlobalShortcutBinder::resume()
     return error;
 }
 
+// The router parks this binder while a single key holds the binding; without
+// letting go of the hot key here, the replaced combination would keep firing
+// alongside the key. Clearing m_resumeBinding keeps a recording's resume from
+// sneaking it back.
+bool WinGlobalShortcutBinder::removeRegistration(QString *)
+{
+    m_resumeBinding = false;
+    unregisterShortcut();
+    return true;
+}
+
 std::optional<WinGlobalShortcutBinder::NativeHotKey>
 WinGlobalShortcutBinder::nativeHotKey(const QKeySequence &shortcut, QString *error)
 {

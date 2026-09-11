@@ -111,6 +111,14 @@ private slots:
         QCOMPARE(shortcut.shortcut().combination(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F24));
         QVERIFY(!shortcut.setShortcut(ShortcutBinding::singleKey(QStringLiteral("AltRight")), &error));
         QVERIFY(!error.isEmpty());
+
+        // The router parks the hot key while a single key holds the binding;
+        // the registration must actually go, and a later resume must not
+        // sneak it back.
+        shortcut.suspend();
+        QVERIFY(shortcut.removeRegistration());
+        QCOMPARE(shortcut.resume(), QString());
+        QCOMPARE(shortcut.m_hotKeyId, 0);
     }
 
     void keyboardBreakReleasesSuspendedShortcutOnce()
