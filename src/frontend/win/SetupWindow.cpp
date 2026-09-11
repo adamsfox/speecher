@@ -2,8 +2,10 @@
 
 #include "app/ApplicationController.h"
 #include "app/PlatformComposition.h"
+#include "core/AppSettings.h"
 #include "core/OutputFormat.h"
 #include "core/SettingsStore.h"
+#include "core/ShortcutBinding.h"
 #include "dictation/DictationPorts.h"
 #include "frontend/win/SettingsPage.h"
 #include "frontend/win/ShortcutRecorder.h"
@@ -20,6 +22,7 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.System.h>
+#include <winrt/Windows.UI.Core.h>
 #include <winrt/Microsoft.UI.Interop.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
@@ -611,13 +614,22 @@ struct SetupWindow::Native {
         TextBox recorder;
         recorder.IsReadOnly(true);
         recorder.PlaceholderText(L"Press a shortcut");
-        ShortcutBinding current = controller->globalShortcut();
-        if (current.isEmpty()) {
-            current = WinGlobalShortcutBinder::defaultShortcut();
+        TextBox singleKey;
+        singleKey.IsReadOnly(true);
+        singleKey.PlaceholderText(L"Press one key");
+        const ShortcutBinding current = controller->globalShortcut();
+        if (current.isSingleKey()) {
+            singleKey.Text(hstring(current.displayText().toStdWString()));
+        } else {
+            recorder.Text(hstring(
+                (current.isEmpty() ? ShortcutBinding(WinGlobalShortcutBinder::defaultShortcut())
+                                   : current)
+                    .displayText()
+                    .toStdWString()));
         }
-        recorder.Text(hstring(current.displayText().toStdWString()));
         shortcutStatus = textBlock(QStringLiteral("The default is Ctrl+Alt+D."));
-        recorder.KeyDown([this, recorder](const auto &, const Input::KeyRoutedEventArgs &event) {
+        recorder.KeyDown([this, recorder, singleKey](const auto &,
+                                                     const Input::KeyRoutedEventArgs &event) {
             const int virtualKey = static_cast<int>(event.Key());
             if (virtualKey == VK_ESCAPE) {
                 event.Handled(true);
@@ -642,11 +654,70 @@ struct SetupWindow::Native {
                                                 .arg(error).toStdWString()));
             } else {
                 recorder.Text(hstring(sequence.toString(QKeySequence::NativeText).toStdWString()));
+                singleKey.Text(L"");
                 shortcutStatus.Text(L"Shortcut registered.");
             }
             event.Handled(true);
         });
         panel.Children().Append(settingRow(QStringLiteral("Dictation shortcut"), recorder));
+
+        // The single-key capture takes the next key — bare modifiers included,
+        // which is why it cannot share the chord box above. A key that also
+        // types still saves; the status line carries the warning.
+        singleKey.KeyDown([this, recorder, singleKey](const auto &,
+                                                      const Input::KeyRoutedEventArgs &event) {
+            event.Handled(true);
+            if (static_cast<int>(event.Key()) == VK_ESCAPE) {
+                return;
+            }
+            const auto keyStatus = event.KeyStatus();
+            const PhysicalKey *key = physicalKeyForWin(
+                int(keyStatus.ScanCode) | (keyStatus.IsExtendedKey ? 0xE000 : 0));
+            if (!key) {
+                shortcutStatus.Text(L"That key cannot be a dictation key.");
+                return;
+            }
+            const ShortcutBinding binding =
+                ShortcutBinding::singleKey(QString::fromLatin1(key->code));
+            const QString reason = controller->globalShortcutUnsupportedBindingReason(binding);
+            if (!reason.isEmpty()) {
+                shortcutStatus.Text(hstring(reason.toStdWString()));
+                return;
+            }
+            QString error;
+            if (!controller->setGlobalShortcut(binding, &error)) {
+                shortcutStatus.Text(hstring(QStringLiteral("Could not register the shortcut: %1")
+                                                .arg(error).toStdWString()));
+                return;
+            }
+            singleKey.Text(hstring(binding.displayText().toStdWString()));
+            recorder.Text(L"");
+            const QString warning = singleKeyTypingWarning(binding);
+            shortcutStatus.Text(warning.isEmpty() ? hstring(L"Single key set.")
+                                                  : hstring(warning.toStdWString()));
+        });
+        panel.Children().Append(settingRow(
+            QStringLiteral("Or a single key, such as Right Alt or F13"), singleKey));
+
+        // The shortcut and its behaviour are set together; the combo shares
+        // the shortcuts/activationMode setting the General page's schema row
+        // edits rather than keeping a second copy of the value.
+        const QList<QPair<QString, QString>> modes{
+            {shortcutActivationModeName(ShortcutActivationMode::PushToTalk),
+             QStringLiteral("Push to talk — dictate while held")},
+            {shortcutActivationModeName(ShortcutActivationMode::Toggle),
+             QStringLiteral("Toggle — one press starts, the next stops")},
+            {shortcutActivationModeName(ShortcutActivationMode::Hybrid),
+             QStringLiteral("Hybrid — a tap toggles, holding dictates")}};
+        ComboBox mode = combo(modes,
+                              shortcutActivationModeName(
+                                  controller->settings()->shortcutActivationMode()));
+        mode.SelectionChanged([this, mode, modes](const auto &, const auto &) {
+            controller->settings()->setShortcutActivationMode(
+                shortcutActivationModeFromName(modes.at(mode.SelectedIndex()).first));
+        });
+        panel.Children().Append(settingRow(QStringLiteral("Shortcut behaviour"), mode));
+
         panel.Children().Append(shortcutStatus);
         content.Children().Append(panel);
     }

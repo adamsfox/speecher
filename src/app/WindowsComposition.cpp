@@ -8,8 +8,8 @@
 #include "platform/RoutingShortcutBinder.h"
 #include "platform/win/WinGlobalShortcutBinder.h"
 #include "platform/win/WinMediaController.h"
-#include "platform/win/WinSingleKeyShortcutBinder.h"
 #include "platform/win/WinScreenshotContextProvider.h"
+#include "platform/win/WinSingleKeyShortcutBinder.h"
 #include "platform/win/WinTargetProvider.h"
 
 #include <QCoreApplication>
