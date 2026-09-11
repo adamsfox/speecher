@@ -49,6 +49,8 @@ RUN apt-get update \
         qt6-xdgdesktopportal-platformtheme \
         wayland-protocols \
         wl-clipboard \
+        xauth \
+        xvfb \
     && setcap -r /usr/bin/kwin_wayland \
     && curl --fail --location --retry 3 \
         --output /tmp/qtkeychain.tar.gz \

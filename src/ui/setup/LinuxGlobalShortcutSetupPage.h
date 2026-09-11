@@ -1,17 +1,48 @@
 #pragma once
 
+#include "core/ShortcutBinding.h"
+
+#include <QPushButton>
 #include <QWidget>
 
 #include <optional>
 
 class QLabel;
+class QComboBox;
 class QKeySequenceEdit;
-class QPushButton;
+class QProgressBar;
 class QShowEvent;
 
 namespace speecher {
 
 class ApplicationController;
+
+// Records one physical key, a bare modifier included, which QKeySequenceEdit
+// cannot capture. While armed it takes focus and reports the first key pressed
+// as a KeyboardEvent.code, resolved from the key's evdev scan code.
+class SingleKeyCaptureButton final : public QPushButton {
+    Q_OBJECT
+
+public:
+    explicit SingleKeyCaptureButton(QWidget *parent = nullptr);
+
+signals:
+    void keyCaptured(const ShortcutBinding &binding);
+    // While armed the bound key must not fire dictation; the page suspends
+    // the binder for the duration, as the mac and Windows recorders do.
+    void armedChanged(bool armed);
+    // A key with no vocabulary row (a media key): the page says so inline.
+    void unknownKeyPressed();
+
+protected:
+    void keyPressEvent(QKeyEvent *event) override;
+    void focusOutEvent(QFocusEvent *event) override;
+
+private:
+    void setArmed(bool armed);
+
+    bool m_armed = false;
+};
 
 QString linuxGlobalShortcutManualInstruction();
 QString linuxGlobalShortcutCommand();
@@ -28,6 +59,10 @@ public:
     explicit LinuxGlobalShortcutSetupPage(ApplicationController &controller,
                                           QWidget *parent = nullptr);
     void hideAppMenuIntegration();
+    // The General settings page already renders the activation-mode schema
+    // row, so the embedded copy hides its own combo to avoid two controls over
+    // one setting. The wizard step keeps it.
+    void hideActivationMode();
 
     // True while this AppImage run still needs the user to click Install
     // Speecher.
@@ -47,21 +82,35 @@ protected:
 private:
     void installIntegration();
     void setShortcut();
+    void saveSingleKey(const ShortcutBinding &binding);
     void chooseShortcut();
+    void installKeyHelper();
     void refresh();
     void refreshControls();
+    void refreshKeyHelper();
     void showRegistrationResult(bool bound, const QString &detail);
 
     ApplicationController &m_controller;
     QString m_homePath;
     QString m_appImagePath;
     QString m_binaryPath;
+    bool m_waylandSession = false;
     QWidget *m_keySequenceControls = nullptr;
     QWidget *m_portalControls = nullptr;
     QWidget *m_manualControls = nullptr;
+    QWidget *m_singleKeyControls = nullptr;
+    QWidget *m_keyHelperControls = nullptr;
     QKeySequenceEdit *m_sequence = nullptr;
     QPushButton *m_setShortcut = nullptr;
     QPushButton *m_chooseShortcut = nullptr;
+    SingleKeyCaptureButton *m_captureKey = nullptr;
+    QLabel *m_singleKeyLead = nullptr;
+    QLabel *m_singleKeyWarning = nullptr;
+    QWidget *m_activationModeRow = nullptr;
+    QComboBox *m_activationMode = nullptr;
+    QPushButton *m_keyHelperButton = nullptr;
+    QLabel *m_keyHelperStatus = nullptr;
+    QProgressBar *m_keyHelperProgress = nullptr;
     QLabel *m_status = nullptr;
     QLabel *m_command = nullptr;
     QLabel *m_trayNote = nullptr;

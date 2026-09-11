@@ -13,6 +13,8 @@ on:
     paths:
       - src/frontend/mac/**
       - src/app/**
+      - src/platform/**
+      - src/core/ShortcutBinding.*
       - .github/macos-e2e/**
       - .github/workflows/mac-setup-e2e.yml
   workflow_dispatch:

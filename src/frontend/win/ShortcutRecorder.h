@@ -5,8 +5,10 @@
 namespace speecher::win {
 
 // The Shortcut pane: a recorder that captures the next chord, refuses chords
-// without a modifier, shows the current binding as the system writes it, a
-// reset to the default, and the binder's own error when it refuses a binding.
+// without a modifier, a single-key recorder that takes the next key — bare
+// modifiers included — and warns inline when that key also types, shows the
+// current binding as the system writes it, a reset to the default, and the
+// binder's own error when it refuses a binding.
 class ShortcutRecorder {
 public:
     // Appends the pane's cards to an already-titled settings column.

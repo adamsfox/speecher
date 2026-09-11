@@ -135,6 +135,13 @@ QString resolvedPath(const QString &path)
     return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
 }
 
+bool isWaylandSession()
+{
+    const QString sessionType = qEnvironmentVariable("XDG_SESSION_TYPE").toLower();
+    return sessionType == QStringLiteral("wayland")
+        || (sessionType.isEmpty() && qEnvironmentVariableIsSet("WAYLAND_DISPLAY"));
+}
+
 QString quotedExecutablePath(const QString &path)
 {
     QString escaped = path;

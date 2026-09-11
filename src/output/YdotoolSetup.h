@@ -47,7 +47,6 @@ public:
     static YdotoolSetupStatus evaluate(const YdotoolProbeFacts &facts);
     static YdotoolSetupStatus probe(bool enabledInSpeecher);
     static QString serviceName();
-    static QString helperPath(QString *error = nullptr);
     static bool runHelper(HelperAction action, QString *error = nullptr);
     static bool startUserService(QString *error = nullptr);
     static bool stopUserService(QString *error = nullptr);

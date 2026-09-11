@@ -6,8 +6,12 @@
 #include "output/WlClipboardDelivery.h"
 #include "platform/AtSpiTargetProvider.h"
 #include "platform/KGlobalAccelShortcutBinder.h"
+#include "platform/KeywatchShortcutBinder.h"
+#include "platform/LinuxDesktopIntegration.h"
 #include "platform/MediaPauseController.h"
 #include "platform/PortalGlobalShortcutBinder.h"
+#include "platform/RoutingShortcutBinder.h"
+#include "platform/XInput2ShortcutBinder.h"
 #include "platform/PortalScreenshotContextProvider.h"
 #include "platform/WaylandLayerShell.h"
 #include "platform/atspi/AtSpiAccess.h"
@@ -121,7 +125,11 @@ PopupPositioner *LinuxComposition::createPopupPositioner(QObject *parent) const
     return new WaylandLayerShell(parent);
 }
 
-GlobalShortcutBinder *LinuxComposition::createGlobalShortcutBinder(QObject *parent) const
+namespace {
+
+// The desktop shortcut service takes a combination: KGlobalAccel on Plasma,
+// otherwise the portal.
+GlobalShortcutBinder *createCombinationBinder(QObject *parent)
 {
     auto *plasma = new KGlobalAccelShortcutBinder(parent);
     if (plasma->supported()) {
@@ -129,6 +137,31 @@ GlobalShortcutBinder *LinuxComposition::createGlobalShortcutBinder(QObject *pare
     }
     delete plasma;
     return new PortalGlobalShortcutBinder(parent);
+}
+
+// The single-key backend watches the key itself: XInput2 under X11, the
+// key-watch helper under Wayland. The session type decides which; a headless
+// or unknown session gets the X11 watcher, which reports its own unsupported
+// reason when it cannot reach a server.
+GlobalShortcutBinder *createSingleKeyBinder(QObject *parent)
+{
+#ifdef SPEECHER_WITH_X11
+    if (!isWaylandSession()) {
+        return new XInput2ShortcutBinder(parent);
+    }
+#endif
+    // The key-watch daemon reads evdev, so it works on X11 too; a build
+    // without the XInput2 backend (no libxi dev files) falls back to it.
+    return new KeywatchShortcutBinder(parent);
+}
+
+} // namespace
+
+GlobalShortcutBinder *LinuxComposition::createGlobalShortcutBinder(QObject *parent) const
+{
+    return new RoutingShortcutBinder(createCombinationBinder(nullptr),
+                                     createSingleKeyBinder(nullptr),
+                                     parent);
 }
 
 AccessibilityState LinuxComposition::accessibilityState() const

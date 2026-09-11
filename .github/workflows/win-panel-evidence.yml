@@ -13,9 +13,13 @@ on:
       - 'evidence/**'
   pull_request:
     paths:
-      - src/frontend/win/DictationPanel.*
-      - src/frontend/win/WinFrontEnd.*
+      - src/frontend/win/**
+      - src/platform/win/**
+      - src/platform/RoutingShortcutBinder.*
+      - src/platform/SingleKeyShortcutBinder.*
+      - src/core/ShortcutBinding.*
       - tests/test_win_frontend.cpp
+      - tests/test_win_platform.cpp
       - .github/workflows/win-panel-evidence.yml
 
 permissions:

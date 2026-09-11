@@ -5,9 +5,9 @@
 
 #include <QElapsedTimer>
 #include <QObject>
-#include <QKeySequence>
 
 #include "app/SingleInstanceIpc.h"
+#include "core/ShortcutBinding.h"
 
 class QLocalSocket;
 class QTimer;
@@ -66,9 +66,13 @@ public:
     bool globalShortcutsSupported() const;
     bool globalShortcutSupportKnown() const;
     bool globalShortcutUsesDesktopChooser() const;
-    QKeySequence globalShortcut() const;
+    // Empty when the bound backend can honour this binding, otherwise what to
+    // tell the user. Recorders ask before saving so a refusal is explained
+    // rather than silently never firing.
+    QString globalShortcutUnsupportedBindingReason(const ShortcutBinding &binding) const;
+    ShortcutBinding globalShortcut() const;
     QString globalShortcutDisplay() const;
-    bool setGlobalShortcut(const QKeySequence &shortcut, QString *error = nullptr);
+    bool setGlobalShortcut(const ShortcutBinding &shortcut, QString *error = nullptr);
     // Lets a shortcut recorder see the bound combination as a key event.
     void suspendGlobalShortcut();
     QString resumeGlobalShortcut();
@@ -142,6 +146,7 @@ private:
     bool m_shortcutStartedSession = false;
     bool m_shortcutDown = false;
     bool m_shortcutReleaseSeen = false;
+    QTimer *m_pushToTalkStart = nullptr;
     quint64 m_microphoneStartGeneration = 0;
     bool m_microphoneStartPending = false;
 };

@@ -8,6 +8,10 @@ namespace speecher {
 QString resolvedPath(const QString &path);
 QString quotedExecutablePath(const QString &path);
 
+// Whether this session is Wayland, which decides the single-key backend and
+// whether the key-watch helper is offered.
+bool isWaylandSession();
+
 QString globalShortcutInstructionCommand(const QString &homePath,
                                          const QString &appImagePath,
                                          const QString &binaryPath);

@@ -77,8 +77,12 @@ QKeySequence savedShortcut()
 {
     QSettings settings(QString::fromLatin1(SettingsKeys::Organization),
                        QString::fromLatin1(SettingsKeys::Application));
-    const QString stored = settings.value(SettingsKeys::GlobalShortcut).toString();
-    return stored.isEmpty() ? WinGlobalShortcutBinder::defaultShortcut() : QKeySequence(stored);
+    // The stored value can be a single key ("key:…"), which belongs to the
+    // single-key binder and must not parse as a sequence here.
+    const ShortcutBinding stored =
+        ShortcutBinding::fromString(settings.value(SettingsKeys::GlobalShortcut).toString());
+    return stored.combination().isEmpty() ? WinGlobalShortcutBinder::defaultShortcut()
+                                          : stored.combination();
 }
 
 void storeShortcut(const QKeySequence &shortcut)
@@ -137,14 +141,21 @@ void WinGlobalShortcutBinder::bind()
     }
 }
 
-QKeySequence WinGlobalShortcutBinder::shortcut() const
+ShortcutBinding WinGlobalShortcutBinder::shortcut() const
 {
     return m_shortcut;
 }
 
-bool WinGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString *error)
+bool WinGlobalShortcutBinder::setShortcut(const ShortcutBinding &shortcut, QString *error)
 {
-    if (!registerShortcut(shortcut, error)) {
+    const QString reason = unsupportedBindingReason(shortcut);
+    if (!reason.isEmpty()) {
+        if (error) {
+            *error = reason;
+        }
+        return false;
+    }
+    if (!registerShortcut(shortcut.combination(), error)) {
         return false;
     }
     if (m_suspensionCount > 0) {
@@ -152,8 +163,8 @@ bool WinGlobalShortcutBinder::setShortcut(const QKeySequence &shortcut, QString 
         m_resumeBinding = true;
         unregisterShortcut();
     }
-    m_shortcut = shortcut;
-    storeShortcut(shortcut);
+    m_shortcut = shortcut.combination();
+    storeShortcut(m_shortcut);
     emit bindingChanged();
     return true;
 }
@@ -180,6 +191,17 @@ QString WinGlobalShortcutBinder::resume()
         registerShortcut(m_shortcut, &error);
     }
     return error;
+}
+
+// The router parks this binder while a single key holds the binding; without
+// letting go of the hot key here, the replaced combination would keep firing
+// alongside the key. Clearing m_resumeBinding keeps a recording's resume from
+// sneaking it back.
+bool WinGlobalShortcutBinder::removeRegistration(QString *)
+{
+    m_resumeBinding = false;
+    unregisterShortcut();
+    return true;
 }
 
 std::optional<WinGlobalShortcutBinder::NativeHotKey>

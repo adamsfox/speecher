@@ -1,14 +1,15 @@
 #pragma once
 
-#include <QKeySequence>
+#include "core/ShortcutBinding.h"
+
 #include <QObject>
 #include <QString>
 
 namespace speecher {
 
-// Binds one desktop-wide key sequence to dictation. Platforms that report key
-// release drive push-to-talk through activated()/deactivated(); platforms that
-// only report a trigger emit activated() alone.
+// Binds one desktop-wide ShortcutBinding to dictation. Platforms that report
+// key release drive push-to-talk through activated()/deactivated(); platforms
+// that only report a trigger emit activated() alone.
 class GlobalShortcutBinder : public QObject {
     Q_OBJECT
 
@@ -28,12 +29,25 @@ public:
     // Registers the binding with the desktop shortcut service. Kept out of the
     // constructor because registration costs a round trip to that service.
     virtual void bind() = 0;
-    virtual QKeySequence shortcut() const = 0;
+    virtual ShortcutBinding shortcut() const = 0;
     virtual QString shortcutDisplay() const
     {
-        return shortcut().toString(QKeySequence::NativeText);
+        return shortcut().displayText();
     }
-    virtual bool setShortcut(const QKeySequence &shortcut, QString *error = nullptr) = 0;
+    // Empty when this binder can honour the binding; otherwise what to tell
+    // the user. Answered per binding, not per binder: a backend may take any
+    // combination yet only some single keys, as the Wayland helper allows only
+    // keys that cannot spell text. setShortcut() refuses whatever is reported
+    // here. Desktop shortcut services take combinations only, so the default
+    // turns every single key away until a backend that watches the key itself
+    // says otherwise.
+    virtual QString unsupportedBindingReason(const ShortcutBinding &binding) const
+    {
+        return binding.isSingleKey()
+            ? QStringLiteral("Global Shortcuts on this desktop need a key combination, not a single key.")
+            : QString();
+    }
+    virtual bool setShortcut(const ShortcutBinding &shortcut, QString *error = nullptr) = 0;
     // Recording a replacement needs the current combination delivered as an
     // ordinary key event. A platform that consumes it system-wide lets go of
     // the registration here and takes it back on resume; the default binders

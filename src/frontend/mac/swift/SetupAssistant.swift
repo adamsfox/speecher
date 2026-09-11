@@ -3,9 +3,9 @@ import AVFoundation
 import Combine
 import SwiftUI
 
-// The setup assistant: the same nine steps the Qt assistant walked, as a native
-// window over the same schema rows the settings window renders. Only the state
-// no schema row holds — the provider check, the meter, the permissions and the
+// The setup assistant: the steps the Qt assistant walks, as a native window
+// over the same schema rows the settings window renders. Only the state no
+// schema row holds — the provider check, the meter, the permissions and the
 // finish rules — lives in the flow model below.
 
 struct SetupStep: Identifiable {
@@ -44,6 +44,10 @@ struct SetupStep: Identifiable {
                   title: "Writing profiles",
                   intro: "Choose the fallback Writing Profile and how much cleanup and tone "
                       + "adjustment each profile receives."),
+        SetupStep(id: "shortcut",
+                  title: "Dictation shortcut",
+                  intro: "Choose what starts dictation: a key combination, or one key on "
+                      + "its own, such as Right Option. Then choose what pressing it does."),
         SetupStep(id: "ready",
                   title: "Ready to dictate",
                   intro: "Setup is complete."),
@@ -56,10 +60,25 @@ struct SetupStep: Identifiable {
 /// The keys the finish step will hand the shortcut binder. Held rather than
 /// bound as they are typed: the Qt assistant only registered the shortcut when
 /// setup finished, and skipping must not leave a half-chosen binding behind.
+/// One binding, either a combination or a single key: recording one kind
+/// replaces the other.
 struct PendingShortcut {
     let characters: String
     let flags: NSEvent.ModifierFlags
+    /// The W3C KeyboardEvent.code name of a recorded single key; nil for a
+    /// combination.
+    let keyCode: String?
     let display: String
+
+    init(characters: String,
+         flags: NSEvent.ModifierFlags,
+         keyCode: String? = nil,
+         display: String) {
+        self.characters = characters
+        self.flags = flags
+        self.keyCode = keyCode
+        self.display = display
+    }
 
     /// ⌃⌥D, which reaches the binder as Qt's Meta+Alt+D.
     static let standard = PendingShortcut(characters: "d",
@@ -147,8 +166,12 @@ final class SetupFlowModel: ObservableObject {
         launchAtLogin = RowView.flag(model.row("launchAtLogin")?.value)
         if !model.shortcut.isEmpty {
             // The binder already holds a shortcut; finishing keeps it unless a
-            // new one is recorded over it.
-            pendingShortcut = PendingShortcut(characters: "", flags: [], display: model.shortcut)
+            // new one is recorded over it. A bound single key carries its code
+            // so it shows on the right recorder button.
+            pendingShortcut = PendingShortcut(characters: "",
+                                              flags: [],
+                                              keyCode: model.bridge.currentSingleKeyCode,
+                                              display: model.shortcut)
         }
     }
 
@@ -312,7 +335,7 @@ final class SetupFlowModel: ObservableObject {
         return initialGrant == false && model.accessibilityEnabled
     }
 
-    // MARK: Finish
+    // MARK: Shortcut
 
     func recordShortcut(characters: String, flags: NSEvent.ModifierFlags) {
         pendingShortcut = PendingShortcut(
@@ -321,19 +344,46 @@ final class SetupFlowModel: ObservableObject {
             display: PendingShortcut.display(characters: characters, flags: flags))
     }
 
+    func recordSingleKey(code: String) {
+        pendingShortcut = PendingShortcut(
+            characters: "",
+            flags: [],
+            keyCode: code,
+            display: model.bridge.display(forSingleKeyCode: code))
+    }
+
+    /// The inline, non-blocking note under a recorded single key: the
+    /// backend's refusal when it has one (missing Accessibility being the
+    /// common case), otherwise the caveat that the key keeps its normal job.
+    /// Empty for a combination or a silent key.
+    var pendingSingleKeyNote: String {
+        guard let code = pendingShortcut.keyCode else { return "" }
+        return model.bridge.unsupportedReason(forSingleKeyCode: code)
+            ?? model.bridge.warning(forSingleKeyCode: code)
+    }
+
+    /// Whether the backend refuses the recorded single key, which is what
+    /// makes the grant call-to-action appear.
+    var pendingSingleKeyRefused: Bool {
+        guard let code = pendingShortcut.keyCode else { return false }
+        return model.bridge.unsupportedReason(forSingleKeyCode: code) != nil
+    }
+
     private func resetShortcutFailure() {
         shortcutFailureAcknowledged = false
         shortcutStatus = Self.shortcutHint
     }
 
     /// Mirrors the Qt assistant: finishing always tries to register the shown
-    /// sequence — the binder reports its built-in default even before anything
+    /// binding — the binder reports its built-in default even before anything
     /// was ever bound, so "nothing recorded" still has to register and store
-    /// it. A failed registration holds setup open once, with the failure on
-    /// the shortcut step; finishing again continues without the shortcut.
+    /// it. A failed registration holds setup open once, back on the shortcut
+    /// step; finishing again continues without the shortcut.
     private func applyShortcut() -> Bool {
         guard createShortcut, !shortcutFailureAcknowledged else { return true }
-        if pendingShortcut.characters.isEmpty {
+        if let code = pendingShortcut.keyCode {
+            model.bindSingleKey(code: code)
+        } else if pendingShortcut.characters.isEmpty {
             model.bindCurrentShortcut()
         } else {
             model.bindShortcut(characters: pendingShortcut.characters,
@@ -345,14 +395,14 @@ final class SetupFlowModel: ObservableObject {
         }
         shortcutFailureAcknowledged = true
         shortcutStatus = "Could not register the shortcut: \(model.shortcutProblem). "
-            + "Another app probably owns that combination. Change the shortcut and try again, "
-            + "or finish setup again to continue without it."
+            + "Change the shortcut and try again, or finish setup again to "
+            + "continue without it."
         return false
     }
 
     private func finish() {
         if !applyShortcut() {
-            step = steps.firstIndex { $0.id == "ready" } ?? step
+            step = steps.firstIndex { $0.id == "shortcut" } ?? step
             return
         }
         model.setValue(launchAtLogin as NSNumber, for: "launchAtLogin")
@@ -428,6 +478,7 @@ struct SetupAssistantView: View {
         case "delivery": DeliveryStep(model: model)
         case "refinement": RefinementStep(model: model)
         case "profiles": ProfilesStep(model: model)
+        case "shortcut": ShortcutStep(flow: flow, model: model)
         case "ready": ReadyStep(flow: flow)
         default: LoginStep(flow: flow)
         }
@@ -668,38 +719,102 @@ private struct ProfilesStep: View {
     }
 }
 
-private struct ReadyStep: View {
+/// The shortcut step, which also carries the activation-mode choice: the key
+/// and what pressing it does are decided together. The mode drives the same
+/// activationMode schema row the General pane renders, so there is no second
+/// source of truth.
+private struct ShortcutStep: View {
     @ObservedObject var flow: SetupFlowModel
+    @ObservedObject var model: AppModel
     @StateObject private var recorder = ShortcutRecorder()
 
     var body: some View {
         Form {
             Section {
                 Toggle("Set up a dictation shortcut", isOn: $flow.createShortcut)
-                LabeledContent("Dictation shortcut") {
-                    Button(caption) {
-                        recorder.record(suspending: flow.model) { characters, flags in
+                LabeledContent("Key combination") {
+                    Button(comboCaption) {
+                        recorder.record(suspending: model) { characters, flags in
                             flow.recordShortcut(characters: characters, flags: flags)
                         }
                     }
                     .disabled(!flow.createShortcut)
                 }
+                LabeledContent {
+                    Button(singleKeyCaption) {
+                        recorder.recordSingleKey(suspending: model) { keyCode in
+                            guard let code = model.keyCodeName(forMacKeyCode: keyCode) else {
+                                return false
+                            }
+                            flow.recordSingleKey(code: code)
+                            return true
+                        }
+                    }
+                    .disabled(!flow.createShortcut)
+                } label: {
+                    Text("Single key")
+                    Text("One key on its own, such as Right Option or F13.")
+                }
+                if flow.pendingSingleKeyRefused, !model.accessibilityEnabled {
+                    Button("Grant Accessibility Access") { flow.requestAccessibility() }
+                }
             } footer: {
                 Text(footnote)
+            }
+            Section {
+                if let row = model.row("activationMode") {
+                    RowView(row: row, model: model)
+                }
             }
         }
         .formStyle(.grouped)
         .onDisappear { recorder.stop() }
     }
 
-    private var caption: String {
-        recorder.recording ? "Type a shortcut…" : flow.pendingShortcut.display
+    private var comboCaption: String {
+        if recorder.mode == .combination { return "Type a shortcut…" }
+        return flow.pendingShortcut.keyCode == nil ? flow.pendingShortcut.display
+                                                   : "Record Shortcut"
+    }
+
+    private var singleKeyCaption: String {
+        if recorder.mode == .singleKey { return "Press a key…" }
+        return flow.pendingShortcut.keyCode == nil ? "Record a Single Key"
+                                                   : flow.pendingShortcut.display
     }
 
     private var footnote: String {
-        recorder.recording
-            ? "Press the keys you want, or Escape to keep the current one."
-            : flow.shortcutStatus
+        if recorder.mode == .combination {
+            return "Press the keys you want, or Escape to keep the current one."
+        }
+        if recorder.mode == .singleKey {
+            return "Press any single key — a bare modifier like Right Option works — "
+                + "or Escape to keep the current one."
+        }
+        // A registration failure explains how to continue, so it outranks the
+        // recorded key's caveat; recording again resets it to the hint.
+        if flow.shortcutStatus != SetupFlowModel.shortcutHint { return flow.shortcutStatus }
+        let note = flow.pendingSingleKeyNote
+        return note.isEmpty ? flow.shortcutStatus : note
+    }
+}
+
+private struct ReadyStep: View {
+    @ObservedObject var flow: SetupFlowModel
+
+    var body: some View {
+        Form {
+            Section {
+                Text(flow.createShortcut
+                    ? "Finishing registers \(flow.pendingShortcut.display) as the "
+                        + "dictation shortcut."
+                    : "Finishing completes setup without a dictation shortcut.")
+                    .foregroundStyle(.secondary)
+            } footer: {
+                Text(flow.shortcutStatus)
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 

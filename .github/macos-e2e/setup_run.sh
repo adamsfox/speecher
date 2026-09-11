@@ -13,7 +13,7 @@ SYSTEM_TCC_DB='/Library/Application Support/com.apple.TCC/TCC.db'
 # The steps as SetupStep.all orders them; the capture seam names its PNGs after
 # these ids.
 SETUP_STEP_IDS=(welcome transcription microphone accessibility delivery
-                refinement profiles ready login)
+                refinement profiles shortcut ready login)
 
 seed_setup_tcc() {
   # osascript drives the assistant: AppleEvents to System Events and to the
@@ -113,8 +113,8 @@ let pages = [
     ("welcome", "Welcome to Speecher"), ("transcription", "Transcription"),
     ("microphone", "Microphone"), ("accessibility", "Accessibility"),
     ("delivery", "Text delivery"), ("refinement", "Refinement"),
-    ("profiles", "Writing profiles"), ("ready", "Ready to dictate"),
-    ("login", "Start at login"),
+    ("profiles", "Writing profiles"), ("shortcut", "Dictation shortcut"),
+    ("ready", "Ready to dictate"), ("login", "Start at login"),
 ]
 for (index, page) in pages.enumerated() {
     let filename = "step-\(index + 1)-\(page.0).png"
@@ -133,12 +133,12 @@ for (index, page) in pages.enumerated() {
     let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
         .joined(separator: " ")
     print("\(filename): \(image.width)x\(image.height), \(data.count) bytes\n\(text)")
-    guard text.contains(page.1), text.contains("Step \(index + 1) of 9") else {
+    guard text.contains(page.1), text.contains("Step \(index + 1) of 10") else {
         print("FAIL: \(filename) does not show its expected title and step number")
         exit(1)
     }
 }
-print("PASS: all nine captures show the expected title and step number")
+print("PASS: all ten captures show the expected title and step number")
 SWIFT
 }
 
@@ -224,7 +224,7 @@ else
   if (( ${#errors[@]} )); then
     fail_case "$(IFS='; '; echo "${errors[*]}")"
   else
-    pass_case "All nine steps rendered and clicked through; Finish completed setup and opened the settings window."
+    pass_case "All ten steps rendered and clicked through; Finish completed setup and opened the settings window."
   fi
 fi
 

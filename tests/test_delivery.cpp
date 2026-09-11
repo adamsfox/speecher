@@ -1236,43 +1236,6 @@ private slots:
         QVERIFY(ready.ready());
     }
 
-    void appImageYdotoolHelperUsesStableVerifiedCopy()
-    {
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        const QString bundled = QCoreApplication::applicationDirPath()
-            + QStringLiteral("/speecher-ydotool-setup");
-        QVERIFY2(QFileInfo::exists(bundled), qPrintable(bundled));
-
-        const QByteArray oldAppImage = qgetenv("APPIMAGE");
-        const QByteArray oldDataHome = qgetenv("XDG_DATA_HOME");
-        const auto restoreEnvironment = qScopeGuard([oldAppImage, oldDataHome] {
-            oldAppImage.isNull() ? qunsetenv("APPIMAGE") : qputenv("APPIMAGE", oldAppImage);
-            oldDataHome.isNull() ? qunsetenv("XDG_DATA_HOME")
-                                 : qputenv("XDG_DATA_HOME", oldDataHome);
-        });
-        qputenv("APPIMAGE", directory.filePath(QStringLiteral("Speecher.AppImage")).toUtf8());
-        qputenv("XDG_DATA_HOME", directory.filePath(QStringLiteral("data")).toUtf8());
-
-        const QString expected = directory.filePath(
-            QStringLiteral("data/speecher/libexec/speecher-ydotool-setup"));
-        QString error;
-        const QString actual = YdotoolSetup::helperPath(&error);
-        QVERIFY2(actual == expected, qPrintable(error));
-        QFile bundledFile(bundled);
-        QFile stableFile(expected);
-        QVERIFY(bundledFile.open(QIODevice::ReadOnly));
-        QVERIFY(stableFile.open(QIODevice::ReadOnly));
-        QCOMPARE(stableFile.readAll(), bundledFile.readAll());
-        struct stat helperStatus {};
-        struct stat directoryStatus {};
-        QCOMPARE(::stat(QFile::encodeName(expected).constData(), &helperStatus), 0);
-        QCOMPARE(::stat(QFile::encodeName(QFileInfo(expected).dir().absolutePath()).constData(),
-                        &directoryStatus),
-                 0);
-        QCOMPARE(helperStatus.st_mode & 0777, mode_t(0500));
-        QCOMPARE(directoryStatus.st_mode & 0777, mode_t(0700));
-    }
 #endif // SPEECHER_WITH_WAYLAND
 };
 

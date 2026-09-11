@@ -194,10 +194,10 @@ void PortalGlobalShortcutBinder::registerShortcut()
     createSession(true);
 }
 
-QKeySequence PortalGlobalShortcutBinder::shortcut() const
+ShortcutBinding PortalGlobalShortcutBinder::shortcut() const
 {
-    return m_triggerDescription.isEmpty() ? QKeySequence()
-                                          : GlobalShortcutBinder::defaultShortcut();
+    return m_triggerDescription.isEmpty() ? ShortcutBinding()
+                                          : ShortcutBinding(GlobalShortcutBinder::defaultShortcut());
 }
 
 QString PortalGlobalShortcutBinder::shortcutDisplay() const
@@ -205,7 +205,7 @@ QString PortalGlobalShortcutBinder::shortcutDisplay() const
     return m_triggerDescription;
 }
 
-bool PortalGlobalShortcutBinder::setShortcut(const QKeySequence &, QString *error)
+bool PortalGlobalShortcutBinder::setShortcut(const ShortcutBinding &, QString *error)
 {
     if (error) {
         *error = QStringLiteral(

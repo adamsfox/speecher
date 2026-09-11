@@ -1,6 +1,10 @@
 #include "common/test_prelude.h"
 #ifdef SPEECHER_WITH_QKEYCHAIN
 #include "core/KeyringResult.h"
+#include "core/ShortcutBinding.h"
+#include "core/settings/SettingsKeys.h"
+
+#include <QSet>
 #endif
 
 using namespace speecher;
@@ -50,6 +54,100 @@ private slots:
         newSettings.remove(QStringLiteral("output/method"));
         QVERIFY2(migrateSettingsIdentity(newSettings, oldSettings, &error), qPrintable(error));
         QVERIFY(!newSettings.contains(QStringLiteral("output/method")));
+    }
+
+    // Old installs hold QKeySequence text under shortcuts/toggleDictation, so
+    // that form must keep reading as a combination while a single key gets its
+    // own prefix.
+    void shortcutBindingRoundTripsBothFormsAndTheLegacyValue()
+    {
+        const ShortcutBinding combo(QKeySequence(Qt::META | Qt::ALT | Qt::Key_D));
+        QCOMPARE(combo.toString(), QStringLiteral("Meta+Alt+D"));
+        QCOMPARE(ShortcutBinding::fromString(QStringLiteral("Meta+Alt+D")), combo);
+        QVERIFY(!combo.isSingleKey());
+
+        const ShortcutBinding rightAlt = ShortcutBinding::singleKey(QStringLiteral("AltRight"));
+        QVERIFY(rightAlt.isSingleKey());
+        QCOMPARE(rightAlt.toString(), QStringLiteral("key:AltRight"));
+        QCOMPARE(ShortcutBinding::fromString(QStringLiteral("key:AltRight")), rightAlt);
+        QCOMPARE(rightAlt.keyCode(), QStringLiteral("AltRight"));
+#ifdef Q_OS_MACOS
+        QCOMPARE(rightAlt.displayText(), QStringLiteral("Right Option"));
+#else
+        QCOMPARE(rightAlt.displayText(), QStringLiteral("Right Alt"));
+#endif
+        QVERIFY(rightAlt.combination().isEmpty());
+
+        QVERIFY(ShortcutBinding().isEmpty());
+        QVERIFY(ShortcutBinding::singleKey(QStringLiteral("NotAKey")).isEmpty());
+        QVERIFY(ShortcutBinding::fromString(QString()).isEmpty());
+    }
+
+    // Each platform column maps a code to that platform's keycode. Expected
+    // values are from the platforms' own tables (input-event-codes.h,
+    // HIToolbox/Events.h kVK_*, Chromium's dom_code_data.inc win column),
+    // never recomputed the way the table is; -1 marks keys a platform does
+    // not have, which the reverse lookups must never match.
+    void vocabularyCarriesPlatformKeycodes()
+    {
+        // evdev (X11 = evdev + 8).
+        QCOMPARE(physicalKey(QStringLiteral("AltRight"))->evdev, 100);
+        QCOMPARE(physicalKey(QStringLiteral("KeyE"))->evdev, 18);
+        QCOMPARE(physicalKeyForEvdev(100)->code, "AltRight");
+        QCOMPARE(physicalKeyForEvdev(58)->code, "CapsLock");
+        QVERIFY(physicalKeyForEvdev(9999) == nullptr);
+
+        // mac. Note evdev 58 is Caps Lock while mac 58 is Left Option — the
+        // columns are independent.
+        QCOMPARE(physicalKey(QStringLiteral("AltRight"))->mac, 61);
+        QCOMPARE(physicalKey(QStringLiteral("AltLeft"))->mac, 58);
+        QCOMPARE(physicalKey(QStringLiteral("Fn"))->mac, 63);
+        QCOMPARE(physicalKey(QStringLiteral("PrintScreen"))->mac, -1);
+        QCOMPARE(physicalKeyForMac(0)->code, "KeyA");
+        QVERIFY(physicalKeyForMac(-1) == nullptr);
+
+        // win: the set-1 make code with 0xE0 in the high byte for extended
+        // keys, as WM_KEYDOWN's lParam spells it. Pause is 0x45 while NumLock
+        // is 0xE045 (the spelling the raw-input backend normalizes its E1/E0
+        // quirks to); Fn never reaches Windows.
+        QCOMPARE(physicalKey(QStringLiteral("AltRight"))->win, 0xE038);
+        QCOMPARE(physicalKey(QStringLiteral("Pause"))->win, 0x45);
+        QCOMPARE(physicalKey(QStringLiteral("NumLock"))->win, 0xE045);
+        QCOMPARE(physicalKey(QStringLiteral("Fn"))->win, -1);
+        QCOMPARE(physicalKeyForWin(0xE038)->code, "AltRight");
+        QVERIFY(physicalKeyForWin(-1) == nullptr);
+
+        // No watcher may read one event as two bindings: the assigned mac
+        // modifier keycodes are unique, and the win keys sharing a make code
+        // differ exactly in the E0 byte.
+        QSet<int> seen;
+        for (const char *code : {"ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight",
+                                 "AltLeft", "AltRight", "MetaLeft", "MetaRight", "CapsLock", "Fn"}) {
+            const int mac = physicalKey(QLatin1String(code))->mac;
+            QVERIFY(!seen.contains(mac));
+            seen.insert(mac);
+        }
+        for (const auto &[plain, extended] :
+             QList<QPair<QString, QString>>{{QStringLiteral("ControlLeft"), QStringLiteral("ControlRight")},
+                                            {QStringLiteral("AltLeft"), QStringLiteral("AltRight")},
+                                            {QStringLiteral("Slash"), QStringLiteral("NumpadDivide")},
+                                            {QStringLiteral("Enter"), QStringLiteral("NumpadEnter")},
+                                            {QStringLiteral("NumpadMultiply"), QStringLiteral("PrintScreen")},
+                                            {QStringLiteral("Pause"), QStringLiteral("NumLock")}}) {
+            QCOMPARE(physicalKey(extended)->win, physicalKey(plain)->win | 0xE000);
+        }
+    }
+
+    // The warning is the same sentence on every platform; the keys that carry
+    // no text stay silent.
+    void singleKeyWarningNamesTypingKeysOnly()
+    {
+        QVERIFY(singleKeyTypingWarning(ShortcutBinding::singleKey(QStringLiteral("AltRight")))
+                    .isEmpty());
+        QVERIFY(singleKeyTypingWarning(ShortcutBinding::singleKey(QStringLiteral("F13")))
+                    .isEmpty());
+        QVERIFY(singleKeyTypingWarning(ShortcutBinding::singleKey(QStringLiteral("KeyE")))
+                    .contains(QStringLiteral("E")));
     }
 
     void settingsDefaults()
@@ -105,6 +203,7 @@ private slots:
         QCOMPARE(settings.audioPostRollMs(), 200);
         QCOMPARE(settings.audioReadinessTimeoutMs(), 900);
         QCOMPARE(settings.audioVadThresholdPercent(), 2);
+        QCOMPARE(settings.shortcutActivationMode(), ShortcutActivationMode::Hybrid);
 
         settings.setSetupCompleted(true);
         QCOMPARE(settings.setupCompleted(), true);
@@ -291,6 +390,12 @@ private slots:
         QCOMPARE(settings.audioPostRollMs(), 0);
         QCOMPARE(settings.audioReadinessTimeoutMs(), 500);
         QCOMPARE(settings.audioVadThresholdPercent(), 20);
+
+        settings.raw().setValue(SettingsKeys::ShortcutActivationMode, QStringLiteral("hold"));
+        QCOMPARE(settings.shortcutActivationMode(), ShortcutActivationMode::Hybrid);
+        settings.setShortcutActivationMode(ShortcutActivationMode::PushToTalk);
+        QCOMPARE(settings.shortcutActivationMode(), ShortcutActivationMode::PushToTalk);
+        QCOMPARE(settings.snapshot().shortcutActivationMode, ShortcutActivationMode::PushToTalk);
     }
 
     void settingsDefaultRefinementProviderUsesInstalledCli()

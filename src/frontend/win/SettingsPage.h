@@ -74,7 +74,12 @@ struct PaneHost {
     QString credentialProblem;
     // Shortcut pane state.
     QString shortcutProblem;
+    // The single-key typing cost, shown inline after a save; not an error.
+    QString shortcutNotice;
     bool shortcutRecording = false;
+    // While recording: the next key, bare modifiers included, becomes the
+    // binding, instead of waiting for a chord.
+    bool shortcutRecordingSingleKey = false;
 };
 
 // One schema page as a WinUI page: ScrollViewer over a 1064-wide column with

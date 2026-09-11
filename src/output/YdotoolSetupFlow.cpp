@@ -124,7 +124,7 @@ bool startYdotoolSetup(SettingsStore &settings,
         && QMessageBox::question(
                dialogParent,
                QStringLiteral("Set up virtual keyboard"),
-               QStringLiteral("Speecher will copy its setup helper to your local libexec directory. The system authentication dialog will show its full path and ask for administrator permission to install ydotool if needed, load uinput, configure a speecher-uinput group, install udev rules, and install a user-level ydotoold service. Speecher itself remains unprivileged while dictating."),
+               QStringLiteral("The system authentication dialog will ask for administrator permission to place Speecher's setup helper in a system directory and run it: it installs ydotool if needed, loads uinput, configures a speecher-uinput group, installs udev rules, and installs a user-level ydotoold service. Speecher itself remains unprivileged while dictating."),
                QMessageBox::Cancel | QMessageBox::Ok,
                QMessageBox::Ok)
             != QMessageBox::Ok) {

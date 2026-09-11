@@ -6,6 +6,8 @@
 #include "output/ClipboardDelivery.h"
 #include "output/TextDelivery.h"
 #include "platform/win/WinGlobalShortcutBinder.h"
+#include "platform/win/WinInjectedInput.h"
+#include "platform/win/WinSingleKeyShortcutBinder.h"
 #include "platform/win/WinTargetProvider.h"
 
 #include <QApplication>
@@ -106,7 +108,17 @@ private slots:
         QCOMPARE(shortcut.m_hotKeyId, 0);
         QCOMPARE(shortcut.resume(), QString());
         QVERIFY(shortcut.m_hotKeyId != 0);
-        QCOMPARE(shortcut.shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F24));
+        QCOMPARE(shortcut.shortcut().combination(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F24));
+        QVERIFY(!shortcut.setShortcut(ShortcutBinding::singleKey(QStringLiteral("AltRight")), &error));
+        QVERIFY(!error.isEmpty());
+
+        // The router parks the hot key while a single key holds the binding;
+        // the registration must actually go, and a later resume must not
+        // sneak it back.
+        shortcut.suspend();
+        QVERIFY(shortcut.removeRegistration());
+        QCOMPARE(shortcut.resume(), QString());
+        QCOMPARE(shortcut.m_hotKeyId, 0);
     }
 
     void keyboardBreakReleasesSuspendedShortcutOnce()
@@ -127,6 +139,103 @@ private slots:
         shortcut.handleRawInput(input);
         QCOMPARE(deactivated.count(), 1);
         QCOMPARE(shortcut.resume(), QString());
+    }
+
+    // The physical identity is the scancode plus the E0 byte: on AltGr
+    // layouts right Alt is preceded by a synthetic left-Ctrl make (0x1D),
+    // which must not read as the bound key, and repeated makes without a
+    // break are key repeat, not a second press.
+    void singleKeyBinderMatchesScancodeIdentity()
+    {
+        WinSingleKeyShortcutBinder binder;
+        QString error;
+        QVERIFY2(binder.setShortcut(ShortcutBinding::singleKey(QStringLiteral("AltRight")), &error),
+                 qPrintable(error));
+        QSignalSpy activated(&binder, &GlobalShortcutBinder::activated);
+        QSignalSpy deactivated(&binder, &GlobalShortcutBinder::deactivated);
+
+        RAWINPUT input{};
+        input.header.dwType = RIM_TYPEKEYBOARD;
+        input.data.keyboard.MakeCode = 0x1D;
+        input.data.keyboard.VKey = VK_CONTROL;
+        binder.handleRawInput(input);
+        QCOMPARE(activated.count(), 0);
+
+        input.data.keyboard.MakeCode = 0x38;
+        input.data.keyboard.VKey = VK_MENU;
+        input.data.keyboard.Flags = RI_KEY_E0;
+        binder.handleRawInput(input);
+        binder.handleRawInput(input);
+        QCOMPARE(activated.count(), 1);
+
+        input.data.keyboard.Flags = RI_KEY_E0 | RI_KEY_BREAK;
+        binder.handleRawInput(input);
+        QCOMPARE(deactivated.count(), 1);
+
+        // A left-Alt press (same make, no E0) is a different key.
+        input.data.keyboard.Flags = 0;
+        binder.handleRawInput(input);
+        QCOMPARE(activated.count(), 1);
+        QVERIFY2(binder.setShortcut({}, &error), qPrintable(error));
+    }
+
+    // Raw input spells NumLock as a bare 0x45 and Pause as an E1-flagged
+    // 0x1D plus a fake VKey-255 half; the binder normalizes both to the
+    // vocabulary's message-level spelling.
+    void singleKeyBinderNormalizesThePauseNumLockQuirk()
+    {
+        WinSingleKeyShortcutBinder binder;
+        QString error;
+        QVERIFY2(binder.setShortcut(ShortcutBinding::singleKey(QStringLiteral("NumLock")), &error),
+                 qPrintable(error));
+        QSignalSpy activated(&binder, &GlobalShortcutBinder::activated);
+
+        RAWINPUT input{};
+        input.header.dwType = RIM_TYPEKEYBOARD;
+        input.data.keyboard.MakeCode = 0x45;
+        input.data.keyboard.VKey = VK_NUMLOCK;
+        binder.handleRawInput(input);
+        QCOMPARE(activated.count(), 1);
+
+        // Pause's trailing half carries the same make code but VKey 255.
+        input.data.keyboard.VKey = 0xFF;
+        binder.handleRawInput(input);
+        QCOMPARE(activated.count(), 1);
+
+        QVERIFY2(binder.setShortcut(ShortcutBinding::singleKey(QStringLiteral("Pause")), &error),
+                 qPrintable(error));
+        input.data.keyboard.MakeCode = 0x1D;
+        input.data.keyboard.VKey = VK_PAUSE;
+        input.data.keyboard.Flags = RI_KEY_E1;
+        binder.handleRawInput(input);
+        QCOMPARE(activated.count(), 2);
+        QVERIFY2(binder.setShortcut({}, &error), qPrintable(error));
+    }
+
+    // WinPasteDelivery tags its SendInput with dwExtraInfo, which raw input
+    // hands back as ExtraInformation: a binding on V or Ctrl must not read
+    // Speecher's own paste as the user's finger, while the e2e harness's
+    // untagged SendInput must keep firing the binder.
+    void singleKeyBinderDropsSpeechersOwnInjection()
+    {
+        WinSingleKeyShortcutBinder binder;
+        QString error;
+        QVERIFY2(binder.setShortcut(ShortcutBinding::singleKey(QStringLiteral("KeyV")), &error),
+                 qPrintable(error));
+        QSignalSpy activated(&binder, &GlobalShortcutBinder::activated);
+
+        RAWINPUT input{};
+        input.header.dwType = RIM_TYPEKEYBOARD;
+        input.data.keyboard.MakeCode = 0x2F;
+        input.data.keyboard.VKey = 'V';
+        input.data.keyboard.ExtraInformation = injectedInputTag;
+        binder.handleRawInput(input);
+        QCOMPARE(activated.count(), 0);
+
+        input.data.keyboard.ExtraInformation = 0;
+        binder.handleRawInput(input);
+        QCOMPARE(activated.count(), 1);
+        QVERIFY2(binder.setShortcut({}, &error), qPrintable(error));
     }
 
     void qtClipboardSnapshotRestoresFormatsWithoutAManifest()

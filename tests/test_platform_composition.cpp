@@ -4,6 +4,7 @@
 #include "app/ApplicationController.h"
 #include "app/CommandLine.h"
 #include "app/PlatformComposition.h"
+#include "app/ShortcutSuspendingDelivery.h"
 #include "core/LearnedCorrection.h"
 #include "core/SettingsStore.h"
 #include "dictation/DictationSession.h"
@@ -11,7 +12,9 @@
 #include "platform/mac/MacMediaController.h"
 #include "platform/GlobalShortcutBinder.h"
 #ifdef Q_OS_LINUX
+#include "platform/KGlobalAccelShortcutBinder.h"
 #include "platform/LinuxDesktopIntegration.h"
+#include "platform/PortalGlobalShortcutBinder.h"
 #include "ui/SetupAssistant.h"
 #include "ui/setup/LinuxGlobalShortcutSetupPage.h"
 #include "ui/setup/SetupPages.h"
@@ -70,12 +73,12 @@ public:
         bindCount += 1;
     }
 
-    QKeySequence shortcut() const override
+    ShortcutBinding shortcut() const override
     {
         return m_shortcut;
     }
 
-    bool setShortcut(const QKeySequence &shortcut, QString *error) override
+    bool setShortcut(const ShortcutBinding &shortcut, QString *error) override
     {
         if (!setShortcutError.isEmpty()) {
             if (error) {
@@ -98,7 +101,15 @@ public:
         registerCount += 1;
     }
 
-    void publishShortcut(const QKeySequence &shortcut)
+    void suspend() override { suspendCount += 1; }
+
+    QString resume() override
+    {
+        resumeCount += 1;
+        return {};
+    }
+
+    void publishShortcut(const ShortcutBinding &shortcut)
     {
         m_shortcut = shortcut;
         emit bindingChanged();
@@ -118,6 +129,8 @@ public:
 
     int bindCount = 0;
     int registerCount = 0;
+    int suspendCount = 0;
+    int resumeCount = 0;
     bool shortcutSupportKnown = true;
     bool shortcutsSupported = true;
     bool desktopChooser = false;
@@ -125,7 +138,7 @@ public:
     QString setShortcutError;
 
 private:
-    QKeySequence m_shortcut;
+    ShortcutBinding m_shortcut;
 };
 
 // Answers for itself everything the seam added, and delegates the ports it does
@@ -384,6 +397,61 @@ private slots:
         QCOMPARE(controller.session()->state(), DictationState::Idle);
     }
 
+    // Push-to-talk starts nothing for a brush of the key, and a real hold
+    // dictates until the key comes up.
+    void pushToTalkIgnoresABrushAndEndsWithTheKey()
+    {
+        const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
+        ApplicationController controller(true, platform);
+        const bool setupCompleted = controller.settings()->setupCompleted();
+        const ShortcutActivationMode mode = controller.settings()->shortcutActivationMode();
+        const auto restore = qScopeGuard([&] {
+            controller.settings()->setSetupCompleted(setupCompleted);
+            controller.settings()->setShortcutActivationMode(mode);
+        });
+        controller.settings()->setSetupCompleted(true);
+        controller.settings()->setShortcutActivationMode(ShortcutActivationMode::PushToTalk);
+
+        emit platform->binder->activated();
+        QTest::qSleep(50);
+        emit platform->binder->deactivated();
+        QTest::qWait(300);
+        QVERIFY(!platform->microphoneAnswer);
+        QCOMPARE(controller.session()->state(), DictationState::Idle);
+
+        emit platform->binder->activated();
+        QTRY_VERIFY(platform->microphoneAnswer);
+        platform->microphoneAnswer(true);
+        QCOMPARE(controller.session()->state(), DictationState::Starting);
+        emit platform->binder->deactivated();
+        QCOMPARE(controller.session()->state(), DictationState::Idle);
+    }
+
+    void toggleModeIgnoresReleaseAndTogglesOnEveryPress()
+    {
+        const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
+        ApplicationController controller(true, platform);
+        const bool setupCompleted = controller.settings()->setupCompleted();
+        const ShortcutActivationMode mode = controller.settings()->shortcutActivationMode();
+        const auto restore = qScopeGuard([&] {
+            controller.settings()->setSetupCompleted(setupCompleted);
+            controller.settings()->setShortcutActivationMode(mode);
+        });
+        controller.settings()->setSetupCompleted(true);
+        controller.settings()->setShortcutActivationMode(ShortcutActivationMode::Toggle);
+
+        emit platform->binder->activated();
+        QVERIFY(platform->microphoneAnswer);
+        platform->microphoneAnswer(true);
+        QCOMPARE(controller.session()->state(), DictationState::Starting);
+        // A hold that hybrid would treat as push-to-talk changes nothing here.
+        QTest::qSleep(300);
+        emit platform->binder->deactivated();
+        QCOMPARE(controller.session()->state(), DictationState::Starting);
+        emit platform->binder->activated();
+        QCOMPARE(controller.session()->state(), DictationState::Idle);
+    }
+
     void stopCancelsPendingMicrophoneStart()
     {
         const auto platform = std::make_shared<FakePlatformComposition>(platformComposition());
@@ -568,7 +636,7 @@ private slots:
         platform->binder->publishShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
         QCOMPARE(sequence->keySequence(), chosen);
         setShortcut->click();
-        QCOMPARE(controller.globalShortcut(), chosen);
+        QCOMPARE(controller.globalShortcut().combination(), chosen);
         QVERIFY(!setShortcut->isEnabled());
 
         bool hasStatus = false;
@@ -1329,8 +1397,58 @@ private slots:
 
         const QKeySequence chosen(Qt::META | Qt::ALT | Qt::Key_D);
         QVERIFY(controller.setGlobalShortcut(chosen));
-        QCOMPARE(controller.globalShortcut(), chosen);
+        QCOMPARE(controller.globalShortcut().combination(), chosen);
     }
+
+    // Delivery injects keystrokes, so the shortcut must look away for exactly
+    // the deliver() call: a single-key binding on an injected key would
+    // otherwise take the paste for the user's finger.
+    void deliverySuspendsTheShortcutForExactlyItsDuration()
+    {
+        FakeGlobalShortcutBinder binder;
+        struct ProbingDelivery final : TextDeliveryAdapter {
+            FakeGlobalShortcutBinder *binder = nullptr;
+            int suspensionsDuringDeliver = -1;
+            DeliveryResult deliver(const OutputSettings &,
+                                   const DeliveryContent &,
+                                   const Target &) override
+            {
+                suspensionsDuringDeliver = binder->suspendCount - binder->resumeCount;
+                DeliveryResult result;
+                result.ok = true;
+                return result;
+            }
+        };
+        ProbingDelivery inner;
+        inner.binder = &binder;
+        ShortcutSuspendingDelivery delivery(&inner, &binder);
+        QVERIFY(delivery.deliver({}, {}, {}).ok);
+        QCOMPARE(inner.suspensionsDuringDeliver, 1);
+        QCOMPARE(binder.suspendCount, 1);
+        QCOMPARE(binder.resumeCount, 1);
+    }
+
+#ifdef Q_OS_LINUX
+    // The desktop-service binders take combinations only, so each turns a
+    // single-key binding away with a reason the UI can show, while
+    // combinations pass the per-binding check as before. The watching binders
+    // have their own coverage in the keywatch and x11 suites.
+    void bindersRefuseASingleKeyWithAReason()
+    {
+        const ShortcutBinding rightAlt = ShortcutBinding::singleKey(QStringLiteral("AltRight"));
+        const ShortcutBinding combo(QKeySequence(Qt::META | Qt::ALT | Qt::Key_D));
+        QList<GlobalShortcutBinder *> binders{new KGlobalAccelShortcutBinder(nullptr),
+                                              new PortalGlobalShortcutBinder(nullptr)};
+        for (GlobalShortcutBinder *binder : binders) {
+            const std::unique_ptr<GlobalShortcutBinder> owned(binder);
+            QVERIFY(binder->unsupportedBindingReason(combo).isEmpty());
+            QVERIFY(!binder->unsupportedBindingReason(rightAlt).isEmpty());
+            QString error;
+            QVERIFY(!binder->setShortcut(rightAlt, &error));
+            QVERIFY(!error.isEmpty());
+        }
+    }
+#endif
 
     void deferredStartupBindsTheShortcutAndPublishesAccessibility()
     {

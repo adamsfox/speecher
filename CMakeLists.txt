@@ -169,6 +169,9 @@ if(SPEECHER_RELEASE_BUILD)
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(ATSPI REQUIRED IMPORTED_TARGET atspi-2 gobject-2.0)
   pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+  # The X11 single-key watcher reads raw key events through XInput2.
+  pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
+  pkg_check_modules(XI REQUIRED IMPORTED_TARGET xi)
   pkg_get_variable(WAYLAND_PROTOCOLS_DATA_DIR wayland-protocols pkgdatadir)
 else()
   find_package(PkgConfig QUIET)
@@ -176,6 +179,10 @@ endif()
 if(PkgConfig_FOUND AND NOT SPEECHER_RELEASE_BUILD)
   pkg_check_modules(ATSPI QUIET IMPORTED_TARGET atspi-2 gobject-2.0)
   pkg_check_modules(WAYLAND_CLIENT QUIET IMPORTED_TARGET wayland-client)
+  # QUIET like the neighbours: a Wayland-only host without libxi dev files
+  # still builds, minus the XInput2 single-key backend.
+  pkg_check_modules(X11 QUIET IMPORTED_TARGET x11)
+  pkg_check_modules(XI QUIET IMPORTED_TARGET xi)
   pkg_get_variable(WAYLAND_PROTOCOLS_DATA_DIR wayland-protocols pkgdatadir)
 endif()
 if(SPEECHER_RELEASE_BUILD)
@@ -229,6 +236,7 @@ set(SPEECHER_DOMAIN_SOURCES
   src/core/OutputFormat.cpp
   src/core/PasteRules.cpp
   src/core/SettingsStore.cpp
+  src/core/ShortcutBinding.cpp
   src/core/settings/CorrectionSettingsCodec.cpp
   src/core/settings/SettingsCodecs.cpp
   src/core/settings/SettingsSchema.cpp
@@ -253,6 +261,7 @@ set(SPEECHER_DOMAIN_HEADERS
   src/core/OutputFormat.h
   src/core/PasteRules.h
   src/core/SettingsStore.h
+  src/core/ShortcutBinding.h
   src/core/settings/CorrectionSettingsCodec.h
   src/core/settings/SettingsCodecs.h
   src/core/settings/SettingsKeys.h
@@ -328,7 +337,9 @@ set(SPEECHER_PLATFORM_SOURCES
   src/output/QtClipboardDelivery.cpp
   src/output/TextDelivery.cpp
   src/platform/CorrectionDiff.cpp
+  src/platform/RoutingShortcutBinder.cpp
   src/platform/ScreenshotImage.cpp
+  src/platform/SingleKeyShortcutBinder.cpp
   src/platform/audio/AudioPcmConverter.cpp
   src/platform/audio/QtAudioInput.cpp
   src/platform/audio/WavFileAudioInput.cpp
@@ -346,13 +357,16 @@ set(SPEECHER_PLATFORM_HEADERS
   src/platform/GlobalShortcutBinder.h
   src/platform/PopupPositioner.h
   src/platform/PopupSurface.h
+  src/platform/RoutingShortcutBinder.h
   src/platform/ScreenshotImage.h
+  src/platform/SingleKeyShortcutBinder.h
   src/platform/audio/AudioPcmConverter.h
   src/platform/audio/QtAudioInput.h
   src/platform/audio/WavFileAudioInput.h
 )
 
 set(SPEECHER_PLATFORM_LINUX_SOURCES
+  src/output/HelperInstall.cpp
   src/output/WaylandClipboardOwner.cpp
   src/output/WaylandClipboardProcess.cpp
   src/output/WlClipboardDelivery.cpp
@@ -360,18 +374,22 @@ set(SPEECHER_PLATFORM_LINUX_SOURCES
   src/output/YdotoolSetup.cpp
   src/platform/AtSpiTargetProvider.cpp
   src/platform/KGlobalAccelShortcutBinder.cpp
+  src/platform/KeywatchSetup.cpp
+  src/platform/KeywatchShortcutBinder.cpp
   src/platform/LinuxDesktopIntegration.cpp
   src/platform/LinuxStyleChoice.cpp
   src/platform/MediaPauseController.cpp
   src/platform/PortalScreenshotContextProvider.cpp
   src/platform/PortalGlobalShortcutBinder.cpp
   src/platform/WaylandLayerShell.cpp
+  src/platform/XInput2ShortcutBinder.cpp
   src/platform/atspi/AtSpiAccess.cpp
   src/platform/atspi/AtSpiCorrectionObserver.cpp
   src/platform/atspi/AtSpiTargetSnapshot.cpp
 )
 
 set(SPEECHER_PLATFORM_LINUX_HEADERS
+  src/output/HelperInstall.h
   src/output/HelperPath.h
   src/output/WaylandClipboardOwner.h
   src/output/WaylandClipboardProcess.h
@@ -380,12 +398,16 @@ set(SPEECHER_PLATFORM_LINUX_HEADERS
   src/output/YdotoolSetup.h
   src/platform/AtSpiTargetProvider.h
   src/platform/KGlobalAccelShortcutBinder.h
+  src/platform/KeywatchSetup.h
+  src/platform/KeywatchShortcutBinder.h
   src/platform/LinuxDesktopIntegration.h
   src/platform/LinuxStyleChoice.h
   src/platform/MediaPauseController.h
   src/platform/PortalScreenshotContextProvider.h
   src/platform/PortalGlobalShortcutBinder.h
   src/platform/WaylandLayerShell.h
+  src/platform/XInput2ShortcutBinder.h
+  src/setup/KeywatchProtocol.h
   src/platform/atspi/AtSpiAccess.h
   src/platform/atspi/AtSpiCorrectionObserver.h
   src/platform/atspi/AtSpiTargetSnapshot.h
@@ -400,6 +422,7 @@ set(SPEECHER_PLATFORM_MAC_SOURCES
   src/platform/mac/MacMediaController.mm
   src/platform/mac/MacPopupPositioner.mm
   src/platform/mac/MacScreenshotContextProvider.mm
+  src/platform/mac/MacSingleKeyShortcutBinder.mm
   src/platform/mac/MacTargetProvider.mm
 )
 
@@ -411,6 +434,7 @@ set(SPEECHER_PLATFORM_MAC_HEADERS
   src/platform/mac/MacMediaController.h
   src/platform/mac/MacPopupPositioner.h
   src/platform/mac/MacScreenshotContextProvider.h
+  src/platform/mac/MacSingleKeyShortcutBinder.h
   src/platform/mac/MacTargetProvider.h
 )
 
@@ -420,14 +444,17 @@ set(SPEECHER_PLATFORM_WIN_SOURCES
   src/platform/win/WinGlobalShortcutBinder.cpp
   src/platform/win/WinMediaController.cpp
   src/platform/win/WinScreenshotContextProvider.cpp
+  src/platform/win/WinSingleKeyShortcutBinder.cpp
   src/platform/win/WinTargetProvider.cpp
 )
 set(SPEECHER_PLATFORM_WIN_HEADERS
   src/output/win/WinPasteDelivery.h
   src/platform/win/WinCorrectionObserver.h
   src/platform/win/WinGlobalShortcutBinder.h
+  src/platform/win/WinInjectedInput.h
   src/platform/win/WinMediaController.h
   src/platform/win/WinScreenshotContextProvider.h
+  src/platform/win/WinSingleKeyShortcutBinder.h
   src/platform/win/WinTargetProvider.h
 )
 
@@ -446,6 +473,7 @@ set(SPEECHER_APP_HEADERS
   src/app/CommandLine.h
   src/app/CompositionSockets.h
   src/app/ManifestUpdater.h
+  src/app/ShortcutSuspendingDelivery.h
   src/app/PlatformComposition.h
   src/app/SingleInstanceIpc.h
   src/app/UpdateController.h
@@ -620,7 +648,8 @@ qt_add_resources(speecher_domain release_history
   FILES "${SPEECHER_RELEASE_HISTORY_DIR}/history.log"
 )
 target_include_directories(speecher_domain PUBLIC src)
-target_link_libraries(speecher_domain PUBLIC Qt6::Core)
+# Gui for QKeySequence, which ShortcutBinding carries for key combinations.
+target_link_libraries(speecher_domain PUBLIC Qt6::Core Qt6::Gui)
 
 add_library(speecher_workflow STATIC
   ${SPEECHER_WORKFLOW_SOURCES}
@@ -655,7 +684,13 @@ if(UNIX AND NOT APPLE)
   # Public: ClipboardDelivery's members and TextDelivery's method order differ
   # with the Wayland and ydotool backends compiled in.
   target_compile_definitions(speecher_platform PUBLIC SPEECHER_WITH_WAYLAND=1)
-  target_link_libraries(speecher_platform PUBLIC Qt6::DBus)
+  # Network: the Wayland key-watch binder talks to the daemon over QLocalSocket.
+  target_link_libraries(speecher_platform PUBLIC Qt6::DBus Qt6::Network)
+  # X11/Xi: the XInput2 single-key watcher, only where the dev files exist.
+  if(X11_FOUND AND XI_FOUND)
+    target_compile_definitions(speecher_platform PUBLIC SPEECHER_WITH_X11=1)
+    target_link_libraries(speecher_platform PUBLIC PkgConfig::X11 PkgConfig::XI)
+  endif()
 endif()
 if(APPLE)
   target_sources(speecher_platform PRIVATE
@@ -936,7 +971,20 @@ if(UNIX AND NOT APPLE)
   add_executable(speecher-ydotool-setup
     src/setup/YdotoolSetupHelper.cpp
   )
-  set_target_properties(speecher-ydotool-setup PROPERTIES
+  # The privileged key-watch helpers: the pkexec'd installer and the daemon.
+  # Plain C++, no Qt; the daemon needs libsystemd for its activated socket.
+  add_executable(speecher-keywatch-setup
+    src/setup/KeywatchSetupHelper.cpp
+  )
+  add_executable(speecher-keywatchd
+    src/setup/KeywatchDaemon.cpp
+  )
+  target_include_directories(speecher-keywatchd PRIVATE src/setup)
+  pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
+  target_link_libraries(speecher-keywatchd PRIVATE PkgConfig::SYSTEMD)
+  set_target_properties(
+    speecher-ydotool-setup speecher-keywatch-setup speecher-keywatchd
+    PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
     CXX_EXTENSIONS OFF
@@ -1082,8 +1130,10 @@ if(NOT DEFINED SPEECHER_DESKTOP_EXEC)
   set(SPEECHER_DESKTOP_EXEC "${CMAKE_INSTALL_FULL_BINDIR}/speecher")
 endif()
 set(SPEECHER_YDOTOOL_HELPER_PATH "${CMAKE_INSTALL_FULL_LIBEXECDIR}/speecher/speecher-ydotool-setup")
+set(SPEECHER_KEYWATCH_HELPER_PATH "${CMAKE_INSTALL_FULL_LIBEXECDIR}/speecher/speecher-keywatch-setup")
 target_compile_definitions(speecher_platform PUBLIC
   SPEECHER_YDOTOOL_HELPER_PATH="${SPEECHER_YDOTOOL_HELPER_PATH}"
+  SPEECHER_KEYWATCH_HELPER_PATH="${SPEECHER_KEYWATCH_HELPER_PATH}"
 )
 if(TARGET speecher-wayland-clipboard)
   set(SPEECHER_WAYLAND_CLIPBOARD_HELPER_PATH
@@ -1111,6 +1161,10 @@ install(TARGETS speecher
 )
 if(TARGET speecher-ydotool-setup)
   install(TARGETS speecher-ydotool-setup RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/speecher)
+endif()
+if(TARGET speecher-keywatch-setup)
+  install(TARGETS speecher-keywatch-setup speecher-keywatchd
+    RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/speecher)
 endif()
 if(TARGET speecher-wayland-clipboard)
   install(TARGETS speecher-wayland-clipboard
@@ -1175,6 +1229,7 @@ if(SPEECHER_BUILD_TESTS)
     target_sources(speecher_tests PRIVATE
       tests/test_linux_style_choice.cpp
       tests/test_linux_tray.cpp
+      tests/test_keywatch.cpp
     )
   endif()
   if(TARGET speecher_frontend_mac)
@@ -1221,7 +1276,7 @@ if(SPEECHER_BUILD_TESTS)
     audio_pcm_converter
   )
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    list(APPEND SPEECHER_TEST_SUITES linux_style_choice linux_tray)
+    list(APPEND SPEECHER_TEST_SUITES linux_style_choice linux_tray keywatch)
   endif()
   if(UNIX)
     list(APPEND SPEECHER_TEST_SUITES update_controller)
@@ -1253,4 +1308,22 @@ if(SPEECHER_BUILD_TESTS)
     tests/atspi_fixture.cpp
   )
   target_link_libraries(speecher_atspi_fixture PRIVATE Qt6::Widgets)
+
+  # End-to-end proof for the XInput2 single-key backend. XTEST needs a real X
+  # server, so this only runs where Xvfb is installed (CI's container), never
+  # against the developer's live :0 session. xvfb-run -a picks a private
+  # display number, well away from :0.
+  if(UNIX AND NOT APPLE AND XI_FOUND)
+    find_program(SPEECHER_XVFB_RUN xvfb-run)
+    pkg_check_modules(XTST QUIET IMPORTED_TARGET xtst)
+    if(SPEECHER_XVFB_RUN AND XTST_FOUND)
+      qt_add_executable(speecher_x11_injection_test tests/x11_injection_test.cpp)
+      target_include_directories(speecher_x11_injection_test PRIVATE src)
+      target_link_libraries(speecher_x11_injection_test PRIVATE
+        speecher_platform Qt6::Test PkgConfig::XTST PkgConfig::X11)
+      add_test(NAME speecher_x11_injection
+        COMMAND "${SPEECHER_XVFB_RUN}" -a $<TARGET_FILE:speecher_x11_injection_test>)
+      set_tests_properties(speecher_x11_injection PROPERTIES TIMEOUT 30)
+    endif()
+  endif()
 endif()

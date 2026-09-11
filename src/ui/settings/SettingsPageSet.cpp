@@ -195,6 +195,8 @@ SchemaCustomRowFactory generalCustomRows(ApplicationController *controller)
         }
         auto *page = new LinuxGlobalShortcutSetupPage(*controller, parent);
         page->hideAppMenuIntegration();
+        // The General page renders the activationMode schema row itself.
+        page->hideActivationMode();
         return SchemaCustomRow{page, {}, {}, true};
     };
 #else

@@ -66,7 +66,7 @@ QAction *KGlobalAccelShortcutBinder::makeShortcutAction()
 void KGlobalAccelShortcutBinder::bind()
 {
 #ifdef SPEECHER_WITH_KGLOBALACCEL
-    QKeySequence savedShortcut = shortcut();
+    QKeySequence savedShortcut = shortcut().combination();
     const QList<QKeySequence> legacyShortcuts = KGlobalAccel::self()->globalShortcut(
         QString::fromLatin1(legacyShortcutComponent),
         QString::fromLatin1(shortcutAction));
@@ -94,21 +94,28 @@ void KGlobalAccelShortcutBinder::bind()
 #endif
 }
 
-QKeySequence KGlobalAccelShortcutBinder::shortcut() const
+ShortcutBinding KGlobalAccelShortcutBinder::shortcut() const
 {
 #ifdef SPEECHER_WITH_KGLOBALACCEL
     const QList<QKeySequence> shortcuts = KGlobalAccel::self()->globalShortcut(
         QString::fromLatin1(shortcutComponent),
         QString::fromLatin1(shortcutAction));
-    return shortcuts.isEmpty() ? QKeySequence() : shortcuts.first();
+    return shortcuts.isEmpty() ? ShortcutBinding() : ShortcutBinding(shortcuts.first());
 #else
     return {};
 #endif
 }
 
-bool KGlobalAccelShortcutBinder::setShortcut(const QKeySequence &shortcut, QString *error)
+bool KGlobalAccelShortcutBinder::setShortcut(const ShortcutBinding &shortcut, QString *error)
 {
 #ifdef SPEECHER_WITH_KGLOBALACCEL
+    const QString reason = unsupportedBindingReason(shortcut);
+    if (!reason.isEmpty()) {
+        if (error) {
+            *error = reason;
+        }
+        return false;
+    }
     if (shortcut.isEmpty()) {
         if (error) {
             *error = QStringLiteral("Choose a key sequence");
@@ -117,7 +124,7 @@ bool KGlobalAccelShortcutBinder::setShortcut(const QKeySequence &shortcut, QStri
     }
     if (!KGlobalAccel::self()->setShortcut(
             m_action,
-            {shortcut},
+            {shortcut.combination()},
             KGlobalAccel::NoAutoloading)) {
         if (error) {
             *error = QStringLiteral("The desktop global-shortcut service rejected the key sequence");

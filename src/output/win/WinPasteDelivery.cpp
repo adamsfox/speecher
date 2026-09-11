@@ -1,5 +1,7 @@
 #include "output/win/WinPasteDelivery.h"
 
+#include "platform/win/WinInjectedInput.h"
+
 #include <windows.h>
 
 namespace speecher {
@@ -48,6 +50,9 @@ bool WinPasteDelivery::paste(PasteMethod method, QString *error)
         input[count].type = INPUT_KEYBOARD;
         input[count].ki.wVk = key;
         input[count].ki.dwFlags = flags;
+        // Tagged so the single-key binder can tell this injection from the
+        // user's fingers; the balancing releases below copy the tag along.
+        input[count].ki.dwExtraInfo = injectedInputTag;
         ++count;
     };
     append(VK_CONTROL, 0);
