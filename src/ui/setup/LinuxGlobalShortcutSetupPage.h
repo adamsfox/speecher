@@ -28,6 +28,11 @@ public:
 
 signals:
     void keyCaptured(const ShortcutBinding &binding);
+    // While armed the bound key must not fire dictation; the page suspends
+    // the binder for the duration, as the mac and Windows recorders do.
+    void armedChanged(bool armed);
+    // A key with no vocabulary row (a media key): the page says so inline.
+    void unknownKeyPressed();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -99,6 +104,7 @@ private:
     QPushButton *m_setShortcut = nullptr;
     QPushButton *m_chooseShortcut = nullptr;
     SingleKeyCaptureButton *m_captureKey = nullptr;
+    QLabel *m_singleKeyLead = nullptr;
     QLabel *m_singleKeyWarning = nullptr;
     QWidget *m_activationModeRow = nullptr;
     QComboBox *m_activationMode = nullptr;
