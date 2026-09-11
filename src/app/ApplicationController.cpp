@@ -506,13 +506,16 @@ void ApplicationController::handleShortcutReleased()
     }
     m_shortcutStartedSession = false;
     const bool starting = sessionActive() || m_microphoneStartPending;
+    // Whatever the mode is now, a pending deferred start must not survive the
+    // release: the mode can have changed since the press, and a session that
+    // begins after the key is already up is push-to-talk's misfire, not a tap.
+    const bool deferredStartPending = m_pushToTalkStart->isActive();
+    m_pushToTalkStart->stop();
     switch (m_settings->shortcutActivationMode()) {
     case ShortcutActivationMode::Toggle:
         return;
     case ShortcutActivationMode::PushToTalk:
-        if (m_pushToTalkStart->isActive()) {
-            m_pushToTalkStart->stop();
-        } else if (starting) {
+        if (!deferredStartPending && starting) {
             stopListening();
         }
         return;
