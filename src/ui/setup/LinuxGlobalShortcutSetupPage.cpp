@@ -68,6 +68,13 @@ bool isModifierKey(int key)
     }
 }
 
+QString singleKeyLead(bool followsKeySequence)
+{
+    return followsKeySequence
+        ? QStringLiteral("Or press a single key, such as Right Alt or F13, to use on its own.")
+        : QStringLiteral("Press a single key, such as Right Alt or F13, to use on its own.");
+}
+
 } // namespace
 
 ShortcutCaptureButton::ShortcutCaptureButton(QWidget *parent)
@@ -275,9 +282,15 @@ LinuxGlobalShortcutSetupPage::LinuxGlobalShortcutSetupPage(
     m_singleKeyControls->setObjectName(QStringLiteral("singleKeyShortcut"));
     auto *singleKeyLayout = new QVBoxLayout(m_singleKeyControls);
     singleKeyLayout->setContentsMargins(0, 0, 0, 0);
-    // Worded by refreshControls(): "Or press…" only reads right beneath the
-    // key-sequence controls, which portal and manual desktops do not show.
-    m_singleKeyLead = guidanceLabel(QString(), m_singleKeyControls);
+    // Reworded by refreshControls(): "Or press…" only reads right beneath the
+    // key-sequence controls, which portal and manual desktops do not show. Give
+    // it that wording now rather than starting empty: an empty word-wrap label
+    // is allocated a collapsed height, and the word-wrap helper label directly
+    // below would paint over it on first show before the text-set relayout
+    // catches up.
+    m_singleKeyLead = guidanceLabel(
+        singleKeyLead(true),
+        m_singleKeyControls);
     singleKeyLayout->addWidget(m_singleKeyLead);
 
     // Wayland's only route to a single key is the privileged key-watch helper,
@@ -629,10 +642,7 @@ void LinuxGlobalShortcutSetupPage::refreshControls()
     // desktop's combination service; it shows whenever the step is ready.
     // "Or press…" only reads right beneath the key-sequence controls; where
     // those are hidden this text comes first and has to stand alone.
-    m_singleKeyLead->setText(
-        keySequenceVisible
-            ? QStringLiteral("Or press a single key, such as Right Alt or F13, to use on its own.")
-            : QStringLiteral("Press a single key, such as Right Alt or F13, to use on its own."));
+    m_singleKeyLead->setText(singleKeyLead(keySequenceVisible));
     m_singleKeyControls->setVisible(ready && known);
     m_keyHelperControls->setVisible(ready && known && m_waylandSession);
     if (m_waylandSession) {
