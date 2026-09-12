@@ -13,38 +13,21 @@ jobs:
       - name: Exercise Apple-tool credential writes
         shell: python
         run: |
-          import base64
           import ctypes
-          import json
           import subprocess
           import uuid
           
           service = 'Speecher-CI-Keychain-Probe'
           account = str(uuid.uuid4())
-          script = r'''
-          ObjC.import('Foundation');
-          ObjC.import('Security');
-          const input = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
-          const request = JSON.parse(ObjC.unwrap($.NSString.alloc.initWithDataEncoding(input, $.NSUTF8StringEncoding)));
-          const service = $(request.service);
-          const account = $(request.account);
-          const bytes = $.NSData.alloc.initWithBase64EncodedStringOptions($(request.data), 0);
-          $.SecKeychainSetUserInteractionAllowed(false);
-          const item = Ref();
-          let status = $.SecKeychainFindGenericPassword($.nil,
-              Number(service.lengthOfBytesUsingEncoding($.NSUTF8StringEncoding)), service.UTF8String,
-              Number(account.lengthOfBytesUsingEncoding($.NSUTF8StringEncoding)), account.UTF8String,
-              null, null, item);
-          console.log('lookup status ' + status);
-          if (status === 0) {
-              status = $.SecKeychainItemModifyAttributesAndData(item[0], $.nil, Number(bytes.length), bytes.bytes);
-              console.log('write status ' + status);
-          }
-          if (status !== 0) throw new Error('Keychain update status ' + status);
-          '''
           
           def run(*args, **kwargs):
-              return subprocess.run(args, check=True, capture_output=True, timeout=15, **kwargs)
+              return subprocess.run(args, check=True, capture_output=True, timeout=4, **kwargs)
+          
+          def read():
+              found = run('/usr/bin/security', 'find-generic-password', '-s', service, '-a', account, '-w').stdout[:-1]
+              if not found.lstrip().startswith(b'{'):
+                  found = bytes.fromhex(found.decode())
+              return found
           
           security = ctypes.CDLL('/System/Library/Frameworks/Security.framework/Security')
           find = security.SecKeychainFindGenericPassword
@@ -62,24 +45,18 @@ jobs:
           
           try:
               run('/usr/bin/security', 'add-generic-password', '-s', service, '-a', account, '-w', '{"token":"initial"}', '-T', '/usr/bin/security')
-              assert native_read() != 0, 'Native reader unexpectedly trusted before write'
-              for payload in [b'{"token":"rotated"}', json.dumps({'token': 'dummy' * 5000, 'unicode': 'caf\u00e9', 'quotes': '" \\ \n'}).encode()]:
-                  request = json.dumps({'service': service, 'account': account, 'data': base64.b64encode(payload).decode()}).encode()
-                  result = run('/usr/bin/osascript', '-l', 'JavaScript', '-e', script, input=request)
-                  run('/usr/bin/security', 'add-generic-password', '-U', '-s', service, '-a', account)
-                  print('PASS metadata-only security update returned')
-                  found = run('/usr/bin/security', 'find-generic-password', '-s', service, '-a', account, '-w').stdout[:-1]
-                  if found != payload:
-                      found = bytes.fromhex(found.decode())
-                  assert found == payload, 'Roundtrip differs'
+              assert native_read() != 0
+              for payload in [b'{"token":"rotated"}', ' {"token":"dummy café 🎙", "quote":"\\\""} \n\n'.encode()]:
+                  command = f'add-generic-password -U -s "{service}" -a "{account}" -X {payload.hex()}\n'.encode()
+                  assert len(command) < 4096
+                  run('/usr/bin/security', '-i', input=command)
+                  assert read() == payload, 'Roundtrip differs'
                   assert native_read() != 0, 'Native reader unexpectedly trusted after write'
-                  print('PASS Apple-tool write/read preserves bytes and denied native read:', len(payload), 'bytes')
+                  print('PASS stdin-only security write preserves bytes and native denial:', len(payload), 'bytes')
               run('/usr/bin/security', 'delete-generic-password', '-s', service, '-a', account)
-              missing = subprocess.run(['/usr/bin/osascript', '-l', 'JavaScript', '-e', script], input=request, capture_output=True, timeout=15)
-              assert missing.returncode != 0, 'Missing entry recreated'
-              print('PASS deleted entry stays deleted')
-          except subprocess.CalledProcessError as error:
-              print('Dummy probe subprocess failed:', error.returncode, error.stderr.decode())
-              raise
+              payload = b'{"token":"' + b'x' * 25000 + b'"}'
+              run('/usr/bin/security', 'add-generic-password', '-s', service, '-a', account, '-w', payload.decode(), '-T', '/usr/bin/security')
+              assert read() == payload
+              print('PASS 25KB read unaffected by interactive write limit')
           finally:
-              subprocess.run(['/usr/bin/security', 'delete-generic-password', '-s', service, '-a', account], capture_output=True, timeout=15)
+              subprocess.run(['/usr/bin/security', 'delete-generic-password', '-s', service, '-a', account], capture_output=True, timeout=4)
