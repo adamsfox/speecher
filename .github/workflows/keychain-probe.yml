@@ -39,7 +39,6 @@ jobs:
           if (status === 0) {
               status = $.SecKeychainItemModifyAttributesAndData(item[0], $.nil, Number(bytes.length), bytes.bytes);
               console.log('write status ' + status);
-              $.CFRelease(item[0]);
           }
           if (status !== 0) throw new Error('Keychain update status ' + status);
           '''
