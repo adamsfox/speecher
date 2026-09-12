@@ -846,6 +846,7 @@ private slots:
             } else if (concurrentChange == QStringLiteral("metadata")) {
                 QJsonObject updated = original;
                 updated.insert(QStringLiteral("unknown"), QStringLiteral("edited-during-refresh"));
+                updated.insert(QStringLiteral("OPENAI_API_KEY"), QStringLiteral("sk-concurrent-edit"));
                 QJsonObject tokens = updated.value(QStringLiteral("tokens")).toObject();
                 tokens.insert(QStringLiteral("extra"), QStringLiteral("keep-me"));
                 updated.insert(QStringLiteral("tokens"), tokens);
@@ -890,8 +891,10 @@ private slots:
             const QJsonObject saved = QJsonDocument::fromJson(bytes).object();
             QCOMPARE(saved.value(QStringLiteral("unknown")).toString(), concurrentChange == QStringLiteral("metadata")
                          ? QStringLiteral("edited-during-refresh") : QStringLiteral("preserved-é-🎙"));
-            if (concurrentChange == QStringLiteral("metadata"))
+            if (concurrentChange == QStringLiteral("metadata")) {
                 QCOMPARE(saved.value(QStringLiteral("tokens")).toObject().value(QStringLiteral("extra")).toString(), QStringLiteral("keep-me"));
+                QCOMPARE(saved.value(QStringLiteral("OPENAI_API_KEY")).toString(), QStringLiteral("sk-concurrent-edit"));
+            }
             QCOMPARE(saved.value(QStringLiteral("tokens")).toObject().value(QStringLiteral("refresh_token")).toString(), QStringLiteral("rotated"));
         }
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)

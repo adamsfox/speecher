@@ -108,9 +108,7 @@ static int codexRefreshTimeoutMs()
 
 static bool sameCodexLogin(const QJsonObject &before, const QJsonObject &current)
 {
-    for (const auto *field : {"auth_mode", "OPENAI_API_KEY"}) {
-        if (before.value(QLatin1String(field)) != current.value(QLatin1String(field))) return false;
-    }
+    if (before.value(QStringLiteral("auth_mode")) != current.value(QStringLiteral("auth_mode"))) return false;
     const QJsonObject previousTokens = before.value(QStringLiteral("tokens")).toObject();
     const QJsonObject currentTokens = current.value(QStringLiteral("tokens")).toObject();
     for (const auto *field : {"access_token", "refresh_token", "id_token", "account_id"}) {
