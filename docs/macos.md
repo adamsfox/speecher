@@ -58,19 +58,24 @@ speecher.app never resets them. Rerun the assistant from Settings > General >
 "Run setup assistant…", and wipe everything with
 `defaults delete com.io-github-firemonster612.speecher`.
 
-### Claude Code Keychain prompts
+### CLI login Keychain prompts
 
 For a self-signed app, Keychain checks a per-build `cdhash` partition in
 addition to the stable certificate requirement. "Always Allow" on a direct
 Speecher read therefore only approves that build; the next update prompts
 again. This is separate from the Accessibility grant described above.
 
-Speecher reads the Claude Code entry through `/usr/bin/security`, whose
-`apple-tool:` partition survives Speecher updates and which Claude Code also
-uses. An entry that does not yet trust that tool can still ask for access.
-Refreshed tokens are written to the existing item through the native API,
-preserving its access rules. Speecher does not rewrite those rules, recreate
-the entry, or fall back to plaintext when access is denied.
+Speecher reads Claude Code and Codex Keychain entries through
+`/usr/bin/security`. Refreshed tokens reach the existing item through the
+Security API in Apple's `/usr/bin/osascript` process. Both Apple tools use the
+`apple-tool:` partition, which survives Speecher updates. A direct native write
+from Speecher would replace that partition with the current build's identity.
+
+The update passes credentials over stdin and only modifies an existing item.
+Speecher does not rewrite its access list or fall back to plaintext when access
+is denied. Entries that do not trust `/usr/bin/security` can still ask for
+access; Keychain operations time out after a few seconds. Codex uses the file
+first and Keychain only when the file is absent, as described in the README.
 
 Apple's [securityd partition selection](https://github.com/apple-oss-distributions/Security/blob/main/securityd/src/clientid.cpp)
 distinguishes Apple tools, Apple-issued developer identities, and other

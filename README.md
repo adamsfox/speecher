@@ -10,7 +10,7 @@
 
 ### Prerequisites
 
-Sign in to at least one transcription service: Claude Code for Claude Voice, or the ChatGPT app or Codex CLI for ChatGPT Codex dictation. Speecher can refresh expired logins through the matching CLI. It looks for `claude` and `codex` on `PATH`, common locations such as `~/.local/bin`, and the CLI bundled with the Linux ChatGPT app.
+Sign in to at least one transcription service: Claude Code for Claude Voice, or the ChatGPT app or Codex CLI for ChatGPT Codex dictation. Speecher refreshes expired OAuth logins directly with the provider and saves rotated tokens back to the selected credential store.
 
 ```sh
 # Arch
@@ -196,7 +196,19 @@ On Windows, uninstall Speecher from **Settings > Apps > Installed apps**.
 
 Choose Claude Voice or ChatGPT Codex under the transcription settings. The setup assistant reads the same provider registry, so newly registered transcription services appear in both places without separate wizard changes.
 
-ChatGPT Codex dictation uses the same streaming protocol as the Codex CLI and reads its ChatGPT OAuth session from `~/.codex/auth.json`. An OpenAI API key cannot authorize this endpoint. On Linux, the desktop package launcher is `/usr/bin/chatgpt` and its bundled CLI is `/usr/lib/chatgpt/resources/codex`, which Speecher can use to refresh an expired login. A standalone Codex CLI on `PATH` works everywhere.
+ChatGPT Codex dictation uses the same streaming protocol as the Codex CLI and reuses its ChatGPT OAuth session. An OpenAI API key cannot authorize this endpoint. Sign in with `codex login` or the ChatGPT app before using it.
+
+Speecher reads `auth.json` inside `CODEX_HOME`, or `~/.codex` when unset. If the
+file is absent, it reads Codex's native login from macOS Keychain or Windows
+Credential Manager. An unreadable or malformed file does not select the native
+login. This file-first policy is independent of Codex's `cli_auth_credentials_store`
+configuration. Linux currently supports the file store.
+
+Native entries use service `Codex Auth` and account `cli|` followed by the first
+16 SHA-256 hex characters of the canonical Codex home path. On Windows, the
+target is `<account>.Codex Auth` and the password blob is UTF-16LE. OAuth refresh
+writes back to the selected store, preserves unknown fields, and leaves a newer
+login or logout intact. A native refresh never creates an `auth.json` file.
 
 Native binaries use one stable user socket, so the desktop app and CLI shortcut talk to the same instance after `make install`. AppImages have their own stable socket because their internal mounted path changes on each launch.
 
@@ -243,13 +255,13 @@ OpenAI refinement defaults to `gpt-5.6-luna` with effort set to `none`, through 
 
 Authentication is resolved in this order:
 
-1. If `~/.codex/auth.json` says `auth_mode` is `chatgpt`, use its Codex OAuth token against the ChatGPT Codex backend.
-2. `~/.codex/auth.json` `OPENAI_API_KEY`, when it starts with `sk-`.
-3. `~/.codex/auth.json` Codex OAuth token against the ChatGPT Codex backend. If the OAuth access token is expired, Speecher asks a standalone or ChatGPT-bundled Codex CLI to refresh it and reloads the auth file.
+1. If the selected Codex credential store says `auth_mode` is `chatgpt`, use its Codex OAuth token against the ChatGPT Codex backend.
+2. The selected store's `OPENAI_API_KEY`, when it starts with `sk-`.
+3. The selected store's Codex OAuth token against the ChatGPT Codex backend. Speecher refreshes expired access tokens through the OAuth endpoint and reloads that store.
 4. The `OPENAI_API_KEY` environment variable, when it starts with `sk-`.
 5. The API key saved in the app settings.
 
-For API-key requests, `OPENAI_ORG_ID` or `OPENAI_ORGANIZATION` is sent as the optional `OpenAI-Organization` header, and `OPENAI_PROJECT_ID` or `OPENAI_PROJECT` is sent as the optional `OpenAI-Project` header. The same values can be provided in `~/.codex/auth.json` alongside `OPENAI_API_KEY`.
+For API-key requests, `OPENAI_ORG_ID` or `OPENAI_ORGANIZATION` is sent as the optional `OpenAI-Organization` header, and `OPENAI_PROJECT_ID` or `OPENAI_PROJECT` is sent as the optional `OpenAI-Project` header. The same values can be provided in the selected Codex credential store alongside `OPENAI_API_KEY`.
 
 The app settings key is stored through QtKeychain when QtKeychain is available at build time. On Linux, QtKeychain uses the desktop keyring backend exposed by the session, such as Secret Service/libsecret-compatible keyrings on GNOME-like desktops or KWallet on KDE; on macOS it uses the system Keychain. If an older plaintext key exists in Qt settings, Speecher attempts to migrate it into the keyring and remove the plaintext setting. If no keyring backend is available or the keyring is locked, saving the app settings key fails instead of silently writing a new plaintext API key.
 

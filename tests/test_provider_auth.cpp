@@ -4,11 +4,17 @@
 #include "common/test_auth.h"
 #include "frontend/ProviderOptions.h"
 #include "providers/ClaudeCredentialStorage.h"
+#include "providers/NativeCredentialStorage.h"
+#include "providers/CodexCredentialStorage.h"
+#include <QCryptographicHash>
+#include <QProcess>
 
 #ifdef Q_OS_MACOS
 #include <Security/Security.h>
 #include <QUuid>
-#include <QProcess>
+#elif defined(Q_OS_WIN)
+#include <windows.h>
+#include <wincred.h>
 #endif
 
 using namespace speecher::test;
@@ -17,9 +23,10 @@ using namespace speecher::test;
 // A unique account ensures these tests never query a user's Claude login.
 class DummyClaudeKeychain {
 public:
-    DummyClaudeKeychain(QByteArray config = {}, QByteArray serviceName = "Claude Code-credentials")
+    DummyClaudeKeychain(QByteArray config = {}, QByteArray serviceName = "Claude Code-credentials",
+                        QByteArray accountName = "speecher-test-" + QUuid::createUuid().toByteArray(QUuid::WithoutBraces))
         : previousUser(qgetenv("USER")), previousConfig(qgetenv("CLAUDE_CONFIG_DIR")),
-          account("speecher-test-" + QUuid::createUuid().toByteArray(QUuid::WithoutBraces)),
+          account(std::move(accountName)),
           service(std::move(serviceName))
     {
         qputenv("USER", account);
@@ -42,18 +49,26 @@ public:
         const OSStatus found = SecKeychainFindGenericPassword(nullptr, service.size(), service.constData(),
                                                               account.size(), account.constData(), nullptr, nullptr, &item);
         if (found == errSecSuccess) {
-            const OSStatus status = SecKeychainItemModifyAttributesAndData(item, nullptr, bytes.size(), bytes.constData());
             CFRelease(item);
-            return status == errSecSuccess;
+            QString error;
+            return writeNativeCredential(service, account, bytes, &error);
         }
         // Match Claude Code: only the Apple security tool is trusted to decrypt,
         // and its apple-tool partition owns the item. A native Speecher read
         // would prompt here even with an unchanged designated requirement.
-        return QProcess::execute(QStringLiteral("/usr/bin/security"),
-                                 {QStringLiteral("add-generic-password"), QStringLiteral("-s"),
-                                  QString::fromUtf8(service), QStringLiteral("-a"), QString::fromUtf8(account),
-                                  QStringLiteral("-w"), QString::fromUtf8(bytes), QStringLiteral("-T"),
-                                  QStringLiteral("/usr/bin/security")}) == 0;
+        QProcess process;
+        process.start(QStringLiteral("/usr/bin/security"),
+                      {QStringLiteral("add-generic-password"), QStringLiteral("-s"),
+                       QString::fromUtf8(service), QStringLiteral("-a"), QString::fromUtf8(account),
+                       QStringLiteral("-w"), QString::fromUtf8(bytes), QStringLiteral("-T"),
+                       QStringLiteral("/usr/bin/security")});
+        process.closeWriteChannel();
+        if (!process.waitForFinished(4000)) {
+            process.kill();
+            process.waitForFinished(1000);
+            return false;
+        }
+        return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
     }
     QByteArray read() const
     {
@@ -61,7 +76,12 @@ public:
         process.start(QStringLiteral("/usr/bin/security"),
                       {QStringLiteral("find-generic-password"), QStringLiteral("-s"), QString::fromUtf8(service),
                        QStringLiteral("-a"), QString::fromUtf8(account), QStringLiteral("-w")});
-        if (!process.waitForFinished(5000) || process.exitCode() != 0) return {};
+        if (!process.waitForFinished(4000)) {
+            process.kill();
+            process.waitForFinished(1000);
+            return {};
+        }
+        if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) return {};
         QByteArray bytes = process.readAllStandardOutput();
         if (bytes.endsWith('\n')) bytes.chop(1);
         const QByteArray decoded = QByteArray::fromHex(bytes);
@@ -71,6 +91,82 @@ public:
     QString path() const { return QDir::homePath() + QStringLiteral("/.claude/.credentials.json"); }
     QByteArray previousUser, previousConfig, account;
     const QByteArray service;
+};
+#endif
+
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+// Independent dummy entry, using the target and UTF-16 password format of
+// Codex's Rust keyring. No test ever reads the user's Codex home.
+class DummyCodexNative {
+public:
+    DummyCodexNative()
+        : oldHome(qgetenv("CODEX_HOME")), oldPath(qgetenv("SPEECHER_TEST_CODEX_AUTH_PATH")),
+          oldUserHome(qgetenv("HOME")), oldProfile(qgetenv("USERPROFILE"))
+    {
+        const QString home = directory.filePath(QStringLiteral("codex-é"));
+        QDir().mkpath(home);
+        qputenv("CODEX_HOME", QFile::encodeName(home));
+        qputenv("HOME", QFile::encodeName(directory.path()));
+        qputenv("USERPROFILE", QFile::encodeName(directory.path()));
+        qunsetenv("SPEECHER_TEST_CODEX_AUTH_PATH");
+#ifdef Q_OS_WIN
+        // This fresh directory has no links. Rust canonicalize's spelling is
+        // the absolute native path with the verbatim prefix, unlike Qt's path.
+        const QString canonical = QStringLiteral("\\\\?\\") + QDir::toNativeSeparators(QFileInfo(home).absoluteFilePath());
+#else
+        const QString canonical = QFileInfo(home).canonicalFilePath();
+#endif
+        account = "cli|" + QCryptographicHash::hash(canonical.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
+#ifdef Q_OS_MACOS
+        keychain = std::make_unique<DummyClaudeKeychain>(QByteArray{}, QByteArray("Codex Auth"), account);
+#endif
+    }
+    ~DummyCodexNative()
+    {
+        remove();
+        oldHome.isNull() ? qunsetenv("CODEX_HOME") : qputenv("CODEX_HOME", oldHome);
+        oldPath.isNull() ? qunsetenv("SPEECHER_TEST_CODEX_AUTH_PATH") : qputenv("SPEECHER_TEST_CODEX_AUTH_PATH", oldPath);
+        oldUserHome.isNull() ? qunsetenv("HOME") : qputenv("HOME", oldUserHome);
+        oldProfile.isNull() ? qunsetenv("USERPROFILE") : qputenv("USERPROFILE", oldProfile);
+    }
+    bool write(const QByteArray &bytes)
+    {
+#ifdef Q_OS_MACOS
+        return keychain->write(bytes);
+#else
+        QString target = QString::fromUtf8(account) + QStringLiteral(".Codex Auth");
+        QString username = QString::fromUtf8(account);
+        const QString password = QString::fromUtf8(bytes);
+        CREDENTIALW credential{};
+        credential.Type = CRED_TYPE_GENERIC;
+        credential.TargetName = reinterpret_cast<LPWSTR>(target.data());
+        credential.UserName = reinterpret_cast<LPWSTR>(username.data());
+        credential.Persist = CRED_PERSIST_LOCAL_MACHINE;
+        credential.CredentialBlobSize = password.size() * sizeof(wchar_t);
+        credential.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<ushort *>(password.utf16()));
+        return CredWriteW(&credential, 0);
+#endif
+    }
+    void remove()
+    {
+#ifdef Q_OS_MACOS
+        SecKeychainItemRef item = nullptr;
+        if (SecKeychainFindGenericPassword(nullptr, 10, "Codex Auth", account.size(), account.constData(),
+                                          nullptr, nullptr, &item) == errSecSuccess) {
+            SecKeychainItemDelete(item);
+            CFRelease(item);
+        }
+#else
+        const QString target = QString::fromUtf8(account) + QStringLiteral(".Codex Auth");
+        CredDeleteW(reinterpret_cast<LPCWSTR>(target.utf16()), CRED_TYPE_GENERIC, 0);
+#endif
+    }
+    QString authPath() const { return QDir(qEnvironmentVariable("CODEX_HOME")).filePath(QStringLiteral("auth.json")); }
+    QTemporaryDir directory;
+    QByteArray oldHome, oldPath, oldUserHome, oldProfile, account;
+#ifdef Q_OS_MACOS
+    std::unique_ptr<DummyClaudeKeychain> keychain;
+#endif
 };
 #endif
 
@@ -105,7 +201,7 @@ private slots:
         QString error;
         QCOMPARE(storage.read(&error), initial);
         QVERIFY2(error.isEmpty(), qPrintable(error));
-        const QByteArray rotated = "{\"token\":\"dummy rotated token\"}";
+        const QByteArray rotated = " {\"token\":\"dummy rotated " + QByteArray(6000, 'x') + "\",\"unknown\":\"café 🎙\"} \n";
         QVERIFY2(storage.write(rotated, &error), qPrintable(error));
         QCOMPARE(storage.read(&error), rotated);
         QCOMPARE(keychain.read(), rotated);
@@ -489,6 +585,174 @@ private slots:
         QCOMPARE(ClaudeCredentials::installedVersion(), QStringLiteral("1.2.3"));
         QVERIFY(count.open(QIODevice::ReadOnly));
         QCOMPARE(count.readAll(), QByteArrayLiteral("xx"));
+#endif
+    }
+
+    void codexUsesHomeAndIsolatesExplicitTestPath()
+    {
+        QTemporaryDir dir;
+        QTemporaryDir isolatedHome;
+        // Populate the default location with a dummy so older implementations
+        // cannot reach a real login while this test proves CODEX_HOME support.
+        QVERIFY(writeCodexAuth(isolatedHome.path(), QStringLiteral("default-token")));
+        QVERIFY(writeCodexAuth(dir.path(), QStringLiteral("home-token")));
+        const QByteArray oldUserHome = qgetenv("HOME");
+        const QByteArray oldUserProfile = qgetenv("USERPROFILE");
+        const QByteArray oldHome = qgetenv("CODEX_HOME");
+        const QByteArray oldTestPath = qgetenv("SPEECHER_TEST_CODEX_AUTH_PATH");
+        const auto cleanup = qScopeGuard([&] {
+            oldUserHome.isNull() ? qunsetenv("HOME") : qputenv("HOME", oldUserHome);
+            oldUserProfile.isNull() ? qunsetenv("USERPROFILE") : qputenv("USERPROFILE", oldUserProfile);
+            oldHome.isNull() ? qunsetenv("CODEX_HOME") : qputenv("CODEX_HOME", oldHome);
+            oldTestPath.isNull() ? qunsetenv("SPEECHER_TEST_CODEX_AUTH_PATH")
+                                 : qputenv("SPEECHER_TEST_CODEX_AUTH_PATH", oldTestPath);
+        });
+        qputenv("HOME", QFile::encodeName(isolatedHome.path()));
+        qputenv("USERPROFILE", QFile::encodeName(isolatedHome.path()));
+        qputenv("CODEX_HOME", QFile::encodeName(dir.filePath(QStringLiteral(".codex"))));
+        qunsetenv("SPEECHER_TEST_CODEX_AUTH_PATH");
+        OpenAiAuthProvider provider(nullptr, QStringLiteral("codex_oauth"));
+        QVERIFY(provider.resolve(false).bearerToken == QStringLiteral("home-token"));
+        qputenv("SPEECHER_TEST_CODEX_AUTH_PATH", QFile::encodeName(dir.filePath(QStringLiteral("missing.json"))));
+        QVERIFY(!provider.resolve(false).ok);
+        qputenv("SPEECHER_TEST_CODEX_AUTH_PATH", QByteArray{});
+        QVERIFY(!provider.resolve(false).ok);
+    }
+
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+    void codexNativeLoginAndFilePrecedence()
+    {
+        DummyCodexNative native;
+        const QByteArray root = R"({"auth_mode":"chatgpt","OPENAI_API_KEY":"sk-native-key","tokens":{"access_token":"native-é-🎙","account_id":"native-account"}})";
+        QVERIFY(native.write(root));
+        OpenAiAuthProvider oauth(nullptr, QStringLiteral("auto"));
+        QVERIFY(oauth.resolve(false).bearerToken == QStringLiteral("native-é-🎙"));
+        OpenAiAuthProvider key(nullptr, QStringLiteral("codex_api_key"));
+        QVERIFY(key.resolve(false).bearerToken == QStringLiteral("sk-native-key"));
+
+        // Explicit test paths cannot use the native entry, even when absent.
+        qputenv("SPEECHER_TEST_CODEX_AUTH_PATH", QFile::encodeName(native.directory.filePath(QStringLiteral("missing"))));
+        QVERIFY(!key.resolve(false).ok);
+        qunsetenv("SPEECHER_TEST_CODEX_AUTH_PATH");
+
+        QFile file(native.authPath());
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(R"({"OPENAI_API_KEY":"sk-file-key"})");
+        file.close();
+        QVERIFY(key.resolve(false).bearerToken == QStringLiteral("sk-file-key"));
+        // A malformed existing file does not quietly choose the native login.
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write("invalid JSON");
+        file.close();
+        QVERIFY(!key.resolve(false).ok);
+        QVERIFY(file.remove());
+        QVERIFY(key.resolve(false).bearerToken == QStringLiteral("sk-native-key"));
+    }
+#endif
+
+    void codexRefreshKeepsStoreAndConcurrentLogin_data()
+    {
+        QTest::addColumn<bool>("nativeStore");
+        QTest::addColumn<QString>("concurrentChange");
+        for (const QString &change : {QStringLiteral("none"), QStringLiteral("login"), QStringLiteral("logout")}) {
+            QTest::newRow(qPrintable(QStringLiteral("file-") + change)) << false << change;
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+            QTest::newRow(qPrintable(QStringLiteral("native-") + change)) << true << change;
+#endif
+        }
+    }
+
+    void codexRefreshKeepsStoreAndConcurrentLogin()
+    {
+        QFETCH(bool, nativeStore);
+        QFETCH(QString, concurrentChange);
+        QTemporaryDir directory;
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+        std::unique_ptr<DummyCodexNative> native;
+        if (nativeStore) native = std::make_unique<DummyCodexNative>();
+#else
+        Q_UNUSED(nativeStore);
+#endif
+        const QByteArray previousPath = qgetenv("SPEECHER_TEST_CODEX_AUTH_PATH");
+        const QByteArray previousUrl = qgetenv("SPEECHER_CODEX_TOKEN_URL");
+        const auto restore = qScopeGuard([&] {
+            previousPath.isNull() ? qunsetenv("SPEECHER_TEST_CODEX_AUTH_PATH") : qputenv("SPEECHER_TEST_CODEX_AUTH_PATH", previousPath);
+            previousUrl.isNull() ? qunsetenv("SPEECHER_CODEX_TOKEN_URL") : qputenv("SPEECHER_CODEX_TOKEN_URL", previousUrl);
+        });
+        const QString path = directory.filePath(QStringLiteral("auth.json"));
+        if (!nativeStore) qputenv("SPEECHER_TEST_CODEX_AUTH_PATH", QFile::encodeName(path));
+        const auto write = [&](const QByteArray &bytes) {
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+            if (native) return native->write(bytes);
+#endif
+            QFile file(path);
+            return file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(bytes) == bytes.size();
+        };
+        const QJsonObject original{
+            {QStringLiteral("auth_mode"), QStringLiteral("chatgpt")},
+            {QStringLiteral("unknown"), QStringLiteral("preserved-é-🎙")},
+            {QStringLiteral("tokens"), QJsonObject{
+                {QStringLiteral("access_token"), jwtWithExpiry(QDateTime::currentDateTimeUtc().addSecs(-60))},
+                {QStringLiteral("refresh_token"), QStringLiteral("old-refresh")},
+                {QStringLiteral("account_id"), QStringLiteral("original-account")}
+            }}
+        };
+        QVERIFY(write(QJsonDocument(original).toJson()));
+        CodexCredentialStorage storage;
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        connect(&server, &QTcpServer::newConnection, this, [&] {
+            QTcpSocket *socket = server.nextPendingConnection();
+            readHttpRequest(socket, 1000);
+            if (concurrentChange == QStringLiteral("login")) {
+                QVERIFY(write(R"({"auth_mode":"chatgpt","tokens":{"access_token":"newer-login","account_id":"newer-account"}})"));
+            } else if (concurrentChange == QStringLiteral("logout")) {
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+                if (native) native->remove();
+                else
+#endif
+                    QVERIFY(QFile::remove(path));
+            }
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+            if (native) {
+                // A file appearing during a native refresh cannot redirect its
+                // rotated tokens or the result of this resolution.
+                QFile file(native->authPath());
+                QVERIFY(file.open(QIODevice::WriteOnly));
+                file.write(R"({"tokens":{"access_token":"other-store"}})");
+            }
+#endif
+            const QByteArray payload = R"({"access_token":"refreshed","refresh_token":"rotated"})";
+            socket->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(payload.size())
+                          + "\r\nConnection: close\r\n\r\n" + payload);
+            socket->flush();
+        });
+        qputenv("SPEECHER_CODEX_TOKEN_URL", QStringLiteral("http://127.0.0.1:%1/token").arg(server.serverPort()).toUtf8());
+        const OpenAiAuth auth = OpenAiAuthProvider(nullptr, QStringLiteral("codex_oauth")).resolve();
+        QString error;
+        const QByteArray bytes = storage.read(&error);
+        if (concurrentChange == QStringLiteral("logout")) {
+            QVERIFY(!auth.ok);
+            QVERIFY(bytes.isEmpty());
+            QVERIFY(!error.isEmpty());
+            return;
+        }
+        QVERIFY2(auth.ok, qPrintable(auth.status));
+        if (concurrentChange == QStringLiteral("login")) {
+            QVERIFY(auth.bearerToken == QStringLiteral("newer-login"));
+            QCOMPARE(auth.accountId, QStringLiteral("newer-account"));
+        } else {
+            QVERIFY(auth.bearerToken == QStringLiteral("refreshed"));
+            const QJsonObject saved = QJsonDocument::fromJson(bytes).object();
+            QCOMPARE(saved.value(QStringLiteral("unknown")).toString(), QStringLiteral("preserved-é-🎙"));
+            QCOMPARE(saved.value(QStringLiteral("tokens")).toObject().value(QStringLiteral("refresh_token")).toString(), QStringLiteral("rotated"));
+        }
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+        if (native) {
+            QFile file(native->authPath());
+            QVERIFY(file.open(QIODevice::ReadOnly));
+            QCOMPARE(file.readAll(), QByteArray(R"({"tokens":{"access_token":"other-store"}})"));
+        }
 #endif
     }
 
