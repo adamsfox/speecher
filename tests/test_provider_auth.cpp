@@ -100,14 +100,11 @@ public:
 class DummyCodexNative {
 public:
     DummyCodexNative()
-        : oldHome(qgetenv("CODEX_HOME")), oldPath(qgetenv("SPEECHER_TEST_CODEX_AUTH_PATH")),
-          oldUserHome(qgetenv("HOME")), oldProfile(qgetenv("USERPROFILE"))
+        : oldHome(qgetenv("CODEX_HOME")), oldPath(qgetenv("SPEECHER_TEST_CODEX_AUTH_PATH"))
     {
         const QString home = directory.filePath(QStringLiteral("codex-é"));
         QDir().mkpath(home);
         qputenv("CODEX_HOME", QFile::encodeName(home));
-        qputenv("HOME", QFile::encodeName(directory.path()));
-        qputenv("USERPROFILE", QFile::encodeName(directory.path()));
         qunsetenv("SPEECHER_TEST_CODEX_AUTH_PATH");
 #ifdef Q_OS_WIN
         // This fresh directory has no links. Rust canonicalize's spelling is
@@ -126,8 +123,6 @@ public:
         remove();
         oldHome.isNull() ? qunsetenv("CODEX_HOME") : qputenv("CODEX_HOME", oldHome);
         oldPath.isNull() ? qunsetenv("SPEECHER_TEST_CODEX_AUTH_PATH") : qputenv("SPEECHER_TEST_CODEX_AUTH_PATH", oldPath);
-        oldUserHome.isNull() ? qunsetenv("HOME") : qputenv("HOME", oldUserHome);
-        oldProfile.isNull() ? qunsetenv("USERPROFILE") : qputenv("USERPROFILE", oldProfile);
     }
     bool write(const QByteArray &bytes)
     {
@@ -163,7 +158,7 @@ public:
     }
     QString authPath() const { return QDir(qEnvironmentVariable("CODEX_HOME")).filePath(QStringLiteral("auth.json")); }
     QTemporaryDir directory;
-    QByteArray oldHome, oldPath, oldUserHome, oldProfile, account;
+    QByteArray oldHome, oldPath, account;
 #ifdef Q_OS_MACOS
     std::unique_ptr<DummyClaudeKeychain> keychain;
 #endif
@@ -183,7 +178,8 @@ private slots:
         const auto restoreInteraction = qScopeGuard([&] {
             SecKeychainSetUserInteractionAllowed(interactionAllowed);
         });
-        DummyClaudeKeychain keychain;
+        DummyClaudeKeychain keychain({}, "Claude Code-credentials",
+            "speecher-test-\"quoted\\ " + QUuid::createUuid().toByteArray(QUuid::WithoutBraces));
         const QByteArray initial = " {\"token\":\"dummy quoted \\\" token\"} \n\n";
         QVERIFY(keychain.write(initial));
         const auto nativeReadStatus = [&] {
@@ -201,7 +197,7 @@ private slots:
         QString error;
         QCOMPARE(storage.read(&error), initial);
         QVERIFY2(error.isEmpty(), qPrintable(error));
-        const QByteArray rotated = " {\"token\":\"dummy rotated " + QByteArray(6000, 'x') + "\",\"unknown\":\"café 🎙\"} \n";
+        const QByteArray rotated = " {\"token\":\"dummy rotated " + QByteArray(100, 'x') + "\",\"unknown\":\"café 🎙\"} \n";
         QVERIFY2(storage.write(rotated, &error), qPrintable(error));
         QCOMPARE(storage.read(&error), rotated);
         QCOMPARE(keychain.read(), rotated);
@@ -218,6 +214,97 @@ private slots:
         QVERIFY(!error.isEmpty());
         QVERIFY(!error.contains(QStringLiteral("dummy")));
         QVERIFY(!storage.write(rotated, &error));
+    }
+
+    void keychainWriteRejectsCommandControlCharacters()
+    {
+        for (const char control : {'\0', '\r', '\n'}) {
+            QString error;
+            QVERIFY(!canWriteNativeCredential("Codex Auth", QByteArray("cli|dummy") + control, "{}", &error));
+            QVERIFY(!error.isEmpty());
+        }
+    }
+
+    void claudeKeychainLargeLoginRejectsRefreshBeforeNetwork()
+    {
+        DummyClaudeKeychain keychain;
+        const QDateTime expired = QDateTime::currentDateTimeUtc().addSecs(-60);
+        const QByteArray document = QJsonDocument(QJsonObject{
+            {QStringLiteral("padding"), QString(6000, QLatin1Char('x'))},
+            {QStringLiteral("claudeAiOauth"), QJsonObject{
+                {QStringLiteral("accessToken"), QStringLiteral("dummy-expired")},
+                {QStringLiteral("refreshToken"), QStringLiteral("dummy-refresh")},
+                {QStringLiteral("expiresAt"), double(expired.toMSecsSinceEpoch())}
+            }}
+        }).toJson();
+        QVERIFY(keychain.write(document));
+        QString error;
+        const ClaudeCredentialStorage storage(keychain.path());
+        QCOMPARE(storage.read(&error), document);
+        QVERIFY(!storage.write(document, &error));
+        error.clear();
+        QCOMPARE(storage.read(&error), document);
+
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        int requests = 0;
+        connect(&server, &QTcpServer::newConnection, this, [&] {
+            QTcpSocket *socket = server.nextPendingConnection();
+            readHttpRequest(socket, 1000);
+            ++requests;
+            socket->write("HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+            socket->flush();
+        });
+        const QByteArray previousUrl = qgetenv("SPEECHER_TEST_CLAUDE_TOKEN_URL");
+        const auto restore = qScopeGuard([&] {
+            previousUrl.isNull() ? qunsetenv("SPEECHER_TEST_CLAUDE_TOKEN_URL")
+                                 : qputenv("SPEECHER_TEST_CLAUDE_TOKEN_URL", previousUrl);
+        });
+        qputenv("SPEECHER_TEST_CLAUDE_TOKEN_URL", QStringLiteral("http://127.0.0.1:%1/token").arg(server.serverPort()).toUtf8());
+        const ClaudeCredentialResult auth = ClaudeCredentials::load(keychain.path(), true);
+        QVERIFY(!auth.ok);
+        QCOMPARE(requests, 0);
+        QVERIFY2(auth.error.contains(QStringLiteral("too large")), qPrintable(auth.error));
+        QVERIFY(auth.error.contains(QStringLiteral("claude")));
+    }
+
+    void codexMacKeychainRejectsRefreshBeforeNetwork()
+    {
+        DummyCodexNative native;
+        const QByteArray document = QJsonDocument(QJsonObject{
+            {QStringLiteral("auth_mode"), QStringLiteral("chatgpt")},
+            {QStringLiteral("tokens"), QJsonObject{
+                {QStringLiteral("access_token"), jwtWithExpiry(QDateTime::currentDateTimeUtc().addSecs(-60))},
+                {QStringLiteral("refresh_token"), QStringLiteral("dummy-refresh")}
+            }}
+        }).toJson();
+        QVERIFY(native.write(document));
+        const CodexCredentialStorage storage;
+        QString error;
+        QVERIFY(!storage.write(document, &error));
+        error.clear();
+        QCOMPARE(storage.read(&error), document);
+
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        int requests = 0;
+        connect(&server, &QTcpServer::newConnection, this, [&] {
+            QTcpSocket *socket = server.nextPendingConnection();
+            readHttpRequest(socket, 1000);
+            ++requests;
+            socket->write("HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+            socket->flush();
+        });
+        const QByteArray previousUrl = qgetenv("SPEECHER_CODEX_TOKEN_URL");
+        const auto restore = qScopeGuard([&] {
+            previousUrl.isNull() ? qunsetenv("SPEECHER_CODEX_TOKEN_URL") : qputenv("SPEECHER_CODEX_TOKEN_URL", previousUrl);
+        });
+        qputenv("SPEECHER_CODEX_TOKEN_URL", QStringLiteral("http://127.0.0.1:%1/token").arg(server.serverPort()).toUtf8());
+        const OpenAiAuth auth = OpenAiAuthProvider(nullptr, QStringLiteral("codex_oauth")).resolve();
+        QVERIFY(!auth.ok);
+        QCOMPARE(requests, 0);
+        QVERIFY2(auth.status.contains(QStringLiteral("codex login")), qPrintable(auth.status));
+        QCOMPARE(storage.read(&error), document);
     }
 
     void claudeCredentialsReadKeychainThroughSecurity_data()
@@ -656,7 +743,7 @@ private slots:
         QTest::addColumn<QString>("concurrentChange");
         for (const QString &change : {QStringLiteral("none"), QStringLiteral("login"), QStringLiteral("logout")}) {
             QTest::newRow(qPrintable(QStringLiteral("file-") + change)) << false << change;
-#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+#ifdef Q_OS_WIN
             QTest::newRow(qPrintable(QStringLiteral("native-") + change)) << true << change;
 #endif
         }

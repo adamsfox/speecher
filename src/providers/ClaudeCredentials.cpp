@@ -141,6 +141,9 @@ bool refreshClaudeAuth(const ClaudeCredentialStorage &storage, const ClaudeCrede
         return false;
     }
 
+    const QByteArray current = storage.read(error);
+    if (!error->isEmpty() || !storage.canWrite(current, error)) return false;
+
     const QStringList requestedScopes = credentials.scopes.isEmpty()
         ? defaultOauthScopes()
         : credentials.scopes;

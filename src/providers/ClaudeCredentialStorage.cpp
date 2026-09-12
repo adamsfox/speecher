@@ -64,6 +64,11 @@ QByteArray ClaudeCredentialStorage::read(QString *error) const
     return file.readAll();
 }
 
+bool ClaudeCredentialStorage::canWrite(const QByteArray &bytes, QString *error) const
+{
+    return m_account.isEmpty() || canWriteNativeCredential(m_service, m_account, bytes, error);
+}
+
 bool ClaudeCredentialStorage::write(const QByteArray &bytes, QString *error) const
 {
 #ifdef Q_OS_MACOS

@@ -1,9 +1,8 @@
 #include "providers/NativeCredentialStorage.h"
 
 #ifdef Q_OS_MACOS
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QProcess>
+#include <Security/Security.h>
 #elif defined(Q_OS_WIN)
 #include <QStringDecoder>
 #include <windows.h>
@@ -13,6 +12,32 @@
 namespace speecher {
 
 #ifdef Q_OS_MACOS
+static QByteArray keychainWriteCommand(const QByteArray &service, const QByteArray &account,
+                                      const QByteArray &bytes, QString *error)
+{
+    for (const QByteArray &identity : {service, account}) {
+        if (identity.contains('\0') || identity.contains('\r') || identity.contains('\n')) {
+            *error = QStringLiteral("macOS Keychain login name contains unsupported control characters");
+            return {};
+        }
+    }
+    const auto quoted = [](QByteArray value) {
+        value.replace("\\", "\\\\");
+        value.replace("\"", "\\\"");
+        return '\"' + value + '\"';
+    };
+    const QByteArray command = "add-generic-password -U -s " + quoted(service)
+        + " -a " + quoted(account) + " -X " + bytes.toHex() + '\n';
+    // security's interactive reader has a 4096-byte buffer, including its NUL.
+    if (command.size() >= 4096) {
+        const QString cli = service == "Codex Auth" ? QStringLiteral("codex login")
+            : QStringLiteral("claude and use /login");
+        *error = QStringLiteral("macOS Keychain login is too large for automatic refresh; run %1").arg(cli);
+        return {};
+    }
+    return command;
+}
+
 static bool finishKeychainTool(QProcess &process, QString *error)
 {
     if (!process.waitForStarted(1000) || !process.waitForFinished(3000)) {
@@ -75,40 +100,40 @@ QByteArray readNativeCredential(const QByteArray &service, const QByteArray &acc
 #endif
 }
 
+bool canWriteNativeCredential(const QByteArray &service, const QByteArray &account,
+                              const QByteArray &bytes, QString *error)
+{
+#ifdef Q_OS_MACOS
+    return !keychainWriteCommand(service, account, bytes, error).isEmpty();
+#else
+    Q_UNUSED(service);
+    Q_UNUSED(account);
+    Q_UNUSED(bytes);
+    Q_UNUSED(error);
+    return true;
+#endif
+}
+
 bool writeNativeCredential(const QByteArray &service, const QByteArray &account,
                            const QByteArray &bytes, QString *error)
 {
 #ifdef Q_OS_MACOS
-    // A native write from Speecher re-stamps the partition with this build's
-    // cdhash. Execute the in-place update in an Apple-signed process instead.
-    // The constant script takes data only over stdin, without security -i's
-    // command-length limit or add-generic-password -U's create-if-missing.
-    static const QString script = QStringLiteral(R"JS(
-ObjC.import('Foundation');
-ObjC.import('Security');
-const input = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
-const request = JSON.parse(ObjC.unwrap($.NSString.alloc.initWithDataEncoding(input, $.NSUTF8StringEncoding)));
-const service = $(request.service);
-const account = $(request.account);
-const data = $.NSData.alloc.initWithBase64EncodedStringOptions($(request.data), 0);
-$.SecKeychainSetUserInteractionAllowed(false);
-const item = Ref();
-let status = $.SecKeychainFindGenericPassword($.nil,
-    Number(service.lengthOfBytesUsingEncoding($.NSUTF8StringEncoding)), service.UTF8String,
-    Number(account.lengthOfBytesUsingEncoding($.NSUTF8StringEncoding)), account.UTF8String,
-    null, null, item);
-if (status !== 0) throw new Error('Keychain lookup failed');
-status = $.SecKeychainItemModifyAttributesAndData(item[0], $.nil, Number(data.length), data.bytes);
-if (status !== 0) throw new Error('Keychain update failed');
-)JS");
+    const QByteArray command = keychainWriteCommand(service, account, bytes, error);
+    if (command.isEmpty()) return false;
+    SecKeychainItemRef item = nullptr;
+    const OSStatus status = SecKeychainFindGenericPassword(nullptr, service.size(), service.constData(),
+        account.size(), account.constData(), nullptr, nullptr, &item);
+    if (item) CFRelease(item);
+    if (status != errSecSuccess) {
+        *error = QStringLiteral("Could not find macOS Keychain login for refresh (%1)").arg(status);
+        return false;
+    }
+    // Only security carries apple-tool:. Native or osascript writes change
+    // the partition and break the owning CLI's next read. Keep secrets on
+    // stdin and send one command only, so EOF retains that command's status.
     QProcess process;
-    process.start(QStringLiteral("/usr/bin/osascript"),
-                  {QStringLiteral("-l"), QStringLiteral("JavaScript"), QStringLiteral("-e"), script});
-    process.write(QJsonDocument(QJsonObject{
-        {QStringLiteral("service"), QString::fromUtf8(service)},
-        {QStringLiteral("account"), QString::fromUtf8(account)},
-        {QStringLiteral("data"), QString::fromLatin1(bytes.toBase64())}
-    }).toJson(QJsonDocument::Compact));
+    process.start(QStringLiteral("/usr/bin/security"), {QStringLiteral("-i")});
+    process.write(command);
     process.closeWriteChannel();
     return finishKeychainTool(process, error);
 #elif defined(Q_OS_WIN)

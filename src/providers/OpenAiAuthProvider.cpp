@@ -134,6 +134,8 @@ static bool refreshCodexAuth(const CodexCredentialStorage &storage, QString *err
         return false;
     }
 
+    if (!storage.canWrite(original, error)) return false;
+
     const QString overrideUrl = qEnvironmentVariable("SPEECHER_CODEX_TOKEN_URL");
     const OauthRefreshResult refreshed = CliProxyCredentials::oauthRefresh(
         overrideUrl.isEmpty() ? QStringLiteral("https://auth.openai.com/oauth/token") : overrideUrl,

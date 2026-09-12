@@ -66,16 +66,31 @@ Speecher read therefore only approves that build; the next update prompts
 again. This is separate from the Accessibility grant described above.
 
 Speecher reads Claude Code and Codex Keychain entries through
-`/usr/bin/security`. Refreshed tokens reach the existing item through the
-Security API in Apple's `/usr/bin/osascript` process. Both Apple tools use the
-`apple-tool:` partition, which survives Speecher updates. A direct native write
-from Speecher would replace that partition with the current build's identity.
+`/usr/bin/security`, whose `apple-tool:` partition survives Speecher updates.
+An entry that does not trust that tool can still ask for access. Keychain
+operations time out after a few seconds.
 
-The update passes credentials over stdin and only modifies an existing item.
-Speecher does not rewrite its access list or fall back to plaintext when access
-is denied. Entries that do not trust `/usr/bin/security` can still ask for
-access; Keychain operations time out after a few seconds. Codex uses the file
-first and Keychain only when the file is absent, as described in the README.
+Claude Code's entry is updated through the same `security` tool. Credentials
+travel over stdin, and Speecher does not change the access list. The tool's
+input buffer limits automatic refresh to documents whose hex-encoded update
+command fits under 4096 bytes, roughly 2 KiB of credential data minus the
+service and account names. Larger entries remain readable. Speecher refuses
+to refresh an oversized existing entry before contacting OAuth and asks you to
+run `claude` and `/login`. It also checks the refreshed document size before
+writing, so unexpectedly larger responses fail without truncation.
+
+Codex writes its Keychain entry through its native Rust keyring. Writing that
+entry from another process can change its Keychain partition and disrupt
+Codex's access. Speecher therefore only reads macOS Codex Keychain entries and
+rejects automatic refresh before contacting OAuth. Run `codex login` to refresh
+that entry. Codex file-based refresh and Windows Credential Manager refresh
+remain supported.
+
+For supported refreshes, Speecher checks that the entry still exists before
+writing and rechecks the login after the OAuth request. These checks cannot
+prevent every race with a CLI changing the entry at the same instant. Access
+denial never selects a plaintext login. Codex uses the file first and Keychain
+only when the file is absent, as described in the README.
 
 Apple's [securityd partition selection](https://github.com/apple-oss-distributions/Security/blob/main/securityd/src/clientid.cpp)
 distinguishes Apple tools, Apple-issued developer identities, and other

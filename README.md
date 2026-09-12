@@ -207,8 +207,15 @@ configuration. Linux currently supports the file store.
 Native entries use service `Codex Auth` and account `cli|` followed by the first
 16 SHA-256 hex characters of the canonical Codex home path. On Windows, the
 target is `<account>.Codex Auth` and the password blob is UTF-16LE. OAuth refresh
-writes back to the selected store, preserves unknown fields, and leaves a newer
-login or logout intact. A native refresh never creates an `auth.json` file.
+writes back to the selected file or Windows Credential Manager entry and
+preserves unknown fields. It checks for a login or logout that happened during
+the OAuth request before writing. A native refresh never creates an `auth.json`
+file.
+
+On macOS, Speecher only reads Codex Keychain entries. Refresh them with
+`codex login`; Speecher rejects automatic refresh before contacting OAuth so it
+does not change the native entry's ownership. File-based Codex refresh still
+works. See [macOS Keychain details](docs/macos.md#cli-login-keychain-prompts).
 
 Native binaries use one stable user socket, so the desktop app and CLI shortcut talk to the same instance after `make install`. AppImages have their own stable socket because their internal mounted path changes on each launch.
 

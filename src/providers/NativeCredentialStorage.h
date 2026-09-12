@@ -6,7 +6,11 @@
 namespace speecher {
 
 QByteArray readNativeCredential(const QByteArray &service, const QByteArray &account, QString *error);
-// Updates an existing entry. Never creates an entry after a concurrent logout.
+// Preflight the bounded macOS writer before rotating an OAuth token.
+bool canWriteNativeCredential(const QByteArray &service, const QByteArray &account,
+                              const QByteArray &bytes, QString *error);
+// Checks that the entry still exists before updating it. This is not atomic
+// with another process logging out or replacing the entry.
 bool writeNativeCredential(const QByteArray &service, const QByteArray &account,
                            const QByteArray &bytes, QString *error);
 

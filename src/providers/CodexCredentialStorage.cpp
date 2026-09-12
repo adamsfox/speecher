@@ -70,8 +70,20 @@ QByteArray CodexCredentialStorage::read(QString *error) const
     return file.readAll();
 }
 
+bool CodexCredentialStorage::canWrite(const QByteArray &bytes, QString *error) const
+{
+#ifdef Q_OS_MACOS
+    if (!m_account.isEmpty()) {
+        *error = QStringLiteral("Refresh the macOS Codex Keychain login with codex login; Speecher only reads this entry");
+        return false;
+    }
+#endif
+    return m_account.isEmpty() || canWriteNativeCredential("Codex Auth", m_account, bytes, error);
+}
+
 bool CodexCredentialStorage::write(const QByteArray &contents, QString *error) const
 {
+    if (!canWrite(contents, error)) return false;
     if (!m_account.isEmpty()) return writeNativeCredential("Codex Auth", m_account, contents, error);
     QString saveError;
 #ifdef Q_OS_WIN

@@ -11,6 +11,7 @@ class CodexCredentialStorage {
 public:
     CodexCredentialStorage();
     QByteArray read(QString *error) const;
+    bool canWrite(const QByteArray &bytes, QString *error) const;
     bool write(const QByteArray &bytes, QString *error) const;
     QString lockPath() const;
 

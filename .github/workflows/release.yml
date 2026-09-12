@@ -393,7 +393,15 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build --output-on-failure
+        run: |
+          ctest --test-dir build --output-on-failure
+          $testExit = $LASTEXITCODE
+          if ($testExit -ne 0) {
+            & ./build/speecher_tests.exe --suite provider_auth -o provider-auth.txt,txt
+            Write-Host "Provider auth diagnostic exit: $LASTEXITCODE"
+            if (Test-Path provider-auth.txt) { Get-Content provider-auth.txt }
+          }
+          exit $testExit
 
       - name: Package installer
         if: github.event_name != 'pull_request'
