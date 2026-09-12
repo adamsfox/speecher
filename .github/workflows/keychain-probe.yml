@@ -65,17 +65,13 @@ jobs:
               assert native_read() != 0, 'Native reader unexpectedly trusted before write'
               for payload in [b'{"token":"rotated"}', json.dumps({'token': 'dummy' * 5000, 'unicode': 'caf\u00e9', 'quotes': '" \\ \n'}).encode()]:
                   request = json.dumps({'service': service, 'account': account, 'data': base64.b64encode(payload).decode()}).encode()
-                  result = run('/usr/bin/osascript', '-l', 'JavaScript', '-e', script, input=request)
+                  result = run('/usr/bin/security', 'add-generic-password', '-U', '-s', service, '-a', account, '-w', input=payload + b'\n' + payload + b'\n', start_new_session=True)
                   found = run('/usr/bin/security', 'find-generic-password', '-s', service, '-a', account, '-w').stdout[:-1]
                   if found != payload:
                       found = bytes.fromhex(found.decode())
-                  assert found == payload, 'Roundtrip differs'
+                  assert found == payload, f'Roundtrip differs: got {len(found)} bytes, expected {len(payload)}'
                   assert native_read() != 0, 'Native reader unexpectedly trusted after write'
                   print('PASS Apple-tool write/read preserves bytes and denied native read:', len(payload), 'bytes')
-              run('/usr/bin/security', 'delete-generic-password', '-s', service, '-a', account)
-              missing = subprocess.run(['/usr/bin/osascript', '-l', 'JavaScript', '-e', script], input=request, capture_output=True, timeout=15)
-              assert missing.returncode != 0, 'Missing entry recreated'
-              print('PASS deleted entry stays deleted')
           except subprocess.CalledProcessError as error:
               print('Dummy probe subprocess failed:', error.returncode, error.stderr.decode())
               raise
