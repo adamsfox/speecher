@@ -26,16 +26,21 @@ jobs:
           ObjC.import('Security');
           const input = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
           const request = JSON.parse(ObjC.unwrap($.NSString.alloc.initWithDataEncoding(input, $.NSUTF8StringEncoding)));
+          const service = $(request.service);
+          const account = $(request.account);
           const bytes = $.NSData.alloc.initWithBase64EncodedStringOptions($(request.data), 0);
           $.SecKeychainSetUserInteractionAllowed(false);
-          const query = $.NSMutableDictionary.alloc.init;
-          query.setObjectForKey($.kSecClassGenericPassword, $.kSecClass);
-          query.setObjectForKey($(request.service), $.kSecAttrService);
-          query.setObjectForKey($(request.account), $.kSecAttrAccount);
-          const attributes = $.NSMutableDictionary.alloc.init;
-          attributes.setObjectForKey(bytes, $.kSecValueData);
-          const status = $.SecItemUpdate(query, attributes);
-          console.log('update status ' + status);
+          const item = Ref();
+          let status = $.SecKeychainFindGenericPassword($.nil,
+              Number(service.lengthOfBytesUsingEncoding($.NSUTF8StringEncoding)), service.UTF8String,
+              Number(account.lengthOfBytesUsingEncoding($.NSUTF8StringEncoding)), account.UTF8String,
+              null, null, item);
+          console.log('lookup status ' + status);
+          if (status === 0) {
+              status = $.SecKeychainItemModifyAttributesAndData(item[0], $.nil, Number(bytes.length), bytes.bytes);
+              console.log('write status ' + status);
+              $.CFRelease(item[0]);
+          }
           if (status !== 0) throw new Error('Keychain update status ' + status);
           '''
           
