@@ -12,6 +12,8 @@
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+#elif defined(Q_OS_MACOS)
+#include <cstdlib>
 #endif
 
 namespace speecher {
@@ -33,8 +35,9 @@ CodexCredentialStorage::CodexCredentialStorage()
     if (status.type() != std::filesystem::file_type::not_found
         || (error && error != std::errc::no_such_file_or_directory)) return;
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
-    QString canonical;
+    QByteArray canonicalBytes;
 #ifdef Q_OS_WIN
+    QString canonical;
     // Rust std::fs::canonicalize returns the verbatim Windows path, including
     // the \\?\ prefix. Qt's canonicalFilePath strips it and hashes differently.
     const QString nativeHome = QDir::toNativeSeparators(home);
@@ -50,12 +53,24 @@ CodexCredentialStorage::CodexCredentialStorage()
         }
         CloseHandle(directory);
     }
-    if (canonical.isEmpty()) canonical = nativeHome;
-#else
-    canonical = QFileInfo(home).canonicalFilePath();
     if (canonical.isEmpty()) canonical = home;
+    canonicalBytes = canonical.toUtf8();
+#else
+    // Qt's canonicalFilePath normalizes Darwin paths to NFC. Rust hashes
+    // realpath's native spelling, so retain raw environment and path bytes.
+    QByteArray nativeHome = qgetenv("CODEX_HOME");
+    if (nativeHome.isEmpty()) {
+        nativeHome = qgetenv("HOME");
+        if (nativeHome.isEmpty()) nativeHome = QFile::encodeName(QDir::homePath());
+        nativeHome += nativeHome.endsWith('/') ? ".codex" : "/.codex";
+    }
+    char *resolved = realpath(nativeHome.constData(), nullptr);
+    canonicalBytes = resolved ? QByteArray(resolved) : nativeHome;
+    free(resolved);
+    // Match Rust to_string_lossy without applying Unicode normalization.
+    canonicalBytes = QString::fromUtf8(canonicalBytes).toUtf8();
 #endif
-    m_account = "cli|" + QCryptographicHash::hash(canonical.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
+    m_account = "cli|" + QCryptographicHash::hash(canonicalBytes, QCryptographicHash::Sha256).toHex().left(16);
 #endif
 }
 

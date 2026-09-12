@@ -66,7 +66,7 @@ QByteArray ClaudeCredentialStorage::read(QString *error) const
 
 bool ClaudeCredentialStorage::canWrite(const QByteArray &bytes, QString *error) const
 {
-    return m_account.isEmpty() || canWriteNativeCredential(m_service, m_account, bytes, error);
+    return m_service.isEmpty() || canWriteNativeCredential(m_service, m_account, bytes, error);
 }
 
 bool ClaudeCredentialStorage::write(const QByteArray &bytes, QString *error) const

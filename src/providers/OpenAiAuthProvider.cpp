@@ -106,6 +106,19 @@ static int codexRefreshTimeoutMs()
     return ok && timeoutMs > 0 ? timeoutMs : 15000;
 }
 
+static bool sameCodexLogin(const QJsonObject &before, const QJsonObject &current)
+{
+    for (const auto *field : {"auth_mode", "OPENAI_API_KEY"}) {
+        if (before.value(QLatin1String(field)) != current.value(QLatin1String(field))) return false;
+    }
+    const QJsonObject previousTokens = before.value(QStringLiteral("tokens")).toObject();
+    const QJsonObject currentTokens = current.value(QStringLiteral("tokens")).toObject();
+    for (const auto *field : {"access_token", "refresh_token", "id_token", "account_id"}) {
+        if (previousTokens.value(QLatin1String(field)) != currentTokens.value(QLatin1String(field))) return false;
+    }
+    return true;
+}
+
 static bool refreshCodexAuth(const CodexCredentialStorage &storage, QString *error)
 {
     // Refresh straight against the OAuth token endpoint instead of spawning
@@ -134,7 +147,8 @@ static bool refreshCodexAuth(const CodexCredentialStorage &storage, QString *err
         return false;
     }
 
-    if (!storage.canWrite(original, error)) return false;
+    root.insert(QStringLiteral("last_refresh"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+    if (!storage.canWrite(QJsonDocument(root).toJson(QJsonDocument::Compact), error)) return false;
 
     const QString overrideUrl = qEnvironmentVariable("SPEECHER_CODEX_TOKEN_URL");
     const OauthRefreshResult refreshed = CliProxyCredentials::oauthRefresh(
@@ -154,7 +168,11 @@ static bool refreshCodexAuth(const CodexCredentialStorage &storage, QString *err
     // Leave its document intact and let the caller read the current login.
     const QByteArray current = storage.read(error);
     if (!error->isEmpty()) return false;
-    if (current != original) return true;
+    const QJsonObject currentRoot = QJsonDocument::fromJson(current).object();
+    if (!sameCodexLogin(root, currentRoot)) return true;
+    // Metadata and formatting edits do not supersede a rotated OAuth token.
+    root = currentRoot;
+    tokens = root.value(QStringLiteral("tokens")).toObject();
 
     tokens.insert(QStringLiteral("access_token"), refreshed.accessToken);
     if (!refreshed.refreshToken.isEmpty()) {
@@ -167,7 +185,7 @@ static bool refreshCodexAuth(const CodexCredentialStorage &storage, QString *err
     root.insert(QStringLiteral("last_refresh"),
                 QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
 
-    return storage.write(QJsonDocument(root).toJson(), error);
+    return storage.write(QJsonDocument(root).toJson(QJsonDocument::Compact), error);
 }
 
 static ApiKeyCandidate readCodexApiKeyCandidate(const CodexCredentialStorage &storage, QString *status)

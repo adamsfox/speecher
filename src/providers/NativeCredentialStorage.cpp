@@ -12,8 +12,8 @@
 namespace speecher {
 
 #ifdef Q_OS_MACOS
-static QByteArray keychainWriteCommand(const QByteArray &service, const QByteArray &account,
-                                      const QByteArray &bytes, QString *error)
+static QByteArray keychainCommand(const QByteArray &operation, const QByteArray &service,
+                                 const QByteArray &account, const QByteArray &options, QString *error)
 {
     for (const QByteArray &identity : {service, account}) {
         if (identity.contains('\0') || identity.contains('\r') || identity.contains('\n')) {
@@ -26,8 +26,8 @@ static QByteArray keychainWriteCommand(const QByteArray &service, const QByteArr
         value.replace("\"", "\\\"");
         return '\"' + value + '\"';
     };
-    const QByteArray command = "add-generic-password -U -s " + quoted(service)
-        + " -a " + quoted(account) + " -X " + bytes.toHex() + '\n';
+    const QByteArray command = operation + " -s " + quoted(service)
+        + " -a " + quoted(account) + ' ' + options + '\n';
     // security's interactive reader has a 4096-byte buffer, including its NUL.
     if (command.size() >= 4096) {
         const QString cli = service == "Codex Auth" ? QStringLiteral("codex login")
@@ -59,11 +59,13 @@ static bool finishKeychainTool(QProcess &process, QString *error)
 QByteArray readNativeCredential(const QByteArray &service, const QByteArray &account, QString *error)
 {
 #ifdef Q_OS_MACOS
-    // Apple tools retain their Keychain partition across Speecher builds.
+    // QProcess normalizes argv to NFD on macOS. Stdin preserves the exact
+    // service/account bytes, and security retains its partition across builds.
+    const QByteArray command = keychainCommand("find-generic-password", service, account, "-w", error);
+    if (command.isEmpty()) return {};
     QProcess process;
-    process.start(QStringLiteral("/usr/bin/security"),
-                  {QStringLiteral("find-generic-password"), QStringLiteral("-s"), QString::fromUtf8(service),
-                   QStringLiteral("-a"), QString::fromUtf8(account), QStringLiteral("-w")});
+    process.start(QStringLiteral("/usr/bin/security"), {QStringLiteral("-i")});
+    process.write(command);
     process.closeWriteChannel();
     if (!finishKeychainTool(process, error)) return {};
     QByteArray bytes = process.readAllStandardOutput();
@@ -104,7 +106,15 @@ bool canWriteNativeCredential(const QByteArray &service, const QByteArray &accou
                               const QByteArray &bytes, QString *error)
 {
 #ifdef Q_OS_MACOS
-    return !keychainWriteCommand(service, account, bytes, error).isEmpty();
+    return !keychainCommand("add-generic-password -U", service, account, "-X " + bytes.toHex(), error).isEmpty();
+#elif defined(Q_OS_WIN)
+    Q_UNUSED(service);
+    Q_UNUSED(account);
+    if (QString::fromUtf8(bytes).size() * sizeof(ushort) > CRED_MAX_CREDENTIAL_BLOB_SIZE) {
+        *error = QStringLiteral("Windows Credential Manager login is too large for automatic refresh; run codex login");
+        return false;
+    }
+    return true;
 #else
     Q_UNUSED(service);
     Q_UNUSED(account);
@@ -118,7 +128,7 @@ bool writeNativeCredential(const QByteArray &service, const QByteArray &account,
                            const QByteArray &bytes, QString *error)
 {
 #ifdef Q_OS_MACOS
-    const QByteArray command = keychainWriteCommand(service, account, bytes, error);
+    const QByteArray command = keychainCommand("add-generic-password -U", service, account, "-X " + bytes.toHex(), error);
     if (command.isEmpty()) return false;
     SecKeychainItemRef item = nullptr;
     const OSStatus status = SecKeychainFindGenericPassword(nullptr, service.size(), service.constData(),
@@ -137,6 +147,7 @@ bool writeNativeCredential(const QByteArray &service, const QByteArray &account,
     process.closeWriteChannel();
     return finishKeychainTool(process, error);
 #elif defined(Q_OS_WIN)
+    if (!canWriteNativeCredential(service, account, bytes, error)) return false;
     const QString target = QString::fromUtf8(account + '.' + service);
     PCREDENTIALW credential = nullptr;
     if (!CredReadW(reinterpret_cast<LPCWSTR>(target.utf16()), CRED_TYPE_GENERIC, 0, &credential)) {

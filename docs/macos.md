@@ -74,10 +74,12 @@ Claude Code's entry is updated through the same `security` tool. Credentials
 travel over stdin, and Speecher does not change the access list. The tool's
 input buffer limits automatic refresh to documents whose hex-encoded update
 command fits under 4096 bytes, roughly 2 KiB of credential data minus the
-service and account names. Larger entries remain readable. Speecher refuses
-to refresh an oversized existing entry before contacting OAuth and asks you to
-run `claude` and `/login`. It also checks the refreshed document size before
-writing, so unexpectedly larger responses fail without truncation.
+service and account names. Larger entries remain readable. Speecher checks the
+compact JSON, including known output fields, before contacting OAuth and asks
+you to run `claude` and `/login` if it cannot fit. It checks the final size too.
+A provider response can contain larger tokens or scopes; if these no longer fit
+after rotation, the write fails without truncation and you may need to sign in
+again with the CLI.
 
 Codex writes its Keychain entry through its native Rust keyring. Writing that
 entry from another process can change its Keychain partition and disrupt

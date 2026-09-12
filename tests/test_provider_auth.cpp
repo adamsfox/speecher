@@ -12,6 +12,7 @@
 #ifdef Q_OS_MACOS
 #include <Security/Security.h>
 #include <QUuid>
+#include <cstdlib>
 #elif defined(Q_OS_WIN)
 #include <windows.h>
 #include <wincred.h>
@@ -43,6 +44,12 @@ public:
         previousUser.isNull() ? qunsetenv("USER") : qputenv("USER", previousUser);
         previousConfig.isNull() ? qunsetenv("CLAUDE_CONFIG_DIR") : qputenv("CLAUDE_CONFIG_DIR", previousConfig);
     }
+    static QByteArray quoted(QByteArray value)
+    {
+        value.replace("\\", "\\\\");
+        value.replace("\"", "\\\"");
+        return '\"' + value + '\"';
+    }
     bool write(const QByteArray &bytes)
     {
         SecKeychainItemRef item = nullptr;
@@ -57,11 +64,20 @@ public:
         // and its apple-tool partition owns the item. A native Speecher read
         // would prompt here even with an unchanged designated requirement.
         QProcess process;
-        process.start(QStringLiteral("/usr/bin/security"),
-                      {QStringLiteral("add-generic-password"), QStringLiteral("-s"),
-                       QString::fromUtf8(service), QStringLiteral("-a"), QString::fromUtf8(account),
-                       QStringLiteral("-w"), QString::fromUtf8(bytes), QStringLiteral("-T"),
-                       QStringLiteral("/usr/bin/security")});
+        const QByteArray command = "add-generic-password -s " + quoted(service) + " -a " + quoted(account)
+            + " -X " + bytes.toHex() + " -T /usr/bin/security\n";
+        if (command.size() < 4096) {
+            process.start(QStringLiteral("/usr/bin/security"), {QStringLiteral("-i")});
+            process.write(command);
+        } else {
+            // Large dummy documents need argv; hex is ASCII and cannot be
+            // normalized by QProcess. These fixtures use ASCII identities.
+            process.start(QStringLiteral("/usr/bin/security"),
+                          {QStringLiteral("add-generic-password"), QStringLiteral("-s"),
+                           QString::fromUtf8(service), QStringLiteral("-a"), QString::fromUtf8(account),
+                           QStringLiteral("-X"), QString::fromLatin1(bytes.toHex()), QStringLiteral("-T"),
+                           QStringLiteral("/usr/bin/security")});
+        }
         process.closeWriteChannel();
         if (!process.waitForFinished(4000)) {
             process.kill();
@@ -73,9 +89,9 @@ public:
     QByteArray read() const
     {
         QProcess process;
-        process.start(QStringLiteral("/usr/bin/security"),
-                      {QStringLiteral("find-generic-password"), QStringLiteral("-s"), QString::fromUtf8(service),
-                       QStringLiteral("-a"), QString::fromUtf8(account), QStringLiteral("-w")});
+        process.start(QStringLiteral("/usr/bin/security"), {QStringLiteral("-i")});
+        process.write("find-generic-password -s " + quoted(service) + " -a " + quoted(account) + " -w\n");
+        process.closeWriteChannel();
         if (!process.waitForFinished(4000)) {
             process.kill();
             process.waitForFinished(1000);
@@ -109,11 +125,15 @@ public:
 #ifdef Q_OS_WIN
         // This fresh directory has no links. Rust canonicalize's spelling is
         // the absolute native path with the verbatim prefix, unlike Qt's path.
-        const QString canonical = QStringLiteral("\\\\?\\") + QDir::toNativeSeparators(QFileInfo(home).absoluteFilePath());
+        const QByteArray canonical = (QStringLiteral("\\\\?\\") + QDir::toNativeSeparators(QFileInfo(home).absoluteFilePath())).toUtf8();
 #else
-        const QString canonical = QFileInfo(home).canonicalFilePath();
+        // Independent POSIX path bytes, as used by Rust's canonicalize. Qt's
+        // canonicalFilePath would normalize this Unicode name and hide a bug.
+        char *resolved = realpath(qgetenv("CODEX_HOME").constData(), nullptr);
+        const QByteArray canonical = resolved ? QByteArray(resolved) : qgetenv("CODEX_HOME");
+        free(resolved);
 #endif
-        account = "cli|" + QCryptographicHash::hash(canonical.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
+        account = "cli|" + QCryptographicHash::hash(canonical, QCryptographicHash::Sha256).toHex().left(16);
 #ifdef Q_OS_MACOS
         keychain = std::make_unique<DummyClaudeKeychain>(QByteArray{}, QByteArray("Codex Auth"), account);
 #endif
@@ -179,7 +199,7 @@ private slots:
             SecKeychainSetUserInteractionAllowed(interactionAllowed);
         });
         DummyClaudeKeychain keychain({}, "Claude Code-credentials",
-            "speecher-test-\"quoted\\ " + QUuid::createUuid().toByteArray(QUuid::WithoutBraces));
+            "speecher-test-\"quoted\\ café " + QUuid::createUuid().toByteArray(QUuid::WithoutBraces));
         const QByteArray initial = " {\"token\":\"dummy quoted \\\" token\"} \n\n";
         QVERIFY(keychain.write(initial));
         const auto nativeReadStatus = [&] {
@@ -376,15 +396,18 @@ private slots:
     void claudeCredentialsOauthRefresh_data()
     {
         QTest::addColumn<bool>("nativeKeychain");
-        QTest::newRow("file") << false;
+        QTest::addColumn<bool>("nearLimit");
+        QTest::newRow("file") << false << false;
 #ifdef Q_OS_MACOS
-        QTest::newRow("keychain") << true;
+        QTest::newRow("keychain") << true << false;
+        QTest::newRow("keychain-compact") << true << true;
 #endif
     }
 
     void claudeCredentialsOauthRefresh()
     {
         QFETCH(bool, nativeKeychain);
+        QFETCH(bool, nearLimit);
 #ifdef Q_OS_MACOS
         std::unique_ptr<DummyClaudeKeychain> keychain;
         if (nativeKeychain) keychain = std::make_unique<DummyClaudeKeychain>();
@@ -395,23 +418,18 @@ private slots:
         const QString credentialsPath = dir.filePath(QStringLiteral("credentials.json"));
         QFile credentialsFile(credentialsPath);
         QVERIFY(credentialsFile.open(QIODevice::WriteOnly));
-        credentialsFile.write(QJsonDocument(QJsonObject{
-                                                {QStringLiteral("unrelated"), true},
-                                                {QStringLiteral("claudeAiOauth"),
-                                                 QJsonObject{
-                                                     {QStringLiteral("accessToken"), QStringLiteral("expired-token")},
-                                                     {QStringLiteral("refreshToken"), QStringLiteral("old-refresh-token")},
-                                                     {QStringLiteral("expiresAt"),
-                                                      double(QDateTime::currentDateTimeUtc().addSecs(-60).toMSecsSinceEpoch())},
-                                                     {QStringLiteral("scopes"),
-                                                      QJsonArray{
-                                                          QStringLiteral("user:profile"),
-                                                          QStringLiteral("user:inference"),
-                                                      }},
-                                                     {QStringLiteral("subscriptionType"), QStringLiteral("pro")},
-                                                 }},
-                                            })
-                                  .toJson());
+        QJsonObject initialRoot{
+            {QStringLiteral("unrelated"), true},
+            {QStringLiteral("claudeAiOauth"), QJsonObject{
+                {QStringLiteral("accessToken"), QStringLiteral("expired-token")},
+                {QStringLiteral("refreshToken"), QStringLiteral("old-refresh-token")},
+                {QStringLiteral("expiresAt"), double(QDateTime::currentDateTimeUtc().addSecs(-60).toMSecsSinceEpoch())},
+                {QStringLiteral("scopes"), QJsonArray{QStringLiteral("user:profile"), QStringLiteral("user:inference")}},
+                {QStringLiteral("subscriptionType"), QStringLiteral("pro")}
+            }}
+        };
+        if (nearLimit) initialRoot.insert(QStringLiteral("padding"), QString(1700, QLatin1Char('x')));
+        credentialsFile.write(QJsonDocument(initialRoot).toJson());
         credentialsFile.close();
 
         QString loadPath = credentialsPath;
@@ -421,6 +439,12 @@ private slots:
             QVERIFY(initial.open(QIODevice::ReadOnly));
             QVERIFY(keychain->write(initial.readAll()));
             loadPath = keychain->path();
+            if (nearLimit) {
+                const ClaudeCredentialStorage storage(loadPath);
+                QString error;
+                QVERIFY(storage.canWrite(QJsonDocument(initialRoot).toJson(QJsonDocument::Compact), &error));
+                QVERIFY(!storage.canWrite(QJsonDocument(initialRoot).toJson(), &error));
+            }
         }
 #endif
         QVERIFY(ClaudeCredentials::requiresRefresh(loadPath));
@@ -702,8 +726,11 @@ private slots:
         QVERIFY(provider.resolve(false).bearerToken == QStringLiteral("home-token"));
         qputenv("SPEECHER_TEST_CODEX_AUTH_PATH", QFile::encodeName(dir.filePath(QStringLiteral("missing.json"))));
         QVERIFY(!provider.resolve(false).ok);
+#ifndef Q_OS_WIN
+        // On Windows qputenv(empty) unsets the variable instead.
         qputenv("SPEECHER_TEST_CODEX_AUTH_PATH", QByteArray{});
         QVERIFY(!provider.resolve(false).ok);
+#endif
     }
 
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
@@ -737,11 +764,34 @@ private slots:
     }
 #endif
 
+#ifdef Q_OS_WIN
+    void windowsCredentialSizeUsesUtf16()
+    {
+        DummyCodexNative native;
+        QVERIFY(native.write("{}"));
+        const CodexCredentialStorage storage;
+        const QByteArray unicode = QJsonDocument(QJsonObject{
+            {QStringLiteral("value"), QString(1000, QChar(0x00e9))}
+        }).toJson(QJsonDocument::Compact);
+        QString error;
+        QVERIFY(storage.canWrite(unicode, &error));
+        QVERIFY2(storage.write(unicode, &error), qPrintable(error));
+        QCOMPARE(storage.read(&error), unicode);
+        const QByteArray oversized = QJsonDocument(QJsonObject{
+            {QStringLiteral("value"), QString(1500, QLatin1Char('x'))}
+        }).toJson(QJsonDocument::Compact);
+        QVERIFY(!storage.canWrite(oversized, &error));
+        QVERIFY(!storage.write(oversized, &error));
+        error.clear();
+        QCOMPARE(storage.read(&error), unicode);
+    }
+#endif
+
     void codexRefreshKeepsStoreAndConcurrentLogin_data()
     {
         QTest::addColumn<bool>("nativeStore");
         QTest::addColumn<QString>("concurrentChange");
-        for (const QString &change : {QStringLiteral("none"), QStringLiteral("login"), QStringLiteral("logout")}) {
+        for (const QString &change : {QStringLiteral("none"), QStringLiteral("metadata"), QStringLiteral("login"), QStringLiteral("logout")}) {
             QTest::newRow(qPrintable(QStringLiteral("file-") + change)) << false << change;
 #ifdef Q_OS_WIN
             QTest::newRow(qPrintable(QStringLiteral("native-") + change)) << true << change;
@@ -793,6 +843,13 @@ private slots:
             readHttpRequest(socket, 1000);
             if (concurrentChange == QStringLiteral("login")) {
                 QVERIFY(write(R"({"auth_mode":"chatgpt","tokens":{"access_token":"newer-login","account_id":"newer-account"}})"));
+            } else if (concurrentChange == QStringLiteral("metadata")) {
+                QJsonObject updated = original;
+                updated.insert(QStringLiteral("unknown"), QStringLiteral("edited-during-refresh"));
+                QJsonObject tokens = updated.value(QStringLiteral("tokens")).toObject();
+                tokens.insert(QStringLiteral("extra"), QStringLiteral("keep-me"));
+                updated.insert(QStringLiteral("tokens"), tokens);
+                QVERIFY(write(QJsonDocument(updated).toJson(QJsonDocument::Compact)));
             } else if (concurrentChange == QStringLiteral("logout")) {
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
                 if (native) native->remove();
@@ -831,7 +888,10 @@ private slots:
         } else {
             QVERIFY(auth.bearerToken == QStringLiteral("refreshed"));
             const QJsonObject saved = QJsonDocument::fromJson(bytes).object();
-            QCOMPARE(saved.value(QStringLiteral("unknown")).toString(), QStringLiteral("preserved-é-🎙"));
+            QCOMPARE(saved.value(QStringLiteral("unknown")).toString(), concurrentChange == QStringLiteral("metadata")
+                         ? QStringLiteral("edited-during-refresh") : QStringLiteral("preserved-é-🎙"));
+            if (concurrentChange == QStringLiteral("metadata"))
+                QCOMPARE(saved.value(QStringLiteral("tokens")).toObject().value(QStringLiteral("extra")).toString(), QStringLiteral("keep-me"));
             QCOMPARE(saved.value(QStringLiteral("tokens")).toObject().value(QStringLiteral("refresh_token")).toString(), QStringLiteral("rotated"));
         }
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)

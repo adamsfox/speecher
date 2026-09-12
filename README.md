@@ -10,7 +10,7 @@
 
 ### Prerequisites
 
-Sign in to at least one transcription service: Claude Code for Claude Voice, or the ChatGPT app or Codex CLI for ChatGPT Codex dictation. Speecher refreshes expired OAuth logins directly with the provider and saves rotated tokens back to the selected credential store.
+Sign in to at least one transcription service: Claude Code for Claude Voice, or the ChatGPT app or Codex CLI for ChatGPT Codex dictation. Speecher can refresh expired OAuth logins and save rotated tokens back to the selected store. macOS Codex Keychain logins and oversized Claude Keychain entries require the owning CLI to refresh them.
 
 ```sh
 # Arch
@@ -217,6 +217,10 @@ On macOS, Speecher only reads Codex Keychain entries. Refresh them with
 does not change the native entry's ownership. File-based Codex refresh still
 works. See [macOS Keychain details](docs/macos.md#cli-login-keychain-prompts).
 
+Refresh preflight checks the compact document and known output fields against
+store limits. A provider can still return larger tokens. If the final document
+no longer fits after token rotation, sign in again with the owning CLI.
+
 Native binaries use one stable user socket, so the desktop app and CLI shortcut talk to the same instance after `make install`. AppImages have their own stable socket because their internal mounted path changes on each launch.
 
 ## Refinement
@@ -264,7 +268,7 @@ Authentication is resolved in this order:
 
 1. If the selected Codex credential store says `auth_mode` is `chatgpt`, use its Codex OAuth token against the ChatGPT Codex backend.
 2. The selected store's `OPENAI_API_KEY`, when it starts with `sk-`.
-3. The selected store's Codex OAuth token against the ChatGPT Codex backend. Speecher refreshes expired access tokens through the OAuth endpoint and reloads that store.
+3. The selected store's Codex OAuth token against the ChatGPT Codex backend. Speecher refreshes expired access tokens and reloads that store when it supports writes. macOS Codex Keychain entries require `codex login`.
 4. The `OPENAI_API_KEY` environment variable, when it starts with `sk-`.
 5. The API key saved in the app settings.
 
