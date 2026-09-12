@@ -31,9 +31,11 @@ jobs:
           const bytes = $.NSData.alloc.initWithBase64EncodedStringOptions($(request.data), 0);
           $.SecKeychainSetUserInteractionAllowed(false);
           const item = Ref();
-          let status = $.SecKeychainFindGenericPassword(null, service.length, service.bytes, account.length, account.bytes, null, null, item);
+          let status = $.SecKeychainFindGenericPassword(null, service.length, request.service, account.length, request.account, null, null, item);
+          console.log('lookup status ' + status);
           if (status === 0) {
               status = $.SecKeychainItemModifyAttributesAndData(item[0], null, bytes.length, bytes.bytes);
+              console.log('write status ' + status + ', bytes ' + bytes.length);
               $.CFRelease(item[0]);
           }
           if (status !== 0) throw new Error('Keychain update status ' + status);
