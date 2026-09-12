@@ -1,0 +1,79 @@
+name: Keychain probe
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/keychain-probe.yml'
+permissions:
+  contents: read
+jobs:
+  keychain:
+    runs-on: macos-26
+    timeout-minutes: 5
+    steps:
+      - name: Exercise Apple-tool credential writes
+        shell: python
+        run: |
+          import base64
+          import ctypes
+          import json
+          import subprocess
+          import uuid
+          
+          service = 'Speecher-CI-Keychain-Probe'
+          account = str(uuid.uuid4())
+          script = r'''
+          ObjC.import('Foundation');
+          ObjC.import('Security');
+          const input = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+          const request = JSON.parse(ObjC.unwrap($.NSString.alloc.initWithDataEncoding(input, $.NSUTF8StringEncoding)));
+          const service = $(request.service).dataUsingEncoding($.NSUTF8StringEncoding);
+          const account = $(request.account).dataUsingEncoding($.NSUTF8StringEncoding);
+          const bytes = $.NSData.alloc.initWithBase64EncodedStringOptions($(request.data), 0);
+          $.SecKeychainSetUserInteractionAllowed(false);
+          const item = Ref();
+          let status = $.SecKeychainFindGenericPassword(null, service.length, service.bytes, account.length, account.bytes, null, null, item);
+          if (status === 0) {
+              status = $.SecKeychainItemModifyAttributesAndData(item[0], null, bytes.length, bytes.bytes);
+              $.CFRelease(item[0]);
+          }
+          if (status !== 0) throw new Error('Keychain update status ' + status);
+          '''
+          
+          def run(*args, **kwargs):
+              return subprocess.run(args, check=True, capture_output=True, timeout=15, **kwargs)
+          
+          security = ctypes.CDLL('/System/Library/Frameworks/Security.framework/Security')
+          find = security.SecKeychainFindGenericPassword
+          find.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+          find.restype = ctypes.c_int32
+          security.SecKeychainSetUserInteractionAllowed(False)
+          
+          def native_read():
+              length = ctypes.c_uint32()
+              data = ctypes.c_void_p()
+              status = find(None, len(service), service.encode(), len(account), account.encode(), ctypes.byref(length), ctypes.byref(data), None)
+              if data.value:
+                  security.SecKeychainItemFreeContent(None, data)
+              return status
+          
+          try:
+              run('/usr/bin/security', 'add-generic-password', '-s', service, '-a', account, '-w', '{"token":"initial"}', '-T', '/usr/bin/security')
+              assert native_read() != 0, 'Native reader unexpectedly trusted before write'
+              for payload in [b'{"token":"rotated"}', json.dumps({'token': 'dummy' * 5000, 'unicode': 'caf\u00e9', 'quotes': '" \\ \n'}).encode()]:
+                  request = json.dumps({'service': service, 'account': account, 'data': base64.b64encode(payload).decode()}).encode()
+                  result = run('/usr/bin/osascript', '-l', 'JavaScript', '-e', script, input=request)
+                  found = run('/usr/bin/security', 'find-generic-password', '-s', service, '-a', account, '-w').stdout[:-1]
+                  if found != payload:
+                      found = bytes.fromhex(found.decode())
+                  assert found == payload, 'Roundtrip differs'
+                  assert native_read() != 0, 'Native reader unexpectedly trusted after write'
+                  print('PASS Apple-tool write/read preserves bytes and denied native read:', len(payload), 'bytes')
+              run('/usr/bin/security', 'delete-generic-password', '-s', service, '-a', account)
+              missing = subprocess.run(['/usr/bin/osascript', '-l', 'JavaScript', '-e', script], input=request, capture_output=True, timeout=15)
+              assert missing.returncode != 0, 'Missing entry recreated'
+              print('PASS deleted entry stays deleted')
+          except subprocess.CalledProcessError as error:
+              print('Dummy probe subprocess failed:', error.returncode, error.stderr.decode())
+              raise
+          finally:
+              subprocess.run(['/usr/bin/security', 'delete-generic-password', '-s', service, '-a', account], capture_output=True, timeout=15)
